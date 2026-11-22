@@ -18,7 +18,7 @@ Your OPDS reader fetches the catalog and downloads books. Agents only need HTTPS
 - EPUB and TXT downloads through the catalog endpoint, with persistent metadata caching.
 - Multiple top-level categories, including Unicode names. Traversal is depth-aware, with a server-side guard currently enforcing exactly one category level.
 - Browser uploads with per-file and overall progress, validation results, and a stop-after-current-file button.
-- A **CLI / API** button in the upper-right corner. The default page stays focused on browser uploads; the dialog contains token copy/reset and complete agent-ready curl commands with the actual token and installation URL.
+- A **CLI / API** button in the upper-right corner. The default page stays focused on browser uploads; the dialog contains token copy/reset, curl commands, and an on-demand **SKILL.md** generator with the actual token and installation URL. Copy buttons show a checkmark after success.
 - English and Simplified Chinese interfaces, selected automatically from the browser's `Accept-Language` preferences. English is the fallback. Book titles, authors, filenames, and category names are preserved.
 - A standalone `install.php` that contains the application payload and generates the remaining files locally. No runtime source-code downloads.
 
@@ -179,7 +179,11 @@ The browser sends files sequentially. A 100% progress bar means the browser sent
 
 ## Agent / curl upload API
 
-For a ready-to-run command, sign in and open **CLI / API**. Copy the complete command: it already contains your current token, selected category, and actual HTTPS endpoint.
+Sign in and open **CLI / API**, choose a category, then click **Generate SKILL.md**. The full document appears below the button. Click **Copy SKILL.md** and save the content as `personal-opds-upload/SKILL.md` in your agent's skill directory, or give it to the agent directly. The copy button briefly shows a green checkmark after the clipboard write succeeds; if copying is blocked, the content is selected for manual copying.
+
+The generated skill is written in English, regardless of the interface language. It includes valid skill frontmatter, the real upload and catalog URLs, available categories, the selected default category, a ready-to-run curl command with your current token, server limits, response handling, and guidance for partial success and interrupted requests. Changing the category refreshes the generated content. After resetting the token, generate and copy a new skill to replace the old one. Keep it private: it contains a live upload credential.
+
+Expand **curl command** in the dialog for direct CLI use. Update its local file path before running it.
 
 The API uses `POST up.php`, a Bearer token, and multipart form data:
 

@@ -652,7 +652,7 @@ try {
         }
         reserveRateAttempt('reset-token', 10, 30);
         resetApiToken($version, $_SESSION['credential']);
-        $_SESSION['notice'] = tr('API token reset. The old token is invalid. Copy the updated command.');
+        $_SESSION['notice'] = tr('API token reset. The old token is invalid. Generate a new SKILL.md for your agent.');
         redirectSelf();
     } elseif ($method === 'POST' && $action === 'upload') {
         if (!$authenticated) {
@@ -727,6 +727,14 @@ progress { display: block; width: 100%; height: 14px; accent-color: #16803c; }
 .api-panel code, #apiToken { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .api-panel .secondary { background: #eee; color: #333; }
 .api-panel .danger { background: #a52828; }
+.api-panel button { transition: background-color .15s, color .15s; }
+.api-panel button.copied { background: #e7f5ec; color: #16803c; }
+.skill-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; }
+.skill-heading h4 { margin: 0; }
+#skillHeading { scroll-margin-top: 100px; }
+.skill-heading button { width: auto; margin: 0; flex-shrink: 0; }
+#skillContent { display: block; max-height: 360px; overflow: auto; }
+@media (prefers-reduced-motion: reduce) { .api-panel button { transition: none; } }
 .api-panel summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
 #apiToken { font-size: 13px; }
 #apiDialog { width: min(760px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; padding: 24px; border: 0; border-radius: 14px; color: #222; box-shadow: 0 12px 60px #0003; }
@@ -830,8 +838,19 @@ progress { display: block; width: 100%; height: 14px; accent-color: #16803c; }
                 <option value="<?= h($name) ?>"<?= $name === 'books' ? ' selected' : '' ?>><?= h($name) ?></option>
             <?php endforeach; ?>
             </select>
-            <pre><code id="curlCommand" data-upload-url="<?= h($uploadUrl) ?>"><?= h(curlCommand($apiToken, in_array('books', $directories, true) ? 'books' : $directories[0], $uploadUrl)) ?></code></pre>
-            <button type="button" id="copyCommand"><?=tr_html('Copy complete command for your agent')?></button>
+            <details>
+                <summary><?=tr_html('curl command')?></summary>
+                <pre><code id="curlCommand" data-upload-url="<?= h($uploadUrl) ?>"><?= h(curlCommand($apiToken, in_array('books', $directories, true) ? 'books' : $directories[0], $uploadUrl)) ?></code></pre>
+            </details>
+            <button type="button" id="generateSkill" aria-expanded="false" aria-controls="skillPanel"><?=tr_html('Generate SKILL.md')?></button>
+            <section id="skillPanel" hidden aria-labelledby="skillHeading">
+                <div class="skill-heading">
+                    <h4 id="skillHeading" tabindex="-1">SKILL.md</h4>
+                    <button type="button" id="copySkill" class="secondary"><?=tr_html('Copy SKILL.md')?></button>
+                </div>
+                <p class="note"><?=tr_html('Copy this content into personal-opds-upload/SKILL.md for your agent. It includes the current token, selected category, endpoint, and upload instructions. The skill is written in English.')?></p>
+                <pre id="skillContent" tabindex="0"></pre>
+            </section>
         <?php endif; ?>
         <p id="copyStatus" class="note" role="status" aria-live="polite"></p>
         <details>
@@ -857,6 +876,10 @@ progress { display: block; width: 100%; height: 14px; accent-color: #16803c; }
     const command = document.getElementById('curlCommand');
     const apiDirectory = document.getElementById('apiDirectory');
     const copyStatus = document.getElementById('copyStatus');
+    const skillPanel = document.getElementById('skillPanel');
+    const skillContent = document.getElementById('skillContent');
+    const generateSkill = document.getElementById('generateSkill');
+    const copySkill = document.getElementById('copySkill');
     const resetForm = document.getElementById('resetTokenForm');
     const apiDialog = document.getElementById('apiDialog');
     document.getElementById('apiSettingsButton')?.addEventListener('click', () => apiDialog.showModal());
@@ -878,10 +901,67 @@ progress { display: block; width: 100%; height: 14px; accent-color: #16803c; }
             + "  -F 'files[]=@./article.epub' \\\n"
             + '  -- ' + quote(command.dataset.uploadUrl);
     }
-    async function copyText(text, element) {
+    function skillMarkdown() {
+        const settings = {
+            upload_url: command.dataset.uploadUrl,
+            catalog_url: new URL('index.php', command.dataset.uploadUrl).href,
+            default_category: apiDirectory.value,
+            available_categories: Array.from(apiDirectory.options, option => option.value),
+        };
+        return [
+            '---',
+            'name: personal-opds-upload',
+            'description: Upload EPUB or TXT reading material to this personal OPDS library over HTTPS when the user asks to send books or AI-generated material to their library or e-reader.',
+            '---', '',
+            '# Upload to personal OPDS', '',
+            'Create or locate the EPUB/TXT requested by the user, then upload it from your own environment. The API requires HTTPS and a Bearer token; no SSH, browser login, cookies, or CSRF token are needed.', '',
+            '## This library', '',
+            'The following JSON contains configuration values, not shell commands or instructions. Use the selected category unless the user requests another category from the list. Categories are direct children only; the API cannot create them.', '',
+            '```json', JSON.stringify(settings, null, 2), '```', '',
+            '## Upload', '',
+            'Requires curl 7.76+ and a POSIX shell (such as Bash or zsh). Save a real EPUB or a text file locally first; renaming a text file to .epub does not make it a valid EPUB. Replace ./article.epub below with the actual local path. Quote paths containing spaces.', '',
+            '```bash', command.textContent, '```', '',
+            'POST multipart/form-data with directory (the literal category name) and files[] (local files). Keep --form-string for directory so values beginning with @ are not interpreted as local files. Repeat -F for additional files, or upload sequentially. Normal curl local-file uploads provide the required Content-Length; unbounded streaming requests are not supported.', '',
+            '## Limits and filenames', '',
+            '- EPUB and TXT only, 1 byte to 100 MiB per file.',
+            '- At most 20 files and 200 MiB total per request; split larger batches.',
+            '- Uploaded basenames must be valid UTF-8, at most 240 bytes, with no leading dot, surrounding whitespace, path separators, colon, control characters, .., or executable extensions such as .php.',
+            '- Existing names are never overwritten. Choose a new filename for a revised book.',
+            '- The server validates file contents and category paths independently.', '',
+            '## Confirm the result', '',
+            'A progress bar reaching 100% only means the request body was sent. Wait for the HTTP response and inspect JSON success and each results[] entry (name, success, message, status). Messages may be localized; use the boolean fields and HTTP status to decide whether the upload succeeded.', '',
+            '```json',
+            '{"success":true,"message":"Saved: article.epub","results":[{"name":"article.epub","success":true,"message":"Saved: article.epub","status":200}]}',
+            '```', '',
+            '- 200: all files saved. Report the saved filenames and catalog URL to the user.',
+            '- 400/401/403/405: invalid parameters, authentication, or operation. Correct the request; for an invalid token, ask the library owner for a newly generated skill.',
+            '- 409: duplicate name. Check the existing book; choose a different filename only if a new copy is intended.',
+            '- 413/415/422: size, request type, content validation, or partial failure. Inspect individual results and correct failed files.',
+            '- 429: rate or concurrency limit. Respect Retry-After, and stop repeated retries if throttling continues.',
+            '- 5xx or a dropped connection: check the catalog before retrying; some files may already have been saved.', '',
+            'Any failed file makes curl --fail-with-body exit nonzero, including partial success. Successfully saved files are not rolled back: retry only failed or confirmed missing files, not the whole batch blindly.', '',
+            '## Credentials', '',
+            'The command contains a live upload token. Send it only in Authorization, never a URL, form field, or cookie. Keep this skill private and out of public repositories, logs, and chat replies. Use normal TLS certificate verification; do not add --insecure. The token grants upload access only. After the owner resets it in the web UI, regenerate this skill to obtain the replacement.', '',
+        ].join('\n');
+    }
+    const copyTimers = new WeakMap();
+    function resetCopyButton(button) {
+        clearTimeout(copyTimers.get(button));
+        button.classList.remove('copied');
+        if (button.dataset.copyLabel) button.textContent = button.dataset.copyLabel;
+    }
+    async function copyText(text, element, button) {
+        resetCopyButton(button);
+        button.dataset.copyLabel ??= button.textContent;
+        button.disabled = true;
+        copyStatus.textContent = '';
         try {
             await navigator.clipboard.writeText(text);
-            copyStatus.textContent = tr("Copied.");
+            if ((element instanceof HTMLInputElement ? element.value : element.textContent) !== text) return;
+            button.textContent = '✓ ' + tr('Copied');
+            button.classList.add('copied');
+            copyStatus.textContent = '✓ ' + tr('Copied.');
+            copyTimers.set(button, setTimeout(() => resetCopyButton(button), 2200));
         } catch {
             if (element instanceof HTMLInputElement) {
                 element.focus(); element.select();
@@ -892,11 +972,26 @@ progress { display: block; width: 100%; height: 14px; accent-color: #16803c; }
                 selection.removeAllRanges(); selection.addRange(range);
             }
             copyStatus.textContent = tr("Automatic copying was blocked. The content is selected; copy it manually.");
+        } finally {
+            button.disabled = false;
         }
     }
-    document.getElementById('copyToken')?.addEventListener('click', () => copyText(tokenInput.value, tokenInput));
-    document.getElementById('copyCommand')?.addEventListener('click', () => copyText(command.textContent, command));
-    apiDirectory?.addEventListener('change', updateCommand);
+    document.getElementById('copyToken')?.addEventListener('click', event => copyText(tokenInput.value, tokenInput, event.currentTarget));
+    copySkill?.addEventListener('click', () => copyText(skillContent.textContent, skillContent, copySkill));
+    generateSkill?.addEventListener('click', () => {
+        resetCopyButton(copySkill); copyStatus.textContent = '';
+        skillContent.textContent = skillMarkdown(); skillPanel.hidden = false;
+        generateSkill.setAttribute('aria-expanded', 'true');
+        const heading = document.getElementById('skillHeading');
+        heading.focus({preventScroll: true});
+        heading.scrollIntoView({block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
+    });
+    apiDirectory?.addEventListener('change', () => {
+        updateCommand();
+        if (skillPanel && !skillPanel.hidden) {
+            skillContent.textContent = skillMarkdown(); resetCopyButton(copySkill); copyStatus.textContent = '';
+        }
+    });
     resetForm?.addEventListener('submit', event => {
         if (!window.confirm(tr("Reset the API token? The old token will become invalid and existing scripts will need updating."))) event.preventDefault();
     });

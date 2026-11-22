@@ -7,10 +7,12 @@ import http from 'node:http';
 import https from 'node:https';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import {spawn,execFileSync} from 'node:child_process';
+import {spawn,execFile,execFileSync} from 'node:child_process';
+import {promisify} from 'node:util';
 import {setTimeout as delay} from 'node:timers/promises';
 const project=path.resolve(path.dirname(new URL(import.meta.url).pathname),'..');
 const php=process.env.PHP_BINARY || 'php';
+const runFile=promisify(execFile);
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'opds-test-'));
 const web=path.join(temp,'web'),app=path.join(web,'library');fs.mkdirSync(app,{recursive:true});
 fs.copyFileSync(path.join(project,'install.php'),path.join(app,'install.php'));
@@ -63,7 +65,8 @@ try{
  let ready=false;for(let i=0;i<60;++i){try{const r=await request();if(r.status!==502){ready=true;break;}}catch{}await delay(100);}assert(ready);
  let r=await request('install.php',{headers:{'accept-language':'en-US,en;q=0.9,zh;q=0.5'}});assert.equal(r.status,200,r.text);assert(r.text.includes('Install your OPDS library'));assert(!r.text.includes('安装 OPDS 书库'));pass('installer selects English by browser language preference');
  r=await request();assert.equal(r.status,200,r.text);const installCsrf=csrf(r);assert(r.text.includes('安装 OPDS 书库'));pass('standalone installer opens in Chinese over HTTPS');
- const fields={csrf:installCsrf,base_url:base,title:'测试书库',password:'test-password-123',password_confirm:'test-password-123',categories:'books\n中文\n2026'};
+ const shellCategory="Agent ' $(touch OPDS_DOLLAR) `touch OPDS_TICK`";
+ const fields={csrf:installCsrf,base_url:base,title:'测试书库',password:'test-password-123',password_confirm:'test-password-123',categories:'books\n中文\n2026\n'+shellCategory};
  assert(!r.text.includes('name="install_key"'));pass('installer runs without an installation code or source edits');
  r=await request('install.php',form({...fields,csrf:'bad'}));assert.equal(r.status,400);pass('installation CSRF enforced');
  r=await request('install.php',form({...fields,categories:'../escape'}));assert.equal(r.status,400);pass('installation rejects category traversal');
@@ -196,6 +199,7 @@ try{
  fs.unlinkSync(path.join(fault,'deny-mode.flag'));r=await request('../permission-fault/install.php',form({...faultFields,password:'',password_confirm:''}));assert.equal(r.status,200,r.text);
  pass('book permission failure can be repaired and retried without re-entering the password');
  if(process.env.PLAYWRIGHT_MODULE){
+  if(process.env.SCREENSHOT_DIR)fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});
   const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
   const browser=await chromium.launch({...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{}),headless:true});
   try{
@@ -208,7 +212,41 @@ try{
     assert.equal(await page.locator('#apiDialog').isVisible(),false);
     assert.equal(await page.locator('h2').textContent(),locale==='zh-CN'?'上传电子书':'Upload books');
     await page.locator('#apiSettingsButton').click();await page.locator('#copyToken').click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),token);
+    assert((await page.locator('#copyToken').textContent()).startsWith('✓ '));
     assert((await page.locator('#curlCommand').textContent()).includes(base+'up.php'));
+    assert(!(await page.locator('#skillPanel').isVisible()));
+    await page.locator('#generateSkill').click();assert(await page.locator('#skillPanel').isVisible());
+    assert.equal(await page.locator('#generateSkill').getAttribute('aria-expanded'),'true');
+    await page.waitForFunction(()=>document.getElementById('skillContent').getBoundingClientRect().top<innerHeight-100);
+    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'skill-preview-'+locale+'.png'),fullPage:true});
+    // Generating is distinct from copying. A category change refreshes the
+    // already-generated skill and clears any prior copy-success indication.
+    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),token);
+    await page.locator('#copySkill').click();await page.waitForFunction(()=>document.getElementById('copySkill').classList.contains('copied'));assert((await page.locator('#copySkill').textContent()).startsWith('✓ '));
+    await page.locator('#apiDirectory').selectOption(shellCategory);assert(!(await page.locator('#copySkill').textContent()).startsWith('✓ '));
+    const skill=await page.locator('#skillContent').textContent();assert(skill.startsWith('---\nname: personal-opds-upload\n'));
+    const skillSettings=JSON.parse(skill.match(/```json\n([\s\S]*?)\n```/)[1]);
+    assert.equal(skillSettings.upload_url,base+'up.php');assert.equal(skillSettings.catalog_url,base+'index.php');assert.equal(skillSettings.default_category,shellCategory);assert(skillSettings.available_categories.includes('中文'));assert(skill.includes(token));
+    await page.locator('#copySkill').click();await page.waitForFunction(()=>document.getElementById('copySkill').classList.contains('copied'));assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),skill);
+    assert((await page.locator('#copySkill').textContent()).startsWith('✓ '));
+    assert(await page.evaluate(()=>document.getElementById('apiDialog').scrollWidth<=document.getElementById('apiDialog').clientWidth));
+    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'skill-'+locale+'.png'),fullPage:true});
+    await page.waitForFunction(()=>!document.getElementById('copySkill').classList.contains('copied'));
+    assert.equal(await page.locator('#copySkill').textContent(),locale==='zh-CN'?'复制 SKILL.md':'Copy SKILL.md');
+    // Execute the generated example against the isolated HTTPS application.
+    // Only the local filename is changed; TLS uses the fixture's trusted CA.
+    const skillFolder=path.join(process.env.SCREENSHOT_DIR||temp,'personal-opds-upload-'+locale);fs.mkdirSync(skillFolder,{recursive:true});fs.writeFileSync(path.join(skillFolder,'SKILL.md'),skill);
+    const skillFile='skill-'+locale+'.txt';fs.writeFileSync(path.join(skillFolder,skillFile),'from generated skill');
+    const skillScript=skill.match(/```bash\n([\s\S]*?)\n```/)[1].replace('files[]=@./article.epub','files[]=@./'+skillFile);
+    const skillResult=JSON.parse((await runFile('/bin/sh',['-c',skillScript],{cwd:skillFolder,env:{...process.env,CURL_CA_BUNDLE:cert},encoding:'utf8',timeout:15000})).stdout);
+    assert.equal(skillResult.success,true);assert.equal(fs.readFileSync(path.join(app,'books-data',shellCategory,skillFile),'utf8'),'from generated skill');
+    assert(!fs.existsSync(path.join(skillFolder,'OPDS_DOLLAR')));assert(!fs.existsSync(path.join(skillFolder,'OPDS_TICK')));
+    pass('real browser: '+locale+' generates and copies a usable skill, safely quotes categories, and confirms copying');
+    await page.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw new Error('Denied for test');};});
+    await page.locator('#copySkill').click();assert.equal((await page.evaluate(()=>window.getSelection().toString())).trimEnd(),skill.trimEnd());assert(!(await page.locator('#copySkill').textContent()).startsWith('✓ '));
+    assert((await page.locator('#copyStatus').textContent()).includes(locale==='zh-CN'?'手动复制':'manually'));
+    await page.evaluate(()=>{delete navigator.clipboard.writeText;});
+    pass('real browser: '+locale+' clipboard failure selects the skill without a false success indicator');
     await page.keyboard.press('Escape');assert.equal(await page.locator('#apiDialog').isVisible(),false);
     await page.locator('#fileInput').setInputFiles([{name:'ui-'+locale+'.txt',mimeType:'text/plain',buffer:Buffer.from('from browser')}]);
     await page.locator('#uploadButton').click();await page.waitForFunction(()=>document.getElementById('uploadButton').disabled && !document.getElementById('fileInput').disabled);
@@ -262,6 +300,12 @@ try{
     assert(fs.existsSync(path.join(splitData,'conf/pass.conf')));assert(!fs.existsSync(path.join(splitApp,'conf')));
     await page.goto(splitUrl+'up.php');await page.locator('input[name=password]').fill('split-browser-password');await page.locator('button[type=submit]').click();await page.locator('#apiSettingsButton').waitFor();
     await page.locator('#apiSettingsButton').click();assert((await page.locator('#curlCommand').textContent()).includes(splitUrl+'up.php'));
+    const previousToken=await page.locator('#apiToken').inputValue();
+    await page.locator('#generateSkill').click();assert((await page.locator('#skillContent').textContent()).includes(previousToken));
+    await page.locator('#resetTokenForm summary').click();page.once('dialog',dialog=>dialog.accept());
+    await Promise.all([page.waitForNavigation(),page.locator('#resetTokenButton').click()]);
+    const nextToken=await page.locator('#apiToken').inputValue();assert.notEqual(nextToken,previousToken);assert(!(await page.locator('#skillPanel').isVisible()));
+    await page.locator('#generateSkill').click();const refreshedSkill=await page.locator('#skillContent').textContent();assert(refreshedSkill.includes(nextToken));assert(!refreshedSkill.includes(previousToken));assert(refreshedSkill.includes(splitUrl+'up.php'));
     assert.deepEqual(errors,[]);protect=true;pass('real browser: '+locale+' installs separate storage and signs in through the original web URL');
     await context.close();pass('real browser: '+locale+' adaptive UI, API dialog, clipboard, and live upload');
    }
