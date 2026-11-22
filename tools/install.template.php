@@ -59,10 +59,14 @@ final class InstallProblem extends RuntimeException {
     public function __construct(string $message, public array $commands = []) { parent::__construct($message); }
 }
 function shellArg(string $s): string { return "'".str_replace("'", "'\"'\"'", $s)."'"; }
+function phpProcessIds(): ?array {
+    $tmp=@tmpfile(); if (!$tmp) return null;
+    $stat=fstat($tmp); fclose($tmp);
+    return $stat && isset($stat['uid'],$stat['gid']) ? ['uid'=>$stat['uid'],'gid'=>$stat['gid']] : null;
+}
 function directoryAdvice(string $path): array {
     $owner='PHP_USER:PHP_GROUP';
-    $tmp=@tmpfile();
-    if ($tmp) { $stat=fstat($tmp); fclose($tmp); if ($stat && isset($stat['uid'],$stat['gid'])) $owner=$stat['uid'].':'.$stat['gid']; }
+    $ids=phpProcessIds(); if ($ids) $owner=$ids['uid'].':'.$ids['gid'];
     $commands=[];
     if (!is_dir($path)) $commands[]='sudo mkdir -p -- '.shellArg($path);
     $commands[]='sudo chown -- '.shellArg($owner).' '.shellArg($path);
@@ -90,6 +94,33 @@ function makeDirectory(string $path,int $mode,array &$createdDirs): void {
 function writableDirectory(string $path): void {
     clearstatcache(true,$path);
     if (!is_writable($path)) throw new InstallProblem(tr('Allow PHP to write to this directory: ').$path,directoryAdvice($path));
+}
+function bookPermissionProblem(string $path): never {
+    throw new InstallProblem(tr('PHP cannot set read/enter-only permissions (0550) on the book directory: ').$path.' '
+        .tr('PHP may write here but may not own this directory. Grant it ownership during setup using the commands below; setup will create the categories and then remove write access from this parent directory. Existing books are not deleted.'),directoryAdvice($path));
+}
+function inspectBookDirectory(string $path,array $categories): void {
+    clearstatcache(true,$path);
+    if (!is_readable($path) || !is_executable($path)) throw new InstallProblem(tr('PHP needs read and enter access to the book directory: ').$path,directoryAdvice($path));
+    $ids=phpProcessIds(); $owner=fileowner($path);
+    if ($ids && $ids['uid']===0) stopInstall(tr('Do not run PHP as root. The filesystem must enforce directory permissions.'));
+    if (is_writable($path) && $ids && $owner!==false && $ids['uid']!==$owner) bookPermissionProblem($path);
+    foreach ($categories as $name) {
+        $dir=$path.'/'.$name;
+        if (is_link($dir) || (file_exists($dir) && !is_dir($dir))) stopInstall(tr('Invalid existing category path.'));
+        if (is_dir($dir)) writableDirectory($dir);
+        elseif (!is_writable($path)) throw new InstallProblem(tr('PHP needs temporary write access to create the missing category in the book directory: ').$path.' '
+            .tr('Setup removes write access from this parent directory after creating the categories.'),directoryAdvice($path));
+    }
+}
+function protectBookDirectory(string $path): void {
+    clearstatcache(true,$path);
+    // Existing read/enter-only roots already satisfy the runtime requirement.
+    // Do not require PHP to chmod an administrator-owned protected directory.
+    if (!is_writable($path) && is_readable($path) && is_executable($path)) return;
+    if (!@chmod($path,0550)) bookPermissionProblem($path);
+    clearstatcache(true,$path);
+    if (is_writable($path) || !is_readable($path) || !is_executable($path)) bookPermissionProblem($path);
 }
 function setupLocked(string $root): bool {
     clearstatcache(true);
@@ -150,7 +181,7 @@ function payloadFiles(string $root): array {
     }
     return $files;
 }
-$error=''; $commands=[]; $done=false; $checked=false; $results=[]; $url=''; $sessionReady=false;
+$error=''; $commands=[]; $done=false; $checked=false; $results=[]; $url=''; $sessionReady=false; $failureStep=1;
 $root=__DIR__; $conf=$root.'/conf'; $books=$root.'/books-data'; $storageMode='local';
 $jsonRequest=str_contains(strtolower((string)($_SERVER['HTTP_ACCEPT']??'')),'application/json');
 if (setupLocked(__DIR__)) {
@@ -170,8 +201,9 @@ try {
     if (($_SERVER['REQUEST_METHOD']??'GET')==='POST') {
         if (!hash_equals($_SESSION['install_csrf'],input('csrf'))) stopInstall(tr('Invalid request token. Refresh.'));
         $action=input('action') ?: 'install';
-        if (!in_array($action,['check','install'],true)) stopInstall(tr('Invalid request action.'));
-        $passwordHash=retainPassword($action==='install');
+        if (!in_array($action,['check','install','back'],true)) stopInstall(tr('Invalid request action.'));
+        $failureStep=2; $passwordHash=retainPassword($action==='install'); $failureStep=1;
+        if ($action!=='back') {
         // Application files always belong beside this installer. Client input
         // can choose private storage, never the PHP program destination.
         $root=__DIR__;
@@ -182,12 +214,10 @@ try {
         writableDirectory(__DIR__);
         $url=baseUrl(input('base_url'));
         $title=trim(input('title'));
-        if ($action==='install' && ($title==='' || strlen($title)>200 || preg_match('//u',$title)!==1 || preg_match('/[\x00-\x1f\x7f]/',$title))) stopInstall(tr('Invalid library name.'));
+        if ($action==='install' && ($title==='' || strlen($title)>200 || preg_match('//u',$title)!==1 || preg_match('/[\x00-\x1f\x7f]/',$title))) { $failureStep=2; stopInstall(tr('Invalid library name.')); }
         $categories=array_values(array_unique(array_filter(array_map('trim',preg_split('/\r\n|\n|\r/',input('categories'))?:[]),static fn($s)=>$s!=='')));
-        if ($action==='install') {
-            if (!$categories || count($categories)>20) stopInstall(tr('Enter 1-20 top-level categories, one per line.'));
-            foreach ($categories as $category) if (!categoryName($category)) stopInstall(tr('Invalid category name. Only one category level is currently allowed.'));
-        }
+        if (!$categories || count($categories)>20) stopInstall(tr('Enter 1-20 top-level categories, one per line.'));
+        foreach ($categories as $category) if (!categoryName($category)) stopInstall(tr('Invalid category name. Only one category level is currently allowed.'));
         $lockPath=__DIR__.'/.opds-install.lock';
         if (is_link($lockPath)) stopInstall(tr('Invalid installation lock path.'));
         $lock=fopen($lockPath,'c+b'); if (!$lock || !flock($lock,LOCK_EX|LOCK_NB)) stopInstall(tr('Another installation is running.'));
@@ -207,6 +237,9 @@ try {
             $files=payloadFiles($root);
             $results[]=['label'=>tr('Application files'),'ok'=>true];
             if (is_link($books) || (file_exists($books) && !is_dir($books))) stopInstall(tr('Invalid library directory.'));
+            makeDirectory($books,0750,$dirs);
+            inspectBookDirectory($books,$categories);
+            $results[]=['label'=>tr('Book directory permissions'),'ok'=>true,'detail'=>$books];
             if (is_link($conf) || (file_exists($conf) && !is_dir($conf))) stopInstall(tr('Invalid configuration directory.'));
             makeDirectory($conf,0700,$dirs);
             if (!chmod($conf,0700)) stopInstall(tr('Cannot protect configuration directory.'));
@@ -242,6 +275,7 @@ try {
                     if (!is_dir($dir)) { if (!mkdir($dir,0750)) stopInstall(tr('Cannot create category.')); $dirs[]=$dir; }
                     if (!is_writable($dir)) stopInstall(tr('Category is not writable.'));
                 }
+                protectBookDirectory($data);
                 if (is_link($conf.'/cache') || (file_exists($conf.'/cache') && !is_dir($conf.'/cache'))) stopInstall(tr('Invalid cache path.'));
                 if (!is_dir($conf.'/cache')) { if (!mkdir($conf.'/cache',0700)) stopInstall(tr('Cannot create cache directory.')); $dirs[]=$conf.'/cache'; }
                 $config=['base_url'=>$url,'title'=>$title,'max_category_depth'=>1];
@@ -249,8 +283,6 @@ try {
                 writeNew($root.'/paths.php',"<?php\nreturn ".var_export($locations,true).";\n",$created);
                 writeNew($conf.'/config.php',"<?php\nreturn ".var_export($config,true).";\n",$created);
                 writeNew($conf.'/pass.conf','password='.$passwordHash."\napi_token=".bin2hex(random_bytes(32))."\n",$created);
-                if (!chmod($data,0550)) stopInstall(tr('Cannot protect library root.'));
-                clearstatcache(true,$data); if (is_writable($data)) stopInstall(tr('Do not run PHP as root. The filesystem must enforce directory permissions.'));
                 writeNew($conf.'/installed.lock',"installed\n",$created);
                 writeNew(__DIR__.'/install.lock',"installed\n",$created);
 
@@ -267,6 +299,7 @@ try {
             flock($lock,LOCK_UN); fclose($lock);
         }
     }
+    }
 } catch (Throwable $e) {
     http_response_code(400);
     $error=$e instanceof JsonException ? tr('Invalid installation payload format.') : $e->getMessage();
@@ -276,31 +309,34 @@ try {
 if ($jsonRequest) {
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode(['success'=>$done||$checked,'installed'=>$done,'message'=>$done?tr('Installation complete'):($checked?tr('Checks passed. You can install now.'):$error),
+        'step'=>$done||$checked?2:$failureStep,
         'results'=>$results,'commands'=>$commands,'password_saved'=>!$done&&$sessionReady&&passwordDraft()!==null,
         'catalog_url'=>$done?$url.'index.php':null,'upload_url'=>$done?$url.'up.php':null],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 $host=(string)($_SERVER['HTTP_HOST']??'localhost');
 $script=(string)($_SERVER['SCRIPT_NAME']??'/install.php');
+$pageStep=$checked?2:($error!==''?$failureStep:1);
 $documentRoot=(string)($_SERVER['DOCUMENT_ROOT']??'');
 $resolvedDocumentRoot=$documentRoot!==''?realpath($documentRoot):false;
 $defaultDataRoot=dirname($resolvedDocumentRoot ?: __DIR__).'/opds-data';
 $guess='https://'.$host.rtrim(str_replace('\\','/',dirname($script)),'/.').'/';
 ?>
 <!doctype html><html lang="<?=uiLanguage() === 'zh' ? 'zh-CN' : 'en'?>"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?=tr_html('Install your OPDS library')?></title>
-<style nonce="<?=esc($nonce)?>">*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;padding:32px 16px;background:#f5f6f8;color:#222;font:16px/1.6 system-ui}main{max-width:680px;margin:auto;padding:28px;background:white;border-radius:14px}h1{font-size:24px}label{display:block;margin-top:16px}input,textarea,select,button{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font:inherit}button{margin-top:16px;background:#222;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.actions{display:flex;gap:12px}.actions button{flex:1}.secondary{background:#eee;color:#222}.error{padding:12px;background:#ffecec;color:#900;overflow-wrap:anywhere}.success{padding:12px;background:#edf8ef;color:#146c43}.result{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f8;padding:12px}small{color:#666}a{color:#146c43}</style>
+<style nonce="<?=esc($nonce)?>">*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;padding:32px 16px;background:#f5f6f8;color:#222;font:16px/1.6 system-ui}main{max-width:680px;margin:auto;padding:28px;background:white;border-radius:14px}h1{font-size:24px}code{overflow-wrap:anywhere}label{display:block;margin-top:16px}input,textarea,select,button{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font:inherit}button{margin-top:16px;background:#222;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.stepper{display:flex;gap:12px;margin:20px 0;color:#777;font-size:14px}.stepper span{flex:1;padding:10px;border-bottom:2px solid #ddd}.stepper .active{color:#146c43;border-color:#146c43;font-weight:600}fieldset{border:0;padding:0;margin:0;min-width:0}h2{font-size:19px}.secondary{background:#eee;color:#222}.error{padding:12px;background:#ffecec;color:#900;overflow-wrap:anywhere}.success{padding:12px;background:#edf8ef;color:#146c43}.result{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f8;padding:12px}small{color:#666}a{color:#146c43}</style>
 <main><h1><?= $done ? tr('Installation complete') : tr('Install your OPDS library') ?></h1>
 <?php if ($done): ?>
 <p><?=tr_html('Directories, configuration, and application files are ready. Setup is locked. Delete install.php.')?></p><p><a href="<?=esc($url.'index.php')?>"><?=tr_html('Open OPDS catalog')?></a> · <a href="<?=esc($url.'up.php')?>"><?=tr_html('Open uploader')?></a></p><p><?=tr_html('Sign in with the password you just set. Use CLI / API in the upper-right corner to copy your token and agent command.')?></p>
 <?php else: ?>
 <?php if ($error!==''): ?><p class="error" role="alert"><?=esc($error)?></p><?php endif; ?>
 <?php if ($commands): ?><p><?=tr_html('Run these commands on the server, then click Check again. They affect only the named directory.')?></p><pre><?=esc(implode("\n",$commands))?></pre><?php endif; ?>
-<?php if ($checked): ?><p class="success" role="status"><?=tr_html('Checks passed. You can install now.')?></p><?php endif; ?>
-<p><?=tr_html('Set your library name, upload password, and categories. Application files, configuration, cache, and the installation lock are generated automatically. Different existing files are never overwritten.')?></p>
+<p id="wizardIntro"><?=tr_html('First check the storage and server settings. Then choose your library name and password to install.')?></p>
+<div class="stepper" aria-label="<?=tr_html('Installation steps')?>"><span id="stepMarker1"<?=$pageStep===1?' class="active" aria-current="step"':''?>><?=tr_html('Step 1: Check')?></span><span id="stepMarker2"<?=$pageStep===2?' class="active" aria-current="step"':''?>><?=tr_html('Step 2: Install')?></span></div>
 <?php foreach (environmentErrors() as $problem): ?><p class="error"><?=esc($problem)?></p><?php endforeach; ?>
-<div id="checkResults" role="status" aria-live="polite"></div>
-<?php if ($sessionReady): ?><form method="post" id="setupForm">
+<?php if ($sessionReady): ?><form method="post" id="setupForm" data-initial-step="<?=$pageStep?>">
 <input type="hidden" name="csrf" value="<?=esc($_SESSION['install_csrf'])?>">
+<fieldset id="stepCheck"<?=$pageStep===2?' hidden':''?>>
+<h2><?=tr_html('Step 1: Check')?></h2>
 <p><strong><?=tr_html('Web application directory (automatic)')?></strong><br><code id="detectedWebDir"><?=esc(__DIR__)?></code></p><small><?=tr_html('Detected from install.php. index.php and up.php are generated here; only the data location needs to be chosen.')?></small>
 <label><?=tr_html('Storage mode')?><select name="storage_mode" id="storageMode">
 <option value="local"<?=($_POST['storage_mode']??'local')==='local'?' selected':''?>><?=tr_html('Inside the web application directory')?></option>
@@ -308,13 +344,25 @@ $guess='https://'.$host.rtrim(str_replace('\\','/',dirname($script)),'/.').'/';
 </select></label>
 <div id="externalStorage"><label><?=tr_html('Separate data directory')?><input name="data_dir" id="dataDir" value="<?=esc(isset($_POST['data_dir'])&&is_string($_POST['data_dir'])?$_POST['data_dir']:$defaultDataRoot)?>"></label><small><?=tr_html('Creates books/ and conf/ here. Choose a path outside the site document root; no Nginx conf-blocking rule is needed for this mode. Do not expose this path through an alias.')?></small></div>
 <pre id="layoutPreview"></pre>
-<label><?=tr_html('Library name')?><input name="title" value="<?=esc(isset($_POST['title'])&&is_string($_POST['title'])?$_POST['title']:tr('My Library'))?>" required maxlength="100"></label>
+
 <label>BASE_URL<input type="url" name="base_url" value="<?=esc(isset($_POST['base_url'])&&is_string($_POST['base_url'])?$_POST['base_url']:$guess)?>" required></label><small><?=tr_html('The HTTPS URL for index.php and up.php, ending with /. Private books and configuration do not need a public URL.')?></small>
+
+<label><?=tr_html('Initial categories (one per line)')?><textarea name="categories" rows="4" required><?=esc(isset($_POST['categories'])&&is_string($_POST['categories'])?$_POST['categories']:'books')?></textarea></label>
+
+<div id="checkResults" role="status" aria-live="polite"></div>
+<button type="submit" name="action" value="check" id="checkButton" formnovalidate><?=tr_html('Step 1: Check')?></button>
+</fieldset>
+<fieldset id="stepInstall"<?=$pageStep===1?' hidden':''?>>
+<h2><?=tr_html('Step 2: Install')?></h2>
+<p class="success"><?=tr_html('Checks passed. Set your library name and password, then install.')?></p>
+<label><?=tr_html('Library name')?><input name="title" value="<?=esc(isset($_POST['title'])&&is_string($_POST['title'])?$_POST['title']:tr('My Library'))?>" required maxlength="100"></label>
 <label><?=tr_html('Upload password')?><input type="password" name="password" autocomplete="new-password"></label>
 <label><?=tr_html('Confirm password')?><input type="password" name="password_confirm" autocomplete="new-password"></label><small id="passwordHint"><?=tr_html(passwordDraft()!==null?'Password saved for this setup session. Leave both fields blank to keep it.':'12-72 bytes. The password is stored as a hash; an API token is generated randomly.')?></small>
-<label><?=tr_html('Initial categories (one per line)')?><textarea name="categories" rows="4" required><?=esc(isset($_POST['categories'])&&is_string($_POST['categories'])?$_POST['categories']:'books')?></textarea></label>
-<div class="actions"><button type="submit" name="action" value="check" id="checkButton" class="secondary" formnovalidate><?=tr_html('Check')?></button><button type="submit" name="action" value="install" id="installButton"><?=tr_html('Install')?></button></div></form><?php endif; ?>
-<details><summary><?=tr_html('Server configuration and directory protection')?></summary>
+<div id="installResults" role="status" aria-live="polite"></div>
+<button type="submit" name="action" value="install" id="installButton"><?=tr_html('Step 2: Install')?></button>
+<button type="submit" name="action" value="back" id="backButton" class="secondary" formnovalidate><?=tr_html('Previous step')?></button>
+</fieldset></form><?php endif; ?>
+<details id="serverHelp"<?=$pageStep===2?' hidden':''?>><summary><?=tr_html('Server configuration and directory protection')?></summary>
 <p><?=tr_html('Separate storage outside the document root does not need the conf URL rules below. These rules apply only to storage inside the web application directory.')?></p>
 <p><?=tr_html('The installer writes conf/.htaccess for Apache, which must allow it to take effect. With Nginx, deny HTTP access to this installation\'s conf directory. Example for /opds/:')?></p>
 <pre>location = /opds/conf { return 404; }
@@ -332,7 +380,8 @@ session.upload_progress.enabled = 0</pre>
     if (!form || !window.fetch || !window.FormData) return;
     const dictionary=<?=json_encode(uiLanguage()==='zh'?UI_TRANSLATIONS:[],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?>;
     const tr=text=>dictionary[text]??text;
-    const output=document.getElementById('checkResults');
+    let output=document.getElementById('checkResults');
+    let currentStep=Number(form.dataset.initialStep)||1;
     const mode=document.getElementById('storageMode');
     const webDirectory=<?=json_encode(__DIR__,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?>;
     const dataDirectory=document.getElementById('dataDir');
@@ -350,12 +399,37 @@ session.upload_progress.enabled = 0</pre>
     updateLayout();
     const buttons=Array.from(form.querySelectorAll('button'));
     let busy=false;
+    function showStep(step) {
+        const changed=currentStep!==step;
+        currentStep=step;
+        document.getElementById('stepCheck').hidden=step!==1;
+        document.getElementById('stepInstall').hidden=step!==2;
+        document.getElementById('serverHelp').hidden=step!==1;
+        document.getElementById('checkButton').disabled=busy||step!==1;
+        document.getElementById('installButton').disabled=busy||step!==2;
+        document.getElementById('backButton').disabled=busy;
+        document.getElementById('stepMarker1').classList.toggle('active',step===1);
+        document.getElementById('stepMarker2').classList.toggle('active',step===2);
+        for (const n of [1,2]) {
+            const marker=document.getElementById('stepMarker'+n);
+            if (n===step) marker.setAttribute('aria-current','step');
+            else marker.removeAttribute('aria-current');
+        }
+        output=document.getElementById(step===1?'checkResults':'installResults');
+        if (changed) {
+            const heading=document.querySelector(step===1?'#stepCheck h2':'#stepInstall h2');
+            heading.tabIndex=-1; heading.focus({preventScroll:true});
+            document.querySelector('h1').scrollIntoView({block:'start'});
+        }
+    }
+    showStep(currentStep);
     function message(text,className='result') {
         const line=document.createElement('p'); line.textContent=text; line.className=className; output.appendChild(line);
     }
     form.addEventListener('submit',async event=>{
         event.preventDefault(); if (busy) return;
-        const action=event.submitter?.value??'install';
+        const action=event.submitter?.value??(currentStep===1?'check':'install');
+        if (action==='back') { showStep(1); return; }
         const data=new FormData(form); data.set('action',action);
         // Checks do not need to transmit the password; fields stay in the DOM.
         if (action==='check') { data.delete('password'); data.delete('password_confirm'); }
@@ -363,7 +437,9 @@ session.upload_progress.enabled = 0</pre>
         message(tr(action==='check'?'Checking...':'Installing...'));
         try {
             const response=await fetch(window.location.href,{method:'POST',headers:{Accept:'application/json'},body:data});
-            const result=await response.json(); output.replaceChildren();
+            const result=await response.json();
+            if (!result.success) showStep(result.step===2?2:1);
+            output.replaceChildren();
             for (const check of result.results??[]) {
                 if (!check.ok && check.label===result.message) continue;
                 message((check.ok?'✓ ':'✗ ')+check.label+(check.detail?' · '+check.detail:''));
@@ -374,15 +450,23 @@ session.upload_progress.enabled = 0</pre>
                 const pre=document.createElement('pre'); pre.textContent=result.commands.join('\n'); output.appendChild(pre);
             }
             if (result.password_saved) document.getElementById('passwordHint').textContent=tr('Password saved for this setup session. Leave both fields blank to keep it.');
+            if (action==='check' && result.success) {
+                showStep(2); output.replaceChildren();
+            }
             if (result.installed) {
-                form.hidden=true; document.querySelector('h1').textContent=tr('Installation complete');
+                form.after(output); form.hidden=true;
+                document.querySelector('.stepper').hidden=true;
+                document.getElementById('wizardIntro').hidden=true;
+                document.getElementById('serverHelp').hidden=true;
+                document.querySelector('h1').textContent=tr('Installation complete');
+                message(tr('Directories, configuration, and application files are ready. Setup is locked. Delete install.php.'));
                 for (const [text,url] of [['Open OPDS catalog',result.catalog_url],['Open uploader',result.upload_url]]) {
                     const link=document.createElement('a'); link.textContent=tr(text); link.href=url; const p=document.createElement('p');p.appendChild(link); output.appendChild(p);
                 }
             }
         } catch {
             output.replaceChildren(); message(tr('Could not complete the request. Your form is unchanged. Check the connection and try again.'),'error');
-        } finally { busy=false; buttons.forEach(button=>button.disabled=false); }
+        } finally { busy=false; if (!form.hidden) showStep(currentStep); }
     });
 })();
 </script></html>

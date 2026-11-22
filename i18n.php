@@ -262,6 +262,18 @@ const UI_TRANSLATIONS = array (
   'Use an absolute data directory path.' => '请填写数据目录的绝对路径。',
   'The data directory path contains an invalid component.' => '数据目录路径包含无效的目录段。',
   'The data directory path must not contain symbolic links or files.' => '数据目录路径不能包含符号链接或普通文件。',
+  'PHP cannot set read/enter-only permissions (0550) on the book directory: ' => 'PHP 无法将书籍目录设为只读、可进入（0550）：',
+  'PHP may write here but may not own this directory. Grant it ownership during setup using the commands below; setup will create the categories and then remove write access from this parent directory. Existing books are not deleted.' => 'PHP 可能能写文件，但不是此目录的所有者，无法修改权限。请执行下方命令，将此目录交给 PHP 管理后重试；安装程序会先创建分类，再移除父目录的写权限，不会删除已有书籍。',
+  'PHP needs read and enter access to the book directory: ' => 'PHP 需要读取并进入书籍目录：',
+  'PHP needs temporary write access to create the missing category in the book directory: ' => '创建缺少的分类需要临时允许 PHP 写入书籍目录：',
+  'Setup removes write access from this parent directory after creating the categories.' => '安装程序创建分类后会移除此父目录的写权限。',
+  'Book directory permissions' => '书籍目录权限',
+  'First check the storage and server settings. Then choose your library name and password to install.' => '先检查存储和服务器设置，通过后再设置书库名称、密码并安装。',
+  'Installation steps' => '安装步骤',
+  'Step 1: Check' => '第一步：检查',
+  'Step 2: Install' => '第二步：安装',
+  'Checks passed. Set your library name and password, then install.' => '检查已通过，请设置书库名称和上传密码，然后安装。',
+  'Previous step' => '上一步',
 );
 function uiLanguage(): string
 {
