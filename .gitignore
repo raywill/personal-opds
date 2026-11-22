@@ -1,0 +1,6 @@
+/conf/
+/books-data/
+/.opds-install.lock
+/install-check-*.txt
+/tests/.tmp/
+*.log

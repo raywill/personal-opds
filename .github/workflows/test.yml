@@ -1,0 +1,20 @@
+name: Test
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: sudo apt-get update && sudo apt-get install -y php-cli php-zip php-xml
+      - name: Build and check installer
+        run: |
+          php tools/build.php
+          git diff --exit-code -- install.php
+          find . -name '*.php' -not -path './conf/*' -exec php -l {} \;
+      - name: Run HTTPS integration tests
+        run: PHP_BINARY=php node tests/integration.mjs
