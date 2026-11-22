@@ -926,7 +926,10 @@ progress { display: block; width: 100%; height: 14px; accent-color: #16803c; }
         if (apiDirectory) { apiDirectory.value = directory.value; updateCommand(); }
     });
     dropzone.hidden = false;
-    // Keep the native input visible and keyboard-accessible as a fallback.
+    // Use the localized, keyboard-accessible picker with JavaScript. Native
+    // file controls follow the OS language; keep them for the no-JS fallback.
+    input.hidden = true;
+    input.required = false;
 
     function showError(message) {
         errorBox.textContent = message;
