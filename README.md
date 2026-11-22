@@ -50,17 +50,30 @@ The application accepts **20** files. The parser needs **at least 21 slots** so 
 
 ## Install
 
-1. Download [`install.php`](https://github.com/raywill/personal-opds/releases/latest/download/install.php). If no release is available, use the repository's [`install.php`](https://github.com/raywill/personal-opds/blob/main/install.php).
-2. **Before uploading it**, edit the `INSTALL_KEY` constant near the top. Set a private, randomly generated installation code of at least 24 characters. Keep this customized file out of public repositories. For example, generate a code locally with `php -r 'echo bin2hex(random_bytes(24)), PHP_EOL;'`.
-3. Upload only `install.php` to an empty website directory, such as `/opds/`. PHP needs write permission to that directory during setup.
-4. Protect the `conf` URL path as described below. Open `https://your-host/opds/install.php`.
-5. Enter the installation code, library name, upload password, and initial categories, one per line. The suggested base URL is the directory containing the installer; review it before submitting.
-6. Complete installation and **delete `install.php`**. Setup also creates an installation lock to prevent reinitialization.
+1. Download [`install.php`](https://github.com/raywill/personal-opds/releases/latest/download/install.php), and upload it to your website. No installation code or source edits are needed.
+2. Open the installer over HTTPS immediately after uploading it. Choose the **Installation directory**, an absolute server path. It defaults to the directory containing `install.php`; you may select another directory, including a new one under a writable parent.
+3. Set **BASE_URL** to the HTTPS URL serving that selected directory. The default is the installer's URL directory. If you choose another path, update the URL to match.
+4. Protect the selected installation's `conf` URL path as described below. Click **Check** at any time: it does not require a password and checks the PHP environment, target-directory permissions, existing application files, public URL, and configuration protection. Missing target directories are created when possible; temporary probes and draft configuration are cleaned up without installing application files or credentials.
+5. Enter a library name, upload password, and initial categories, then click **Install**. If a check or installation fails, the page keeps your inputs. A valid password is also retained as a hash in the setup session for 30 minutes, so a retry can leave both password fields blank. Plaintext passwords are not stored in the session or returned in HTML/JSON.
+6. On success, the installer writes **`install.lock` next to `install.php`** and refuses every later GET, Check, or Install request, including requests selecting a different target. It also writes `conf/installed.lock` in the application directory. You can delete `install.php` after completion; rerunning it is not an upgrade mechanism.
+
+### Fix directory permissions
+
+When a directory is not writable, **Check shows commands containing the actual selected server path and the detected PHP process user/group IDs**. Run the suggested commands on your server, then click Check again. For example, on a host whose PHP-FPM user is `www-data`:
+
+```sh
+sudo mkdir -p -- '/var/www/personal-opds'
+sudo chown -- 'www-data:www-data' '/var/www/personal-opds'
+sudo chmod u+rwx -- '/var/www/personal-opds'
+```
+
+These commands affect only that directory, not its children. No `chmod 777` or recursive ownership changes are required. Review the path before running them. If PHP's IDs cannot be detected, replace `PHP_USER:PHP_GROUP` in the suggestion with your PHP-FPM account. On shared hosting, use the equivalent ownership/permission controls provided by your host. The directory containing `install.php` must also be writable so setup can create its final `install.lock`, even when application files go elsewhere.
 
 The default generated layout is:
 
 ```text
 opds/
+├── install.lock           # next to install.php when using the default path
 ├── index.php
 ├── up.php
 ├── bootstrap.php
@@ -76,7 +89,7 @@ opds/
     └── installed.lock
 ```
 
-The installer creates `books-data` and `conf` next to itself. It generates a salted password hash and a random 256-bit API token. It verifies payload checksums, refuses different existing application files/configuration, serializes concurrent setup attempts, and removes files created by a failed attempt. Existing books are not deleted.
+The installer creates `books-data` and `conf` inside the selected application directory. It generates a salted password hash and a random 256-bit API token. It verifies payload checksums, refuses different existing application files/configuration, serializes concurrent setup attempts, and removes files created by a failed attempt. Existing books are not deleted.
 
 The library root is made non-writable by PHP after setup; its category directories remain writable for uploads. Configuration and cache remain private and writable. For later maintenance, add categories with your file manager and grant PHP write access to those categories while keeping the library root protected. Changing filesystem permissions or updating application files is an administrator operation; rerunning the installer is not an upgrade mechanism.
 
@@ -203,7 +216,7 @@ The repository contains readable sources plus the generated standalone installer
 php tools/build.php
 ```
 
-The build is deterministic and embeds source hashes. `INSTALL_KEY` stays empty in the published artifact; each deployer sets their own private value locally.
+The build is deterministic and embeds source hashes. The published installer runs directly without a setup code or source edits; a successful installation permanently disables that installer through `install.lock`.
 
 Run the installation-to-reading integration tests with Node 20+, native PHP, and the OpenSSL CLI:
 
@@ -212,7 +225,7 @@ php tools/build.php
 PHP_BINARY=php node tests/integration.mjs
 ```
 
-Tests run an isolated HTTPS endpoint and multiple native PHP workers, using temporary fake credentials. They cover installation failures/locking, credential protection, generated payload identity, categories, metadata/search, downloads, symlinks, depth restrictions, localization, and Bearer uploads. An optional Playwright pass is enabled with `PLAYWRIGHT_MODULE` (an importable module specifier or file URL), `CHROME_BIN`, and optionally `SCREENSHOT_DIR`. Never deploy the test router as part of the application.
+Tests run an isolated HTTPS endpoint and multiple native PHP workers, using temporary fake credentials. They cover installation failures/locking, configurable destinations, immediate Check requests, permission commands, password-preserving retries, credential protection, generated payload identity, categories, metadata/search, downloads, symlinks, depth restrictions, localization, and Bearer uploads. An optional Playwright pass is enabled with `PLAYWRIGHT_MODULE` (an importable module specifier or file URL), `CHROME_BIN`, and optionally `SCREENSHOT_DIR`. Never deploy the test router as part of the application.
 
 ## License
 
