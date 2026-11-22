@@ -4,12 +4,24 @@ require_once __DIR__ . '/i18n.php';
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
 umask(0077);
-if (!is_file(__DIR__ . '/conf/installed.lock') || is_link(__DIR__ . '/conf')
-    || is_link(__DIR__ . '/conf/config.php')) {
+$locations=['books_dir'=>__DIR__.'/books-data', 'config_dir'=>__DIR__.'/conf'];
+if (file_exists(__DIR__.'/paths.php') || is_link(__DIR__.'/paths.php')) {
+    if (is_link(__DIR__.'/paths.php') || !is_file(__DIR__.'/paths.php') || !is_readable(__DIR__.'/paths.php')) {
+        http_response_code(503); exit(tr('Invalid storage configuration.'));
+    }
+    $loaded=require __DIR__.'/paths.php';
+    if (!is_array($loaded) || !is_string($loaded['books_dir']??null) || !is_string($loaded['config_dir']??null)
+        || !str_starts_with($loaded['books_dir'],'/') || !str_starts_with($loaded['config_dir'],'/')) {
+        http_response_code(503); exit(tr('Invalid storage configuration.'));
+    }
+    $locations=$loaded;
+}
+if (!is_file($locations['config_dir'].'/installed.lock') || is_link($locations['config_dir'])
+    || is_link($locations['config_dir'].'/config.php')) {
     http_response_code(503);
     exit(tr('Not installed. Run install.php first.'));
 }
-$settings = require __DIR__ . '/conf/config.php';
+$settings = require $locations['config_dir'].'/config.php';
 if (!is_array($settings) || ($settings['max_category_depth'] ?? 0) !== 1) {
     http_response_code(503);
     exit(tr('Only one category level is enabled in this release.'));
@@ -17,8 +29,8 @@ if (!is_array($settings) || ($settings['max_category_depth'] ?? 0) !== 1) {
 define('BASE_URL', $settings['base_url']);
 define('LIBRARY_TITLE', $settings['title']);
 define('MAX_CATEGORY_DEPTH', $settings['max_category_depth']);
-define('DATA_DIR', __DIR__ . '/books-data');
-define('CONFIG_DIR', __DIR__ . '/conf');
+define('DATA_DIR', $locations['books_dir']);
+define('CONFIG_DIR', $locations['config_dir']);
 define('PASSWORD_FILE', CONFIG_DIR . '/pass.conf');
 define('CONFIG_LOCK_FILE', CONFIG_DIR . '/.config.lock');
 define('RATE_STATE_FILE', CONFIG_DIR . '/.rate.json');

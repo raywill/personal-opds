@@ -21,7 +21,7 @@ function baseUrl(string $url): string {
     $p=parse_url($url);
     if (!$p || !filter_var($url,FILTER_VALIDATE_URL) || ($p['scheme']??'')!=='https'
         || empty($p['host']) || isset($p['user']) || isset($p['pass']) || isset($p['query']) || isset($p['fragment'])
-        || preg_match('/[\x00-\x20\x7f]/',$url) || str_contains($url,'\\')) stopInstall(tr('BASE_URL must be the HTTPS URL of this installation directory, without a query string.'));
+        || preg_match('/[\x00-\x20\x7f]/',$url) || str_contains($url,'\\')) stopInstall(tr('BASE_URL must be the HTTPS URL of the web application directory, without a query string.'));
     return rtrim($url,'/').'/';
 }
 function probe(string $url): array {
@@ -93,10 +93,27 @@ function writableDirectory(string $path): void {
 }
 function setupLocked(string $root): bool {
     clearstatcache(true);
-    foreach ([__DIR__.'/install.lock',__DIR__.'/conf/installed.lock',$root.'/install.lock',$root.'/conf/installed.lock'] as $path) {
+    foreach ([__DIR__.'/install.lock',__DIR__.'/conf/installed.lock',$root.'/install.lock',$root.'/conf/installed.lock',$root.'/paths.php'] as $path) {
         if (file_exists($path) || is_link($path)) return true;
     }
     return false;
+}
+function insideDirectory(string $path,string $parent): bool {
+    return $path===$parent || str_starts_with($path,rtrim($parent,'/').'/');
+}
+function storageLayout(string $webRoot): array {
+    $mode=input('storage_mode') ?: 'local';
+    if ($mode==='local') return ['mode'=>'local','root'=>$webRoot,'books'=>$webRoot.'/books-data','conf'=>$webRoot.'/conf'];
+    if ($mode!=='external') stopInstall(tr('Invalid storage mode.'));
+    $dataRoot=targetPath(input('data_dir'));
+    $documentRoot=(string)($_SERVER['DOCUMENT_ROOT']??'');
+    $documentRoot=$documentRoot!==''?realpath($documentRoot):false;
+    if ($documentRoot===false || !is_dir($documentRoot)) stopInstall(tr('Cannot verify the document root. Use site storage or configure DOCUMENT_ROOT correctly.'));
+    if (insideDirectory($dataRoot,$documentRoot) || insideDirectory($dataRoot,$webRoot)) stopInstall(tr('Choose a separate data directory outside the document root and web application directory: ').$documentRoot);
+    foreach ([$webRoot,__DIR__] as $site) {
+        if (insideDirectory($site,$dataRoot.'/books') || insideDirectory($site,$dataRoot.'/conf')) stopInstall(tr('Book and configuration directories must not contain web application files.'));
+    }
+    return ['mode'=>'external','root'=>$dataRoot,'books'=>$dataRoot.'/books','conf'=>$dataRoot.'/conf'];
 }
 function passwordDraft(): ?string {
     if (time()-(int)($_SESSION['password_draft_time']??0)>1800) {
@@ -134,7 +151,7 @@ function payloadFiles(string $root): array {
     return $files;
 }
 $error=''; $commands=[]; $done=false; $checked=false; $results=[]; $url=''; $sessionReady=false;
-$root=__DIR__; $conf=$root.'/conf';
+$root=__DIR__; $conf=$root.'/conf'; $books=$root.'/books-data'; $storageMode='local';
 $jsonRequest=str_contains(strtolower((string)($_SERVER['HTTP_ACCEPT']??'')),'application/json');
 if (setupLocked(__DIR__)) {
     http_response_code(403);
@@ -155,7 +172,8 @@ try {
         $action=input('action') ?: 'install';
         if (!in_array($action,['check','install'],true)) stopInstall(tr('Invalid request action.'));
         $passwordHash=retainPassword($action==='install');
-        $root=targetPath(input('target_dir') ?: __DIR__); $conf=$root.'/conf';
+        $root=targetPath(input('target_dir') ?: __DIR__);
+        $layout=storageLayout($root); $storageMode=$layout['mode']; $conf=$layout['conf']; $books=$layout['books'];
         if (setupLocked($root)) stopInstall(tr('Already installed; reinitialization is not allowed.'));
         $problems=environmentErrors(); if ($problems) stopInstall(implode('; ',$problems));
         $results[]=['label'=>tr('PHP requirements'),'ok'=>true];
@@ -171,7 +189,7 @@ try {
         $lockPath=__DIR__.'/.opds-install.lock';
         if (is_link($lockPath)) stopInstall(tr('Invalid installation lock path.'));
         $lock=fopen($lockPath,'c+b'); if (!$lock || !flock($lock,LOCK_EX|LOCK_NB)) stopInstall(tr('Another installation is running.'));
-        $targetLock=null; $created=[]; $dirs=[]; $probeFiles=[]; $oldRootMode=null;
+        $targetLock=null; $storageLock=null; $created=[]; $dirs=[]; $probeFiles=[]; $oldRootMode=null;
         try {
             if (setupLocked($root)) stopInstall(tr('Already installed; reinitialization is not allowed.'));
             makeDirectory($root,0755,$dirs); writableDirectory($root);
@@ -182,32 +200,42 @@ try {
                 if (!$targetLock || !flock($targetLock,LOCK_EX|LOCK_NB)) stopInstall(tr('Another installation is running.'));
             }
             if (setupLocked($root)) stopInstall(tr('Already installed; reinitialization is not allowed.'));
+            if ($storageMode==='external') {
+                makeDirectory($layout['root'],0700,$dirs); writableDirectory($layout['root']);
+                if (is_link($layout['root'].'/.opds-install.lock')) stopInstall(tr('Invalid installation lock path.'));
+                $storageLock=fopen($layout['root'].'/.opds-install.lock','c+b');
+                if (!$storageLock || !flock($storageLock,LOCK_EX|LOCK_NB)) stopInstall(tr('Another installation is running.'));
+                $results[]=['label'=>tr('Separate data directory'),'ok'=>true,'detail'=>$layout['root']];
+            }
             $files=payloadFiles($root);
             $results[]=['label'=>tr('Application files'),'ok'=>true];
+            if (is_link($books) || (file_exists($books) && !is_dir($books))) stopInstall(tr('Invalid library directory.'));
             if (is_link($conf) || (file_exists($conf) && !is_dir($conf))) stopInstall(tr('Invalid configuration directory.'));
             makeDirectory($conf,0700,$dirs);
             if (!chmod($conf,0700)) stopInstall(tr('Cannot protect configuration directory.'));
             foreach (['pass.conf','config.php','installed.lock'] as $name) if (file_exists($conf.'/'.$name) || is_link($conf.'/'.$name)) stopInstall(tr('Existing configuration was not overwritten.'));
-            $deny="Require all denied\n";
-            if (!file_exists($conf.'/.htaccess')) writeNew($conf.'/.htaccess',$deny,$created);
-            elseif (is_link($conf.'/.htaccess') || file_get_contents($conf.'/.htaccess')!==$deny) stopInstall(tr('Existing directory protection differs and was not overwritten.'));
+            if ($storageMode==='local') {
+                $deny="Require all denied\n";
+                if (!file_exists($conf.'/.htaccess')) writeNew($conf.'/.htaccess',$deny,$created);
+                elseif (is_link($conf.'/.htaccess') || file_get_contents($conf.'/.htaccess')!==$deny) stopInstall(tr('Existing directory protection differs and was not overwritten.'));
+            }
             $id=bin2hex(random_bytes(24));
             writeNew($root.'/install-check-'.$id.'.txt',$id,$probeFiles,0644);
-            foreach ([$conf.'/pass.conf',$conf.'/access-check-'.$id.'.txt'] as $path) writeNew($path,$id,$probeFiles);
+            if ($storageMode==='local') foreach ([$conf.'/pass.conf',$conf.'/access-check-'.$id.'.txt'] as $path) writeNew($path,$id,$probeFiles);
             [$status,$body]=probe($url.'install-check-'.$id.'.txt');
-            if ($status!==200 || $body!==$id) stopInstall(tr('BASE_URL does not point to this installation, or HTTPS self-access with a valid certificate failed.'));
+            if ($status!==200 || $body!==$id) stopInstall(tr('BASE_URL must point to the web application directory, not the separate data directory. HTTPS self-access with a valid certificate is also required.'));
             $results[]=['label'=>tr('Public URL'),'ok'=>true,'detail'=>$url];
-            foreach (['pass.conf','access-check-'.$id.'.txt'] as $name) {
+            if ($storageMode==='local') foreach (['pass.conf','access-check-'.$id.'.txt'] as $name) {
                 [$status]=probe($url.'conf/'.$name);
                 if (!in_array($status,[403,404],true)) stopInstall(tr('HTTP access to conf is not blocked. Apply the protection rules below. No credentials were stored.'));
             }
-            $results[]=['label'=>tr('Configuration protection'),'ok'=>true];
+            $results[]=['label'=>tr('Configuration protection'),'ok'=>true,'detail'=>$storageMode==='external'?tr('Outside the document root; no conf URL rule is required.'):''];
             foreach ($probeFiles as $path) unlink($path); $probeFiles=[];
             if ($action==='install') {
                 foreach ($files as $name=>$content) {
                     if (!file_exists($root.'/'.$name)) writeNew($root.'/'.$name,$content,$created,0640);
                 }
-                $data=$root.'/books-data';
+                $data=$books;
                 if (is_link($data) || (file_exists($data) && !is_dir($data))) stopInstall(tr('Invalid library directory.'));
                 if (!is_dir($data)) { if (!mkdir($data,0750)) stopInstall(tr('Cannot create library directory.')); $dirs[]=$data; }
                 $oldRootMode=fileperms($data)&0777;
@@ -220,6 +248,8 @@ try {
                 if (is_link($conf.'/cache') || (file_exists($conf.'/cache') && !is_dir($conf.'/cache'))) stopInstall(tr('Invalid cache path.'));
                 if (!is_dir($conf.'/cache')) { if (!mkdir($conf.'/cache',0700)) stopInstall(tr('Cannot create cache directory.')); $dirs[]=$conf.'/cache'; }
                 $config=['base_url'=>$url,'title'=>$title,'max_category_depth'=>1];
+                $locations=['books_dir'=>$books,'config_dir'=>$conf];
+                writeNew($root.'/paths.php',"<?php\nreturn ".var_export($locations,true).";\n",$created);
                 writeNew($conf.'/config.php',"<?php\nreturn ".var_export($config,true).";\n",$created);
                 writeNew($conf.'/pass.conf','password='.$passwordHash."\napi_token=".bin2hex(random_bytes(32))."\n",$created);
                 if (!chmod($data,0550)) stopInstall(tr('Cannot protect library root.'));
@@ -233,9 +263,10 @@ try {
             foreach ($probeFiles as $path) @unlink($path);
             if (!$done) {
                 foreach (array_reverse($created) as $path) @unlink($path);
-                if ($oldRootMode!==null) @chmod($root.'/books-data',$oldRootMode);
+                if ($oldRootMode!==null) @chmod($books,$oldRootMode);
                 foreach (array_reverse($dirs) as $dir) @rmdir($dir);
             }
+            if (is_resource($storageLock)) { flock($storageLock,LOCK_UN); fclose($storageLock); }
             if (is_resource($targetLock)) { flock($targetLock,LOCK_UN); fclose($targetLock); }
             flock($lock,LOCK_UN); fclose($lock);
         }
@@ -255,10 +286,13 @@ if ($jsonRequest) {
 }
 $host=(string)($_SERVER['HTTP_HOST']??'localhost');
 $script=(string)($_SERVER['SCRIPT_NAME']??'/install.php');
+$documentRoot=(string)($_SERVER['DOCUMENT_ROOT']??'');
+$resolvedDocumentRoot=$documentRoot!==''?realpath($documentRoot):false;
+$defaultDataRoot=dirname($resolvedDocumentRoot ?: __DIR__).'/opds-data';
 $guess='https://'.$host.rtrim(str_replace('\\','/',dirname($script)),'/.').'/';
 ?>
 <!doctype html><html lang="<?=uiLanguage() === 'zh' ? 'zh-CN' : 'en'?>"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?=tr_html('Install your OPDS library')?></title>
-<style nonce="<?=esc($nonce)?>">*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;padding:32px 16px;background:#f5f6f8;color:#222;font:16px/1.6 system-ui}main{max-width:680px;margin:auto;padding:28px;background:white;border-radius:14px}h1{font-size:24px}label{display:block;margin-top:16px}input,textarea,button{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font:inherit}button{margin-top:16px;background:#222;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.actions{display:flex;gap:12px}.actions button{flex:1}.secondary{background:#eee;color:#222}.error{padding:12px;background:#ffecec;color:#900;overflow-wrap:anywhere}.success{padding:12px;background:#edf8ef;color:#146c43}.result{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f8;padding:12px}small{color:#666}a{color:#146c43}</style>
+<style nonce="<?=esc($nonce)?>">*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;padding:32px 16px;background:#f5f6f8;color:#222;font:16px/1.6 system-ui}main{max-width:680px;margin:auto;padding:28px;background:white;border-radius:14px}h1{font-size:24px}label{display:block;margin-top:16px}input,textarea,select,button{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font:inherit}button{margin-top:16px;background:#222;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.actions{display:flex;gap:12px}.actions button{flex:1}.secondary{background:#eee;color:#222}.error{padding:12px;background:#ffecec;color:#900;overflow-wrap:anywhere}.success{padding:12px;background:#edf8ef;color:#146c43}.result{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f8;padding:12px}small{color:#666}a{color:#146c43}</style>
 <main><h1><?= $done ? tr('Installation complete') : tr('Install your OPDS library') ?></h1>
 <?php if ($done): ?>
 <p><?=tr_html('Directories, configuration, and application files are ready. Setup is locked. Delete install.php.')?></p><p><a href="<?=esc($url.'index.php')?>"><?=tr_html('Open OPDS catalog')?></a> · <a href="<?=esc($url.'up.php')?>"><?=tr_html('Open uploader')?></a></p><p><?=tr_html('Sign in with the password you just set. Use CLI / API in the upper-right corner to copy your token and agent command.')?></p>
@@ -271,18 +305,25 @@ $guess='https://'.$host.rtrim(str_replace('\\','/',dirname($script)),'/.').'/';
 <div id="checkResults" role="status" aria-live="polite"></div>
 <?php if ($sessionReady): ?><form method="post" id="setupForm">
 <input type="hidden" name="csrf" value="<?=esc($_SESSION['install_csrf'])?>">
-<label><?=tr_html('Installation directory')?><input name="target_dir" id="targetDir" value="<?=esc(isset($_POST['target_dir'])&&is_string($_POST['target_dir'])?$_POST['target_dir']:__DIR__)?>" required></label><small><?=tr_html('Choose the absolute server path for the application. Missing directories are created when possible. BASE_URL must serve this directory.')?></small>
+<label><?=tr_html('Web application directory')?><input name="target_dir" id="targetDir" value="<?=esc(isset($_POST['target_dir'])&&is_string($_POST['target_dir'])?$_POST['target_dir']:__DIR__)?>" required></label><small><?=tr_html('Contains index.php and up.php. BASE_URL points here. Do not enter your private data directory in this field.')?></small>
+<label><?=tr_html('Storage mode')?><select name="storage_mode" id="storageMode">
+<option value="local"<?=($_POST['storage_mode']??'local')==='local'?' selected':''?>><?=tr_html('Inside the web application directory')?></option>
+<option value="external"<?=($_POST['storage_mode']??'local')==='external'?' selected':''?>><?=tr_html('Separate data directory (recommended)')?></option>
+</select></label>
+<div id="externalStorage"><label><?=tr_html('Separate data directory')?><input name="data_dir" id="dataDir" value="<?=esc(isset($_POST['data_dir'])&&is_string($_POST['data_dir'])?$_POST['data_dir']:$defaultDataRoot)?>"></label><small><?=tr_html('Creates books/ and conf/ here. Choose a path outside the site document root; no Nginx conf-blocking rule is needed for this mode. Do not expose this path through an alias.')?></small></div>
+<pre id="layoutPreview"></pre>
 <label><?=tr_html('Library name')?><input name="title" value="<?=esc(isset($_POST['title'])&&is_string($_POST['title'])?$_POST['title']:tr('My Library'))?>" required maxlength="100"></label>
-<label>BASE_URL<input type="url" name="base_url" value="<?=esc(isset($_POST['base_url'])&&is_string($_POST['base_url'])?$_POST['base_url']:$guess)?>" required></label><small><?=tr_html('Check that this URL points to the installation directory. Use HTTPS and a trailing /.')?></small>
+<label>BASE_URL<input type="url" name="base_url" value="<?=esc(isset($_POST['base_url'])&&is_string($_POST['base_url'])?$_POST['base_url']:$guess)?>" required></label><small><?=tr_html('The HTTPS URL for index.php and up.php, ending with /. Private books and configuration do not need a public URL.')?></small>
 <label><?=tr_html('Upload password')?><input type="password" name="password" autocomplete="new-password"></label>
 <label><?=tr_html('Confirm password')?><input type="password" name="password_confirm" autocomplete="new-password"></label><small id="passwordHint"><?=tr_html(passwordDraft()!==null?'Password saved for this setup session. Leave both fields blank to keep it.':'12-72 bytes. The password is stored as a hash; an API token is generated randomly.')?></small>
 <label><?=tr_html('Initial categories (one per line)')?><textarea name="categories" rows="4" required><?=esc(isset($_POST['categories'])&&is_string($_POST['categories'])?$_POST['categories']:'books')?></textarea></label>
 <div class="actions"><button type="submit" name="action" value="check" id="checkButton" class="secondary" formnovalidate><?=tr_html('Check')?></button><button type="submit" name="action" value="install" id="installButton"><?=tr_html('Install')?></button></div></form><?php endif; ?>
 <details><summary><?=tr_html('Server configuration and directory protection')?></summary>
+<p><?=tr_html('Separate storage outside the document root does not need the conf URL rules below. These rules apply only to storage inside the web application directory.')?></p>
 <p><?=tr_html('The installer writes conf/.htaccess for Apache, which must allow it to take effect. With Nginx, deny HTTP access to this installation\'s conf directory. Example for /opds/:')?></p>
 <pre>location = /opds/conf { return 404; }
 location ^~ /opds/conf/ { deny all; }</pre>
-<p><?=tr_html('Only configuration requires protection here; direct book downloads remain allowed. HTTPS probes verify the base URL and configuration protection before storing credentials. The server needs HTTPS self-access with a trusted certificate.')?></p>
+<p><?=tr_html('Checks verify the public web directory over HTTPS. Site storage also requires an HTTP protection check for conf; separate storage instead checks that data paths are outside the document root.')?></p>
 <pre>upload_max_filesize = 100M
 post_max_size = 205M
 max_file_uploads = 21
@@ -296,6 +337,22 @@ session.upload_progress.enabled = 0</pre>
     const dictionary=<?=json_encode(uiLanguage()==='zh'?UI_TRANSLATIONS:[],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?>;
     const tr=text=>dictionary[text]??text;
     const output=document.getElementById('checkResults');
+    const mode=document.getElementById('storageMode');
+    const webDirectory=document.getElementById('targetDir');
+    const dataDirectory=document.getElementById('dataDir');
+    function updateLayout() {
+        const external=mode.value==='external';
+        document.getElementById('externalStorage').hidden=!external;
+        const web=webDirectory.value.replace(/\/+$/,'');
+        const data=dataDirectory.value.replace(/\/+$/,'');
+        document.getElementById('layoutPreview').textContent=tr('Web files: ')+web+'\n'
+            +tr('Books: ')+(external?data+'/books':web+'/books-data')+'\n'
+            +tr('Configuration: ')+(external?data+'/conf':web+'/conf');
+    }
+    mode.addEventListener('change',updateLayout);
+    webDirectory.addEventListener('input',updateLayout);
+    dataDirectory.addEventListener('input',updateLayout);
+    updateLayout();
     const buttons=Array.from(form.querySelectorAll('button'));
     let busy=false;
     function message(text,className='result') {

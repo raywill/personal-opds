@@ -60,10 +60,10 @@ function metadata(string $path, string $name): array
 function bookPath(string $relative): string
 {
     $parts = explode('/', $relative);
-    if (count($parts) < 2 || count($parts) > MAX_CATEGORY_DEPTH + 1) reject(tr('Invalid book path.'), 404);
+    if (count($parts) > MAX_CATEGORY_DEPTH + 1) reject(tr('Invalid book path.'), 404);
     $name = array_pop($parts);
     safeFilename($name);
-    $directory = resolveDestinationDirectory(implode('/', $parts));
+    $directory = $parts ? resolveDestinationDirectory(implode('/', $parts)) : getLibraryRoot();
     $path = $directory . '/' . $name;
     if (is_link($path) || !is_file($path) || !is_readable($path)
         || dirname((string) realpath($path)) !== $directory) reject(tr('Book not found.'), 404);
@@ -80,11 +80,12 @@ function books(array $directories): array
         $cache = $raw ? json_decode($raw, true) : [];
         if (!is_array($cache)) $cache = [];
         $updated = []; $budget = 20; $count = 0;
-        foreach ($directories as $category => $directory) {
+        // Include existing loose books as well as top-level categories.
+        foreach ([''=>getLibraryRoot()] + $directories as $category => $directory) {
             foreach (scandir($directory) ?: [] as $name) {
                 if ($name === '' || $name[0] === '.') continue;
                 try { safeFilename($name); } catch (RequestError $e) { continue; }
-                $relative = (string) $category . '/' . $name;
+                $relative = (string)$category === '' ? $name : (string)$category . '/' . $name;
                 try { $path = bookPath($relative); } catch (RequestError $e) { continue; }
                 if (++$count > 5000) reject(tr('The library exceeds the current indexing limit.'), 503);
                 $stat = stat($path);

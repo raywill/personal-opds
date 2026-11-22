@@ -2,6 +2,7 @@
 /books-data/
 /.opds-install.lock
 /install.lock
+/paths.php
 /install-check-*.txt
 /tests/.tmp/
 *.log

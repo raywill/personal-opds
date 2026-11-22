@@ -51,11 +51,11 @@ The application accepts **20** files. The parser needs **at least 21 slots** so 
 ## Install
 
 1. Download [`install.php`](https://github.com/raywill/personal-opds/releases/latest/download/install.php), and upload it to your website. No installation code or source edits are needed.
-2. Open the installer over HTTPS immediately after uploading it. Choose the **Installation directory**, an absolute server path. It defaults to the directory containing `install.php`; you may select another directory, including a new one under a writable parent.
-3. Set **BASE_URL** to the HTTPS URL serving that selected directory. The default is the installer's URL directory. If you choose another path, update the URL to match.
-4. Protect the selected installation's `conf` URL path as described below. Click **Check** at any time: it does not require a password and checks the PHP environment, target-directory permissions, existing application files, public URL, and configuration protection. Missing target directories are created when possible; temporary probes and draft configuration are cleaned up without installing application files or credentials.
+2. Open the installer over HTTPS immediately after uploading it. Choose the **Web application directory**, an absolute server path for `index.php` and `up.php`. It defaults to the directory containing `install.php`; you may select another directory, including a new one under a writable parent.
+3. Choose a storage mode: **Separate data directory** for private storage outside the website, or **Inside the web application directory** for the original layout. Set **BASE_URL** to the HTTPS URL serving the web application directory, never the private data directory. The default is the installer's URL directory. Update it only when moving the web application directory; changing the separate data directory does not change BASE_URL.
+4. For site-local storage, protect the application's `conf` URL path as described below. Separate storage outside the document root does **not** require a `conf` URL blocking rule. Click **Check** at any time: it does not require a password and checks the PHP environment, target-directory permissions, existing application files, public URL, and configuration protection. Missing target directories are created when possible; temporary probes and draft configuration are cleaned up without installing application files or credentials.
 5. Enter a library name, upload password, and initial categories, then click **Install**. If a check or installation fails, the page keeps your inputs. A valid password is also retained as a hash in the setup session for 30 minutes, so a retry can leave both password fields blank. Plaintext passwords are not stored in the session or returned in HTML/JSON.
-6. On success, the installer writes **`install.lock` next to `install.php`** and refuses every later GET, Check, or Install request, including requests selecting a different target. It also writes `conf/installed.lock` in the application directory. You can delete `install.php` after completion; rerunning it is not an upgrade mechanism.
+6. On success, the installer writes **`install.lock` next to `install.php`** and refuses every later GET, Check, or Install request, including requests selecting a different target. It also writes `installed.lock` in the chosen configuration directory. You can delete `install.php` after completion; rerunning it is not an upgrade mechanism.
 
 ### Fix directory permissions
 
@@ -69,7 +69,7 @@ sudo chmod u+rwx -- '/var/www/personal-opds'
 
 These commands affect only that directory, not its children. No `chmod 777` or recursive ownership changes are required. Review the path before running them. If PHP's IDs cannot be detected, replace `PHP_USER:PHP_GROUP` in the suggestion with your PHP-FPM account. On shared hosting, use the equivalent ownership/permission controls provided by your host. The directory containing `install.php` must also be writable so setup can create its final `install.lock`, even when application files go elsewhere.
 
-The default generated layout is:
+The original site-local layout remains the default:
 
 ```text
 opds/
@@ -79,6 +79,7 @@ opds/
 ├── bootstrap.php
 ├── security.php
 ├── i18n.php
+├── paths.php              # storage-location loader; contains no credentials
 ├── books-data/
 │   ├── books/
 │   └── another-category/
@@ -89,11 +90,50 @@ opds/
     └── installed.lock
 ```
 
-The installer creates `books-data` and `conf` inside the selected application directory. It generates a salted password hash and a random 256-bit API token. It verifies payload checksums, refuses different existing application files/configuration, serializes concurrent setup attempts, and removes files created by a failed attempt. Existing books are not deleted.
+In site-local mode, the installer creates `books-data` and `conf` inside the selected web application directory. In separate mode, it creates `books` and `conf` under the private data directory. It generates a salted password hash and a random 256-bit API token. It verifies payload checksums, refuses different existing application files/configuration, serializes concurrent setup attempts, and removes files created by a failed attempt. Existing books are not deleted.
 
 The library root is made non-writable by PHP after setup; its category directories remain writable for uploads. Configuration and cache remain private and writable. For later maintenance, add categories with your file manager and grant PHP write access to those categories while keeping the library root protected. Changing filesystem permissions or updating application files is an administrator operation; rerunning the installer is not an upgrade mechanism.
 
-### Protect configuration
+### Separate data directory (recommended)
+
+Keep the PHP application in your website directory, and select a private data root such as `/home/wwwroot/opds-data/`:
+
+```text
+Website directory, served by BASE_URL
+├── index.php
+├── up.php
+├── bootstrap.php / security.php / i18n.php
+├── paths.php
+└── install.lock
+
+/home/wwwroot/opds-data/       outside the site's DOCUMENT_ROOT
+├── books/
+│   ├── existing-book.epub     existing loose books are supported too
+│   ├── books/                default upload category
+│   └── essays/               another top-level category
+└── conf/
+    ├── config.php
+    ├── pass.conf
+    ├── cache/
+    └── installed.lock
+```
+
+Fill the installer as follows:
+
+| Field | Value |
+| --- | --- |
+| Web application directory | The existing website directory containing the PHP application |
+| Storage mode | Separate data directory |
+| Separate data directory | `/home/wwwroot/opds-data` |
+| BASE_URL | The original public HTTPS URL for `index.php` and `up.php` |
+
+The preview shows the resulting web, book, and configuration paths immediately. The private root does **not** need a public URL. Check verifies its permissions and that it is outside both the server's actual `DOCUMENT_ROOT` and the application directory. The HTTPS self-check always probes the **web application directory**, not the private storage directory. The runtime loads the chosen book/configuration paths through `paths.php`; that generated PHP file outputs nothing when requested directly and contains no passwords or tokens.
+
+With this layout, **no Nginx rule to block `conf` is needed**, provided the directory is not exposed by another virtual host, alias, symlink, or download handler. The installer checks the known document root; it cannot discover every custom server mapping. TLS, upload sizes/timeouts, and Authorization forwarding still need to work as usual. The default example is only suitable if `/home/wwwroot/opds-data` is actually outside your site's document root.
+
+Existing books are preserved. Books already directly inside the book directory appear in the all-books feed; uploads continue to use category directories. Existing configuration/credentials are never overwritten. Keeping book storage and credentials in separate sibling directories also prevents a category name from selecting the credential directory.
+
+### Protect configuration (site-local mode only)
 
 For an installation at `/opds/`, add these rules to the **Nginx server configuration** and reload Nginx:
 
@@ -104,7 +144,7 @@ location ^~ /opds/conf/ { deny all; }
 
 For Apache, the installer writes `conf/.htaccess` with `Require all denied`; the host must allow that directive to take effect. A file existing on disk is not proof of protection. Setup places harmless temporary probes, checks the exact `conf/pass.conf` path and an additional file under `conf`, and only writes credentials after those paths return 403/404. It first verifies a separate random probe in the installation directory to make sure `BASE_URL` points to the correct site. Requests do not follow redirects or disable certificate verification.
 
-**Direct HTTP access to books is allowed by default.** Generated UI/catalog links use `index.php` and do not advertise the physical storage-directory name. This is presentation, not access control: anyone who guesses a direct file URL may access it. Configure book-directory access restrictions separately if you want them. Credentials, unlike books, must not be directly accessible.
+**Site-local storage allows direct HTTP access to books by default.** Separate storage is outside the website and uses controlled downloads through `index.php`. Generated UI/catalog links use `index.php` and do not advertise the physical storage-directory name. This is presentation, not access control: anyone who guesses a direct file URL may access it. Configure book-directory access restrictions separately if you want them. Credentials, unlike books, must not be directly accessible.
 
 Check the actual PHP upload location as well:
 
@@ -186,16 +226,16 @@ Resetting the token invalidates it for subsequent requests, updates `conf/pass.c
 
 ## Configuration
 
-`conf/config.php` stores `base_url`, `title`, and `max_category_depth`. The last value is currently required to be **1**, even though the traversal implementation is depth-aware. Nested categories are excluded from feeds and rejected by upload/download endpoints.
+The chosen configuration directory contains `config.php`, which stores `base_url`, `title`, and `max_category_depth`. The last value is currently required to be **1**, even though the traversal implementation is depth-aware. Nested categories are excluded from feeds and rejected by upload/download endpoints.
 
-`conf/pass.conf` uses this format:
+`pass.conf` in that directory uses this format:
 
 ```ini
 password=PASSWORD_HASH
 api_token=64_LOWERCASE_HEX_CHARACTERS
 ```
 
-The installer writes a password hash; legacy plaintext password values remain supported. Tokens remain recoverable because the authenticated UI must display/copy them. Files are private (`0600`) and the directory is `0700`. Keep them out of public backups, logs, and Git. When manually maintaining credentials, acquire the fixed `.config.lock` and replace the file atomically; do not edit concurrently with UI resets or remove active lock files.
+The installer writes a password hash; legacy plaintext password values remain supported. Older site-local installations without `paths.php` continue to load their original `books-data` and `conf` paths. Tokens remain recoverable because the authenticated UI must display/copy them. Files are private (`0600`) and the directory is `0700`. Keep them out of public backups, logs, and Git. When manually maintaining credentials, acquire the fixed `.config.lock` and replace the file atomically; do not edit concurrently with UI resets or remove active lock files.
 
 ## Security boundaries
 
@@ -225,7 +265,7 @@ php tools/build.php
 PHP_BINARY=php node tests/integration.mjs
 ```
 
-Tests run an isolated HTTPS endpoint and multiple native PHP workers, using temporary fake credentials. They cover installation failures/locking, configurable destinations, immediate Check requests, permission commands, password-preserving retries, credential protection, generated payload identity, categories, metadata/search, downloads, symlinks, depth restrictions, localization, and Bearer uploads. An optional Playwright pass is enabled with `PLAYWRIGHT_MODULE` (an importable module specifier or file URL), `CHROME_BIN`, and optionally `SCREENSHOT_DIR`. Never deploy the test router as part of the application.
+Tests run an isolated HTTPS endpoint and multiple native PHP workers, using temporary fake credentials. They cover installation failures/locking, configurable destinations, immediate Check requests, permission commands, password-preserving retries, credential protection, generated payload identity, external storage without URL deny rules, existing loose books, categories, metadata/search, downloads, symlinks, depth restrictions, localization, and Bearer uploads. An optional Playwright pass is enabled with `PLAYWRIGHT_MODULE` (an importable module specifier or file URL), `CHROME_BIN`, and optionally `SCREENSHOT_DIR`. Never deploy the test router as part of the application.
 
 ## License
 
