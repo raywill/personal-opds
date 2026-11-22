@@ -257,6 +257,11 @@ const UI_TRANSLATIONS = array (
   'Web files: ' => '网页程序：',
   'Books: ' => '书籍目录：',
   'Configuration: ' => '配置目录：',
+  'Web application directory (automatic)' => '网页程序目录（自动识别）',
+  'Detected from install.php. index.php and up.php are generated here; only the data location needs to be chosen.' => '由 install.php 所在位置自动识别，index.php 和 up.php 会生成在这里，只需选择数据存放位置。',
+  'Use an absolute data directory path.' => '请填写数据目录的绝对路径。',
+  'The data directory path contains an invalid component.' => '数据目录路径包含无效的目录段。',
+  'The data directory path must not contain symbolic links or files.' => '数据目录路径不能包含符号链接或普通文件。',
 );
 function uiLanguage(): string
 {

@@ -71,12 +71,12 @@ function directoryAdvice(string $path): array {
 }
 function targetPath(string $path): string {
     $path=rtrim(trim($path),'/');
-    if ($path==='' || $path[0]!=='/' || strlen($path)>4096 || preg_match('/[\\\\\x00-\x1f\x7f]/',$path)) stopInstall(tr('Use an absolute installation directory path.'));
+    if ($path==='' || $path[0]!=='/' || strlen($path)>4096 || preg_match('/[\\\\\x00-\x1f\x7f]/',$path)) stopInstall(tr('Use an absolute data directory path.'));
     $cursor='';
     foreach (explode('/',substr($path,1)) as $part) {
-        if ($part==='' || $part==='.' || $part==='..') stopInstall(tr('The installation path contains an invalid component.'));
+        if ($part==='' || $part==='.' || $part==='..') stopInstall(tr('The data directory path contains an invalid component.'));
         $cursor.='/'.$part;
-        if (is_link($cursor) || (file_exists($cursor) && !is_dir($cursor))) stopInstall(tr('The installation path must not contain symbolic links or files.'));
+        if (is_link($cursor) || (file_exists($cursor) && !is_dir($cursor))) stopInstall(tr('The data directory path must not contain symbolic links or files.'));
     }
     return $path;
 }
@@ -172,7 +172,9 @@ try {
         $action=input('action') ?: 'install';
         if (!in_array($action,['check','install'],true)) stopInstall(tr('Invalid request action.'));
         $passwordHash=retainPassword($action==='install');
-        $root=targetPath(input('target_dir') ?: __DIR__);
+        // Application files always belong beside this installer. Client input
+        // can choose private storage, never the PHP program destination.
+        $root=__DIR__;
         $layout=storageLayout($root); $storageMode=$layout['mode']; $conf=$layout['conf']; $books=$layout['books'];
         if (setupLocked($root)) stopInstall(tr('Already installed; reinitialization is not allowed.'));
         $problems=environmentErrors(); if ($problems) stopInstall(implode('; ',$problems));
@@ -189,16 +191,11 @@ try {
         $lockPath=__DIR__.'/.opds-install.lock';
         if (is_link($lockPath)) stopInstall(tr('Invalid installation lock path.'));
         $lock=fopen($lockPath,'c+b'); if (!$lock || !flock($lock,LOCK_EX|LOCK_NB)) stopInstall(tr('Another installation is running.'));
-        $targetLock=null; $storageLock=null; $created=[]; $dirs=[]; $probeFiles=[]; $oldRootMode=null;
+        $storageLock=null; $created=[]; $dirs=[]; $probeFiles=[]; $oldRootMode=null;
         try {
             if (setupLocked($root)) stopInstall(tr('Already installed; reinitialization is not allowed.'));
             makeDirectory($root,0755,$dirs); writableDirectory($root);
-            $results[]=['label'=>tr('Installation directory'),'ok'=>true,'detail'=>$root];
-            if ($root!==__DIR__) {
-                if (is_link($root.'/.opds-install.lock')) stopInstall(tr('Invalid installation lock path.'));
-                $targetLock=fopen($root.'/.opds-install.lock','c+b');
-                if (!$targetLock || !flock($targetLock,LOCK_EX|LOCK_NB)) stopInstall(tr('Another installation is running.'));
-            }
+            $results[]=['label'=>tr('Web application directory'),'ok'=>true,'detail'=>$root];
             if (setupLocked($root)) stopInstall(tr('Already installed; reinitialization is not allowed.'));
             if ($storageMode==='external') {
                 makeDirectory($layout['root'],0700,$dirs); writableDirectory($layout['root']);
@@ -267,7 +264,6 @@ try {
                 foreach (array_reverse($dirs) as $dir) @rmdir($dir);
             }
             if (is_resource($storageLock)) { flock($storageLock,LOCK_UN); fclose($storageLock); }
-            if (is_resource($targetLock)) { flock($targetLock,LOCK_UN); fclose($targetLock); }
             flock($lock,LOCK_UN); fclose($lock);
         }
     }
@@ -305,7 +301,7 @@ $guess='https://'.$host.rtrim(str_replace('\\','/',dirname($script)),'/.').'/';
 <div id="checkResults" role="status" aria-live="polite"></div>
 <?php if ($sessionReady): ?><form method="post" id="setupForm">
 <input type="hidden" name="csrf" value="<?=esc($_SESSION['install_csrf'])?>">
-<label><?=tr_html('Web application directory')?><input name="target_dir" id="targetDir" value="<?=esc(isset($_POST['target_dir'])&&is_string($_POST['target_dir'])?$_POST['target_dir']:__DIR__)?>" required></label><small><?=tr_html('Contains index.php and up.php. BASE_URL points here. Do not enter your private data directory in this field.')?></small>
+<p><strong><?=tr_html('Web application directory (automatic)')?></strong><br><code id="detectedWebDir"><?=esc(__DIR__)?></code></p><small><?=tr_html('Detected from install.php. index.php and up.php are generated here; only the data location needs to be chosen.')?></small>
 <label><?=tr_html('Storage mode')?><select name="storage_mode" id="storageMode">
 <option value="local"<?=($_POST['storage_mode']??'local')==='local'?' selected':''?>><?=tr_html('Inside the web application directory')?></option>
 <option value="external"<?=($_POST['storage_mode']??'local')==='external'?' selected':''?>><?=tr_html('Separate data directory (recommended)')?></option>
@@ -338,19 +334,18 @@ session.upload_progress.enabled = 0</pre>
     const tr=text=>dictionary[text]??text;
     const output=document.getElementById('checkResults');
     const mode=document.getElementById('storageMode');
-    const webDirectory=document.getElementById('targetDir');
+    const webDirectory=<?=json_encode(__DIR__,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?>;
     const dataDirectory=document.getElementById('dataDir');
     function updateLayout() {
         const external=mode.value==='external';
         document.getElementById('externalStorage').hidden=!external;
-        const web=webDirectory.value.replace(/\/+$/,'');
+        const web=webDirectory.replace(/\/+$/,'');
         const data=dataDirectory.value.replace(/\/+$/,'');
         document.getElementById('layoutPreview').textContent=tr('Web files: ')+web+'\n'
             +tr('Books: ')+(external?data+'/books':web+'/books-data')+'\n'
             +tr('Configuration: ')+(external?data+'/conf':web+'/conf');
     }
     mode.addEventListener('change',updateLayout);
-    webDirectory.addEventListener('input',updateLayout);
     dataDirectory.addEventListener('input',updateLayout);
     updateLayout();
     const buttons=Array.from(form.querySelectorAll('button'));

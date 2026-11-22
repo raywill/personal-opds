@@ -51,15 +51,15 @@ The application accepts **20** files. The parser needs **at least 21 slots** so 
 ## Install
 
 1. Download [`install.php`](https://github.com/raywill/personal-opds/releases/latest/download/install.php), and upload it to your website. No installation code or source edits are needed.
-2. Open the installer over HTTPS immediately after uploading it. Choose the **Web application directory**, an absolute server path for `index.php` and `up.php`. It defaults to the directory containing `install.php`; you may select another directory, including a new one under a writable parent.
-3. Choose a storage mode: **Separate data directory** for private storage outside the website, or **Inside the web application directory** for the original layout. Set **BASE_URL** to the HTTPS URL serving the web application directory, never the private data directory. The default is the installer's URL directory. Update it only when moving the web application directory; changing the separate data directory does not change BASE_URL.
-4. For site-local storage, protect the application's `conf` URL path as described below. Separate storage outside the document root does **not** require a `conf` URL blocking rule. Click **Check** at any time: it does not require a password and checks the PHP environment, target-directory permissions, existing application files, public URL, and configuration protection. Missing target directories are created when possible; temporary probes and draft configuration are cleaned up without installing application files or credentials.
+2. Open the installer over HTTPS immediately after uploading it. The web application directory is detected automatically from `install.php`. Application files are generated beside the installer; there is no directory field to fill in, and a submitted `target_dir` cannot relocate PHP files.
+3. Choose a storage mode: **Separate data directory** for private storage outside the website, or **Inside the web application directory** for the original layout. Set **BASE_URL** to the HTTPS URL serving the web application directory, never the private data directory. It is already filled from the installer's URL directory; change it only if your public URL mapping requires it. Changing the separate data directory does not change BASE_URL.
+4. For site-local storage, protect the application's `conf` URL path as described below. Separate storage outside the document root does **not** require a `conf` URL blocking rule. Click **Check** at any time: it does not require a password and checks the PHP environment, the detected web-directory and selected data-directory permissions, existing application files, public URL, and configuration protection. Missing target directories are created when possible; temporary probes and draft configuration are cleaned up without installing application files or credentials.
 5. Enter a library name, upload password, and initial categories, then click **Install**. If a check or installation fails, the page keeps your inputs. A valid password is also retained as a hash in the setup session for 30 minutes, so a retry can leave both password fields blank. Plaintext passwords are not stored in the session or returned in HTML/JSON.
 6. On success, the installer writes **`install.lock` next to `install.php`** and refuses every later GET, Check, or Install request, including requests selecting a different target. It also writes `installed.lock` in the chosen configuration directory. You can delete `install.php` after completion; rerunning it is not an upgrade mechanism.
 
 ### Fix directory permissions
 
-When a directory is not writable, **Check shows commands containing the actual selected server path and the detected PHP process user/group IDs**. Run the suggested commands on your server, then click Check again. For example, on a host whose PHP-FPM user is `www-data`:
+When a directory is not writable, **Check shows commands containing the affected server path and the detected PHP process user/group IDs**. Run the suggested commands on your server, then click Check again. For example, on a host whose PHP-FPM user is `www-data`:
 
 ```sh
 sudo mkdir -p -- '/var/www/personal-opds'
@@ -67,7 +67,7 @@ sudo chown -- 'www-data:www-data' '/var/www/personal-opds'
 sudo chmod u+rwx -- '/var/www/personal-opds'
 ```
 
-These commands affect only that directory, not its children. No `chmod 777` or recursive ownership changes are required. Review the path before running them. If PHP's IDs cannot be detected, replace `PHP_USER:PHP_GROUP` in the suggestion with your PHP-FPM account. On shared hosting, use the equivalent ownership/permission controls provided by your host. The directory containing `install.php` must also be writable so setup can create its final `install.lock`, even when application files go elsewhere.
+These commands affect only that directory, not its children. No `chmod 777` or recursive ownership changes are required. Review the path before running them. If PHP's IDs cannot be detected, replace `PHP_USER:PHP_GROUP` in the suggestion with your PHP-FPM account. On shared hosting, use the equivalent ownership/permission controls provided by your host. The directory containing `install.php` must also be writable so setup can create its final `install.lock`, even when data is stored separately.
 
 The original site-local layout remains the default:
 
@@ -122,7 +122,7 @@ Fill the installer as follows:
 
 | Field | Value |
 | --- | --- |
-| Web application directory | The existing website directory containing the PHP application |
+| Web application directory | Automatic: the directory containing `install.php`; no input required |
 | Storage mode | Separate data directory |
 | Separate data directory | `/home/wwwroot/opds-data` |
 | BASE_URL | The original public HTTPS URL for `index.php` and `up.php` |
@@ -265,7 +265,7 @@ php tools/build.php
 PHP_BINARY=php node tests/integration.mjs
 ```
 
-Tests run an isolated HTTPS endpoint and multiple native PHP workers, using temporary fake credentials. They cover installation failures/locking, configurable destinations, immediate Check requests, permission commands, password-preserving retries, credential protection, generated payload identity, external storage without URL deny rules, existing loose books, categories, metadata/search, downloads, symlinks, depth restrictions, localization, and Bearer uploads. An optional Playwright pass is enabled with `PLAYWRIGHT_MODULE` (an importable module specifier or file URL), `CHROME_BIN`, and optionally `SCREENSHOT_DIR`. Never deploy the test router as part of the application.
+Tests run an isolated HTTPS endpoint and multiple native PHP workers, using temporary fake credentials. They cover installation failures/locking, automatically detected application paths, configurable data locations, immediate Check requests, permission commands, password-preserving retries, credential protection, generated payload identity, external storage without URL deny rules, existing loose books, categories, metadata/search, downloads, symlinks, depth restrictions, localization, and Bearer uploads. An optional Playwright pass is enabled with `PLAYWRIGHT_MODULE` (an importable module specifier or file URL), `CHROME_BIN`, and optionally `SCREENSHOT_DIR`. Never deploy the test router as part of the application.
 
 ## License
 
