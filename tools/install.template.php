@@ -166,6 +166,52 @@ function retainPassword(bool $required): ?string {
     if ($required && $hash===null) stopInstall(tr('Use a 12-72 byte password and enter it identically twice.'));
     return $hash;
 }
+function opdsCredentials(): array {
+    return match ($_POST['opds_access'] ?? 'public') {
+        'public' => [],
+        'private' => validateOpdsCredentials(input('opds_user'), input('opds_pwd')),
+        default => stopInstall(tr('Choose an OPDS access mode.')),
+    };
+}
+function validateOpdsCredentials(string $user, string $password): array {
+    if ($user === '' || $password === '') stopInstall(tr('Enter both a username and a password for OPDS access.'));
+    if (str_contains($user, ':') || preg_match('/[\x00-\x1f\x7f]/', $user . $password)) {
+        stopInstall(tr('Use a username without a colon and keep both fields on one line without control characters.'));
+    }
+    if (strlen($user) + strlen($password) > 14000) stopInstall(tr('The OPDS credentials are too long.'));
+    return ['opds_user' => $user, 'opds_pwd' => $password];
+}
+function verifyBookUrlProtection(string $books, string $url, string $id): void {
+    writableDirectory($books);
+    $category = "install-check-$id";
+    $probeDirectory = $books . '/' . $category;
+    if (!mkdir($probeDirectory, 0755)) {
+        stopInstall(tr('Cannot create a temporary directory to check direct book URLs.'));
+    }
+    $probes = [];
+    $originalMode = fileperms($books) & 07777;
+    try {
+        if (!chmod($probeDirectory, 0755)) stopInstall(tr('Cannot set file permissions.'));
+        $names = [];
+        foreach (['', $category . '/'] as $prefix) foreach (['txt', 'epub'] as $extension) {
+            $name = $prefix . "install-check-$id.$extension";
+            writeNew($books . '/' . $name, $id, $probes, 0644);
+            $names[] = $name;
+        }
+        // Test with the final directory mode, including group traversal.
+        protectBookDirectory($books);
+        foreach ($names as $name) {
+            [$status] = probe($url . 'books-data/' . $name);
+            if (!in_array($status, [403, 404], true)) {
+                stopInstall(tr('Direct access to the book directory is still possible. Block its public URL or use separate storage before enabling a reading password.'));
+            }
+        }
+    } finally {
+        chmod($books, $originalMode);
+        foreach ($probes as $path) @unlink($path);
+        @rmdir($probeDirectory);
+    }
+}
 function payloadFiles(string $root): array {
     $decoded=gzdecode(base64_decode(PAYLOAD,true) ?: '');
     $payload=$decoded===false ? null : json_decode($decoded,true,16,JSON_THROW_ON_ERROR);
@@ -202,7 +248,7 @@ try {
         if (!hash_equals($_SESSION['install_csrf'],input('csrf'))) stopInstall(tr('Invalid request token. Refresh.'));
         $action=input('action') ?: 'install';
         if (!in_array($action,['check','install','back'],true)) stopInstall(tr('Invalid request action.'));
-        $failureStep=2; $passwordHash=retainPassword($action==='install'); $failureStep=1;
+        $failureStep=3; $passwordHash=retainPassword($action==='install'); $failureStep=1;
         if ($action!=='back') {
         // Application files always belong beside this installer. Client input
         // can choose private storage, never the PHP program destination.
@@ -214,7 +260,11 @@ try {
         writableDirectory(__DIR__);
         $url=baseUrl(input('base_url'));
         $title=trim(input('title'));
-        if ($action==='install' && ($title==='' || strlen($title)>200 || preg_match('//u',$title)!==1 || preg_match('/[\x00-\x1f\x7f]/',$title))) { $failureStep=2; stopInstall(tr('Invalid library name.')); }
+        if ($action==='install' && ($title==='' || strlen($title)>200 || preg_match('//u',$title)!==1 || preg_match('/[\x00-\x1f\x7f]/',$title))) { $failureStep=3; stopInstall(tr('Invalid library name.')); }
+        $reading = [];
+        if ($action==='install') {
+            $failureStep=2; $reading=opdsCredentials(); $failureStep=1;
+        }
         $categories=array_values(array_unique(array_filter(array_map('trim',preg_split('/\r\n|\n|\r/',input('categories'))?:[]),static fn($s)=>$s!=='')));
         if (!$categories || count($categories)>20) stopInstall(tr('Enter 1-20 top-level categories, one per line.'));
         foreach ($categories as $category) if (!categoryName($category)) stopInstall(tr('Invalid category name. Only one category level is currently allowed.'));
@@ -260,6 +310,11 @@ try {
                 if (!in_array($status,[403,404],true)) stopInstall(tr('HTTP access to conf is not blocked. Apply the protection rules below. No credentials were stored.'));
             }
             $results[]=['label'=>tr('Configuration protection'),'ok'=>true,'detail'=>$storageMode==='external'?tr('Outside the document root; no conf URL rule is required.'):''];
+            if ($reading && $storageMode==='local') {
+                $failureStep=2;
+                verifyBookUrlProtection($books, $url, $id);
+                $failureStep=1;
+            }
             foreach ($probeFiles as $path) unlink($path); $probeFiles=[];
             if ($action==='install') {
                 foreach ($files as $name=>$content) {
@@ -282,7 +337,9 @@ try {
                 $locations=['books_dir'=>$books,'config_dir'=>$conf];
                 writeNew($root.'/paths.php',"<?php\nreturn ".var_export($locations,true).";\n",$created);
                 writeNew($conf.'/config.php',"<?php\nreturn ".var_export($config,true).";\n",$created);
-                writeNew($conf.'/pass.conf','password='.$passwordHash."\napi_token=".bin2hex(random_bytes(32))."\n",$created);
+                $credentials='password='.$passwordHash."\napi_token=".bin2hex(random_bytes(32))."\n";
+                foreach ($reading as $key => $value) $credentials .= $key . '=' . $value . "\n";
+                writeNew($conf.'/pass.conf',$credentials,$created);
                 writeNew($conf.'/installed.lock',"installed\n",$created);
                 writeNew(__DIR__.'/install.lock',"installed\n",$created);
 
@@ -308,8 +365,8 @@ try {
 }
 if ($jsonRequest) {
     header('Content-Type: application/json; charset=UTF-8');
-    echo json_encode(['success'=>$done||$checked,'installed'=>$done,'message'=>$done?tr('Installation complete'):($checked?tr('Checks passed. You can install now.'):$error),
-        'step'=>$done||$checked?2:$failureStep,
+    echo json_encode(['success'=>$done||$checked,'installed'=>$done,'message'=>$done?tr('Installation complete'):($checked?tr('Checks passed. Choose how readers access your library.'):$error),
+        'step'=>$done?3:($checked?2:$failureStep),
         'results'=>$results,'commands'=>$commands,'password_saved'=>!$done&&$sessionReady&&passwordDraft()!==null,
         'catalog_url'=>$done?$url.'index.php':null,'upload_url'=>$done?$url.'up.php':null],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
@@ -321,21 +378,26 @@ $documentRoot=(string)($_SERVER['DOCUMENT_ROOT']??'');
 $resolvedDocumentRoot=$documentRoot!==''?realpath($documentRoot):false;
 $defaultDataRoot=dirname($resolvedDocumentRoot ?: __DIR__).'/opds-data';
 $guess='https://'.$host.rtrim(str_replace('\\','/',dirname($script)),'/.').'/';
+$privateOpds=($_POST['opds_access']??null)==='private';
 ?>
 <!doctype html><html lang="<?=uiLanguage() === 'zh' ? 'zh-CN' : 'en'?>"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?=tr_html('Install your OPDS library')?></title>
-<style nonce="<?=esc($nonce)?>">*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;padding:32px 16px;background:#f5f6f8;color:#222;font:16px/1.6 system-ui}main{max-width:680px;margin:auto;padding:28px;background:white;border-radius:14px}h1{font-size:24px}code{overflow-wrap:anywhere}label{display:block;margin-top:16px}input,textarea,select,button{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font:inherit}button{margin-top:16px;background:#222;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.stepper{display:flex;gap:12px;margin:20px 0;color:#777;font-size:14px}.stepper span{flex:1;padding:10px;border-bottom:2px solid #ddd}.stepper .active{color:#146c43;border-color:#146c43;font-weight:600}fieldset{border:0;padding:0;margin:0;min-width:0}h2{font-size:19px}.secondary{background:#eee;color:#222}.error{padding:12px;background:#ffecec;color:#900;overflow-wrap:anywhere}.success{padding:12px;background:#edf8ef;color:#146c43}.result{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f8;padding:12px}small{color:#666}a{color:#146c43}</style>
+<style nonce="<?=esc($nonce)?>">*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;padding:32px 16px;background:#f5f6f8;color:#222;font:16px/1.6 system-ui}main{max-width:680px;margin:auto;padding:28px;background:white;border-radius:14px}h1{font-size:24px}code{overflow-wrap:anywhere}label{display:block;margin-top:16px}input,textarea,select,button{width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font:inherit}button{margin-top:16px;background:#222;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.stepper{display:flex;gap:12px;margin:20px 0;color:#777;font-size:14px}.stepper span{flex:1;padding:10px;border-bottom:2px solid #ddd}.stepper .active{color:#146c43;border-color:#146c43;font-weight:600}fieldset{border:0;padding:0;margin:0;min-width:0}h2{font-size:19px}.secondary{background:#eee;color:#222}.error{padding:12px;background:#ffecec;color:#900;overflow-wrap:anywhere}.success{padding:12px;background:#edf8ef;color:#146c43}.result{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f8;padding:12px}small{color:#666}a{color:#146c43}.access-settings>input{width:auto;padding:0;margin:0 6px 0 0;accent-color:#146c43}.access-settings>label{display:inline-block;width:calc(100% - 38px);margin:6px 0;vertical-align:middle}#opdsCredentials{display:none}#privateOpds:checked~#opdsCredentials{display:block}#bookUrlHelp{margin-top:14px}</style>
 <main><h1><?= $done ? tr('Installation complete') : tr('Install your OPDS library') ?></h1>
 <?php if ($done): ?>
 <p><?=tr_html('Directories, configuration, and application files are ready. Setup is locked. Delete install.php.')?></p><p><a href="<?=esc($url.'index.php')?>"><?=tr_html('Open OPDS catalog')?></a> · <a href="<?=esc($url.'up.php')?>"><?=tr_html('Open uploader')?></a></p><p><?=tr_html('Sign in with the password you just set. Use CLI / API in the upper-right corner to copy your token and agent command.')?></p>
 <?php else: ?>
 <?php if ($error!==''): ?><p class="error" role="alert"><?=esc($error)?></p><?php endif; ?>
 <?php if ($commands): ?><p><?=tr_html('Run these commands on the server, then click Check again. They affect only the named directory.')?></p><pre><?=esc(implode("\n",$commands))?></pre><?php endif; ?>
-<p id="wizardIntro"><?=tr_html('First check the storage and server settings. Then choose your library name and password to install.')?></p>
-<div class="stepper" aria-label="<?=tr_html('Installation steps')?>"><span id="stepMarker1"<?=$pageStep===1?' class="active" aria-current="step"':''?>><?=tr_html('Step 1: Check')?></span><span id="stepMarker2"<?=$pageStep===2?' class="active" aria-current="step"':''?>><?=tr_html('Step 2: Install')?></span></div>
+<p id="wizardIntro"><?=tr_html('Check the server, choose who can read the library, then install.')?></p>
+<div class="stepper" aria-label="<?=tr_html('Installation steps')?>">
+<?php foreach ([1=>'Step 1: Check',2=>'Step 2: OPDS access',3=>'Step 3: Install'] as $step=>$label): ?>
+<span id="stepMarker<?=$step?>"<?=$pageStep===$step?' class="active" aria-current="step"':''?>><?=tr_html($label)?></span>
+<?php endforeach; ?>
+</div>
 <?php foreach (environmentErrors() as $problem): ?><p class="error"><?=esc($problem)?></p><?php endforeach; ?>
 <?php if ($sessionReady): ?><form method="post" id="setupForm" data-initial-step="<?=$pageStep?>">
 <input type="hidden" name="csrf" value="<?=esc($_SESSION['install_csrf'])?>">
-<fieldset id="stepCheck"<?=$pageStep===2?' hidden':''?>>
+<fieldset id="stepCheck"<?=$pageStep!==1?' hidden':''?>>
 <h2><?=tr_html('Step 1: Check')?></h2>
 <p><strong><?=tr_html('Web application directory (automatic)')?></strong><br><code id="detectedWebDir"><?=esc(__DIR__)?></code></p><small><?=tr_html('Detected from install.php. index.php and up.php are generated here; only the data location needs to be chosen.')?></small>
 <label><?=tr_html('Storage mode')?><select name="storage_mode" id="storageMode">
@@ -352,17 +414,40 @@ $guess='https://'.$host.rtrim(str_replace('\\','/',dirname($script)),'/.').'/';
 <div id="checkResults" role="status" aria-live="polite"></div>
 <button type="submit" name="action" value="check" id="checkButton" formnovalidate><?=tr_html('Step 1: Check')?></button>
 </fieldset>
+<fieldset id="stepAccess"<?=$pageStep===1?' hidden':''?>>
+<h2><?=tr_html('Step 2: OPDS access')?></h2>
+<p><?=tr_html('Choose whether readers need to sign in to browse or download books.')?></p>
+<div class="access-settings">
+<input type="radio" name="opds_access" id="publicOpds" value="public"<?=$privateOpds?'':' checked'?>>
+<label for="publicOpds"><?=tr_html('No password (default)')?></label>
+<input type="radio" name="opds_access" id="privateOpds" value="private"<?=$privateOpds?' checked':''?>>
+<label for="privateOpds"><?=tr_html('Require a username and password')?></label>
+<div id="opdsCredentials">
+<label><?=tr_html('OPDS username')?><input name="opds_user" value="<?=esc(is_string($_POST['opds_user']??null)?$_POST['opds_user']:'')?>" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+<label><?=tr_html('OPDS password')?><input type="password" name="opds_pwd" autocomplete="new-password"></label>
+<small><?=tr_html('These credentials are saved as plain text in pass.conf and are separate from the upload password.')?></small>
+<details id="bookUrlHelp"><summary><?=tr_html('Block direct book URLs when storing books inside the website')?></summary>
+<p><?=tr_html('Block direct HTTP access to the entire book directory, including its subdirectories. The installer checks direct URLs before enabling the password. Example for Nginx at /opds/:')?></p>
+<pre>location = /opds/books-data { return 404; }
+location ^~ /opds/books-data/ { deny all; }</pre>
+<p><?=tr_html('On Apache, put Require all denied in the book directory’s .htaccess if your host supports it. Separate storage needs no direct book URL rule when it has no public alias.')?></p>
+</details>
+</div>
+</div>
+<div id="accessResults" role="status" aria-live="polite"></div>
+<button type="submit" name="action" value="access" id="accessButton" formnovalidate hidden><?=tr_html('Continue to installation')?></button>
+<button type="submit" name="action" value="back" class="secondary" formnovalidate><?=tr_html('Previous step')?></button>
+</fieldset>
 <fieldset id="stepInstall"<?=$pageStep===1?' hidden':''?>>
-<h2><?=tr_html('Step 2: Install')?></h2>
-<p class="success"><?=tr_html('Checks passed. Set your library name and password, then install.')?></p>
+<h2><?=tr_html('Step 3: Install')?></h2>
 <label><?=tr_html('Library name')?><input name="title" value="<?=esc(isset($_POST['title'])&&is_string($_POST['title'])?$_POST['title']:tr('My Library'))?>" required maxlength="100"></label>
 <label><?=tr_html('Upload password')?><input type="password" name="password" autocomplete="new-password"></label>
 <label><?=tr_html('Confirm password')?><input type="password" name="password_confirm" autocomplete="new-password"></label><small id="passwordHint"><?=tr_html(passwordDraft()!==null?'Password saved for this setup session. Leave both fields blank to keep it.':'12-72 bytes. The password is stored as a hash; an API token is generated randomly.')?></small>
 <div id="installResults" role="status" aria-live="polite"></div>
-<button type="submit" name="action" value="install" id="installButton"><?=tr_html('Step 2: Install')?></button>
+<button type="submit" name="action" value="install" id="installButton"><?=tr_html('Step 3: Install')?></button>
 <button type="submit" name="action" value="back" id="backButton" class="secondary" formnovalidate><?=tr_html('Previous step')?></button>
 </fieldset></form><?php endif; ?>
-<details id="serverHelp"<?=$pageStep===2?' hidden':''?>><summary><?=tr_html('Server configuration and directory protection')?></summary>
+<details id="serverHelp"<?=$pageStep!==1?' hidden':''?>><summary><?=tr_html('Server configuration and directory protection')?></summary>
 <p><?=tr_html('Separate storage outside the document root does not need the conf URL rules below. These rules apply only to storage inside the web application directory.')?></p>
 <p><?=tr_html('The installer writes conf/.htaccess for Apache, which must allow it to take effect. With Nginx, deny HTTP access to this installation\'s conf directory. Example for /opds/:')?></p>
 <pre>location = /opds/conf { return 404; }
@@ -380,7 +465,13 @@ session.upload_progress.enabled = 0</pre>
     if (!form || !window.fetch || !window.FormData) return;
     const dictionary=<?=json_encode(uiLanguage()==='zh'?UI_TRANSLATIONS:[],JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?>;
     const tr=text=>dictionary[text]??text;
-    let output=document.getElementById('checkResults');
+    const pages=['stepCheck','stepAccess','stepInstall'].map(id=>document.getElementById(id));
+    const outputs=['checkResults','accessResults','installResults'].map(id=>document.getElementById(id));
+    const actions=['check','access','install'];
+    const accessButton=document.getElementById('accessButton');
+    const privateOpds=document.getElementById('privateOpds');
+    const readingFields=[form.elements.opds_user,form.elements.opds_pwd];
+    let output=outputs[0];
     let currentStep=Number(form.dataset.initialStep)||1;
     const mode=document.getElementById('storageMode');
     const webDirectory=<?=json_encode(__DIR__,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT)?>;
@@ -388,6 +479,7 @@ session.upload_progress.enabled = 0</pre>
     function updateLayout() {
         const external=mode.value==='external';
         document.getElementById('externalStorage').hidden=!external;
+        document.getElementById('bookUrlHelp').hidden=external;
         const web=webDirectory.replace(/\/+$/,'');
         const data=dataDirectory.value.replace(/\/+$/,'');
         document.getElementById('layoutPreview').textContent=tr('Web files: ')+web+'\n'
@@ -398,26 +490,26 @@ session.upload_progress.enabled = 0</pre>
     dataDirectory.addEventListener('input',updateLayout);
     updateLayout();
     const buttons=Array.from(form.querySelectorAll('button'));
+    accessButton.hidden=false;
+    form.addEventListener('input',event=>{
+        if (readingFields.includes(event.target)||event.target.name==='opds_access') outputs[1].replaceChildren();
+    });
     let busy=false;
     function showStep(step) {
         const changed=currentStep!==step;
         currentStep=step;
-        document.getElementById('stepCheck').hidden=step!==1;
-        document.getElementById('stepInstall').hidden=step!==2;
+        pages.forEach((page,i)=>{page.hidden=step!==i+1;});
         document.getElementById('serverHelp').hidden=step!==1;
-        document.getElementById('checkButton').disabled=busy||step!==1;
-        document.getElementById('installButton').disabled=busy||step!==2;
-        document.getElementById('backButton').disabled=busy;
-        document.getElementById('stepMarker1').classList.toggle('active',step===1);
-        document.getElementById('stepMarker2').classList.toggle('active',step===2);
-        for (const n of [1,2]) {
+        buttons.forEach(button=>{button.disabled=busy||!!button.closest('[hidden]');});
+        for (const n of [1,2,3]) {
             const marker=document.getElementById('stepMarker'+n);
+            marker.classList.toggle('active',step===n);
             if (n===step) marker.setAttribute('aria-current','step');
             else marker.removeAttribute('aria-current');
         }
-        output=document.getElementById(step===1?'checkResults':'installResults');
+        output=outputs[step-1];
         if (changed) {
-            const heading=document.querySelector(step===1?'#stepCheck h2':'#stepInstall h2');
+            const heading=pages[step-1].querySelector('h2');
             heading.tabIndex=-1; heading.focus({preventScroll:true});
             document.querySelector('h1').scrollIntoView({block:'start'});
         }
@@ -428,17 +520,28 @@ session.upload_progress.enabled = 0</pre>
     }
     form.addEventListener('submit',async event=>{
         event.preventDefault(); if (busy) return;
-        const action=event.submitter?.value??(currentStep===1?'check':'install');
-        if (action==='back') { showStep(1); return; }
+        const action=event.submitter?.value??actions[currentStep-1];
+        if (action==='back') { showStep(Math.max(1,currentStep-1)); return; }
+        if (action==='access') {
+            output.replaceChildren();
+            if (privateOpds.checked && readingFields.some(field=>field.value==='')) {
+                message(tr('Enter both a username and a password for OPDS access.'),'error');
+                readingFields.find(field=>field.value==='').focus();
+                return;
+            }
+            showStep(3);
+            return;
+        }
         const data=new FormData(form); data.set('action',action);
-        // Checks do not need to transmit the password; fields stay in the DOM.
+        // Password fields stay in the browser until needed for installation.
         if (action==='check') { data.delete('password'); data.delete('password_confirm'); }
+        if (action==='check'||!privateOpds.checked) { data.delete('opds_user'); data.delete('opds_pwd'); }
         busy=true; buttons.forEach(button=>button.disabled=true); output.replaceChildren();
         message(tr(action==='check'?'Checking...':'Installing...'));
         try {
             const response=await fetch(window.location.href,{method:'POST',headers:{Accept:'application/json'},body:data});
             const result=await response.json();
-            if (!result.success) showStep(result.step===2?2:1);
+            if (!result.success) showStep([1,2,3].includes(result.step)?result.step:1);
             output.replaceChildren();
             for (const check of result.results??[]) {
                 if (!check.ok && check.label===result.message) continue;

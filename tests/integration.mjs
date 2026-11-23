@@ -26,10 +26,11 @@ fs.writeFileSync(path.join(web,'router.php'),`<?php $_SERVER['HTTPS']='on'; retu
 fs.mkdirSync(path.join(temp,'sessions'));
 const log=fs.openSync(path.join(temp,'php.log'),'w');
 const server=spawn(php,['-d','display_errors=0','-d','session.upload_progress.enabled=0','-d','max_file_uploads=21','-d','upload_max_filesize=100M','-d','post_max_size=205M','-d',`openssl.cafile=${cert}`,'-d',`session.save_path=${temp}/sessions`,'-S',`127.0.0.1:${back}`,'-t',web,path.join(web,'router.php')],{env:{...process.env,PHP_CLI_SERVER_WORKERS:'4'},stdio:['ignore',log,log],detached:true});
-let protect=false; const httpPaths=[];
+let protect=false, protectBooks=false; const httpPaths=[];
 const proxy=https.createServer({key:fs.readFileSync(tlsKey),cert:fs.readFileSync(cert)},(req,res)=>{
  httpPaths.push(req.url);
  if(protect && /\/conf(?:\/|$)/.test(req.url)){res.writeHead(404);res.end();return;}
+ if(protectBooks && /\/books-data(?:\/|$)/.test(req.url)){res.writeHead(404);res.end();return;}
  const upstream=http.request({host:'127.0.0.1',port:back,path:req.url,method:req.method,headers:req.headers},out=>{res.writeHead(out.statusCode,out.headers);out.pipe(res);});
  upstream.on('error',()=>{res.writeHead(502);res.end();});req.pipe(upstream);
 });await new Promise(r=>proxy.listen(front,'127.0.0.1',r));
@@ -79,9 +80,9 @@ try{
  r=await request('install.php',{...form({...fields,action:'check',password:'',password_confirm:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
  assert.equal(r.status,200,r.text);assert.equal(r.json.success,true);assert.equal(r.json.installed,false);assert(!fs.existsSync(path.join(app,'index.php')));assert(!fs.existsSync(path.join(app,'conf/pass.conf')));assert(!fs.existsSync(path.join(app,'install.lock')));pass('Check validates the environment and URL without installing or requiring a password');
  r=await request('install.php',form({...fields,action:'check',password:'',password_confirm:''}));
- assert(r.text.includes('<fieldset id="stepCheck" hidden>'));assert(r.text.includes('<fieldset id="stepInstall">'));
+ assert(r.text.includes('<fieldset id="stepCheck" hidden>'));assert(r.text.includes('<fieldset id="stepAccess">'));assert(r.text.includes('<fieldset id="stepInstall">'));
  r=await request('install.php',form({...fields,action:'back',password:'',password_confirm:''}));
- assert(r.text.includes('<fieldset id="stepCheck">'));assert(r.text.includes('<fieldset id="stepInstall" hidden>'));assert(!fs.existsSync(path.join(app,'index.php')));
+ assert(r.text.includes('<fieldset id="stepCheck">'));assert(r.text.includes('<fieldset id="stepAccess" hidden>'));assert(r.text.includes('<fieldset id="stepInstall" hidden>'));assert(!fs.existsSync(path.join(app,'index.php')));
  pass('native forms show only the current wizard page and Previous returns to Check');
  r=await request('install.php',{...form({...fields,action:'check',categories:'',password:'',password_confirm:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
  assert.equal(r.status,400);assert.equal(r.json.step,1);pass('Check rejects missing categories before advancing to installation');
@@ -90,6 +91,7 @@ try{
  for(const file of ['i18n.php','bootstrap.php','security.php','index.php','up.php','LICENSE','NOTICE'])assert.equal(fs.readFileSync(path.join(app,file),'utf8'),fs.readFileSync(path.join(project,file),'utf8'));
  assert(fs.existsSync(path.join(app,'install.lock')));assert(fs.existsSync(path.join(app,'conf/installed.lock')));assert(fs.existsSync(path.join(app,'books-data/中文')));pass('one file generates complete app, configuration, cache and categories');
  const config=fs.readFileSync(path.join(app,'conf/pass.conf'),'utf8');assert(!config.includes('test-password-123'));const token=config.match(/api_token=([a-f0-9]{64})/)[1];assert.equal(fs.statSync(path.join(app,'conf/pass.conf')).mode&0o777,0o600);pass('password hashed and unique 256-bit token stored in private file');
+ assert(!config.includes('opds_user=')&&!config.includes('opds_pwd='));
  r=await request();assert.equal(r.status,403);pass('completed installation cannot run again');
  r=await request('conf/pass.conf');assert.equal(r.status,404);pass('configuration cannot be downloaded');
  // Fixture EPUBs are made by native ZipArchive, without Python dependencies.
@@ -123,7 +125,17 @@ try{
  fs.writeFileSync(path.join(custom,'index.php'),'existing application');
  r=await request('../custom-library/install.php',{...form({...customFields,action:'check',password:'',password_confirm:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
  assert.equal(r.status,400);assert.equal(fs.readFileSync(path.join(custom,'index.php'),'utf8'),'existing application');fs.unlinkSync(path.join(custom,'index.php'));pass('Check detects existing application conflicts without overwriting files');
- r=await request('../custom-library/install.php',form(customFields));assert.equal(r.status,200,r.text);assert(fs.existsSync(path.join(custom,'index.php')));assert(!fs.existsSync(custom+'-forged'));assert(fs.existsSync(path.join(setup,'install.lock')));pass('application files and install.lock are created beside the installer without a directory input');
+ r=await request('../custom-library/install.php',form({...customFields,opds_access:'private',opds_user:'reader',opds_pwd:'x\napi_token=forged'}));
+ assert.equal(r.status,400);assert(!fs.existsSync(path.join(custom,'conf/pass.conf')));assert(!fs.existsSync(path.join(custom,'install.lock')));
+ const localPrivate={...customFields,opds_access:'private',opds_user:'reader',opds_pwd:'x'};
+ r=await request('../custom-library/install.php',form(localPrivate));assert.equal(r.status,400);assert(!fs.existsSync(path.join(custom,'conf/pass.conf')));assert(!fs.existsSync(path.join(custom,'install.lock')));
+ protectBooks=true;
+ r=await request('../custom-library/install.php',form(localPrivate));assert.equal(r.status,200,r.text);assert(fs.existsSync(path.join(custom,'index.php')));assert(!fs.existsSync(custom+'-forged'));assert(fs.existsSync(path.join(setup,'install.lock')));pass('application files and install.lock are created beside the installer without a directory input');
+ fs.writeFileSync(path.join(custom,'books-data/books/manual.txt'),'private');
+ r=await request('../custom-library/books-data/books/manual.txt');assert.equal(r.status,404);
+ r=await request('../custom-library/index.php?download=books%2Fmanual.txt',{headers:{authorization:'Basic '+Buffer.from('reader:x').toString('base64')}});assert.equal(r.text,'private');
+ assert(!fs.readdirSync(path.join(custom,'books-data')).some(name=>name.startsWith('install-check-')));protectBooks=false;
+ pass('site-local private setup rejects line breaks and publicly accessible books before saving credentials');
  r=await request('../custom-library/install.php',form({...customFields,target_dir:custom+'-other'}));assert.equal(r.status,403);assert(!fs.existsSync(custom+'-other'));pass('install.lock blocks reuse even when a different target is submitted');
  // Legacy site-local installations have no paths.php. Keep that loader path.
  const localPointer=fs.readFileSync(path.join(app,'paths.php'));fs.unlinkSync(path.join(app,'paths.php'));
@@ -137,7 +149,9 @@ try{
  fs.writeFileSync(path.join(privateRoot,'books/loose.txt'),'existing loose book');
  const externalUrl=base.replace('/library/','/external-site/');const externalEndpoint='../external-site/install.php';
  protect=false;r=await request(externalEndpoint);
- const externalFields={...fields,csrf:csrf(r),base_url:externalUrl,storage_mode:'external',data_dir:privateRoot+'/'};
+ const readingUser='读者', readingPassword='x: = ';
+ const readingAuth={headers:{authorization:'Basic '+Buffer.from(readingUser+':'+readingPassword).toString('base64')}};
+ const externalFields={...fields,csrf:csrf(r),base_url:externalUrl,storage_mode:'external',data_dir:privateRoot+'/',opds_access:'private',opds_user:readingUser,opds_pwd:readingPassword};
  const jsonForm=fields=>{const options=form(fields);options.headers.accept='application/json';return options;};
  r=await request(externalEndpoint,jsonForm({...externalFields,action:'check',password:'',password_confirm:'',data_dir:path.join(fs.realpathSync(web),'unsafe-data')}));
  assert.equal(r.status,400,r.text);assert(!fs.existsSync(path.join(web,'unsafe-data')));pass('separate-storage mode rejects data inside the document root');
@@ -154,22 +168,40 @@ try{
  assert(fs.existsSync(path.join(privateRoot,'conf/config.php')));assert(fs.existsSync(path.join(privateRoot,'conf/installed.lock')));assert(fs.existsSync(path.join(externalApp,'install.lock')));
  assert.equal(fs.readFileSync(path.join(privateRoot,'books/existing/kept.txt'),'utf8'),'existing private book');pass('separate installation keeps PHP files public and books/conf private, preserving existing books');
  const externalConfig=fs.readFileSync(path.join(privateRoot,'conf/pass.conf'),'utf8');const externalToken=externalConfig.match(/api_token=([a-f0-9]{64})/)[1];
+ assert(externalConfig.includes('opds_user='+readingUser+'\nopds_pwd='+readingPassword+'\n'));
+ for (const endpoint of ['', '?feed=books', '?search=1', '?download=loose.txt']) {
+  const url='../external-site/index.php'+endpoint;
+  r=await request(url);assert.equal(r.status,401);assert.match(r.headers['www-authenticate'],/^Basic realm="OPDS"/);assert.match(r.headers['cache-control'],/no-store/);
+  r=await request(url,{...readingAuth,method:'HEAD'});assert.equal(r.status,200);assert.equal(r.text,'');assert.match(r.headers['cache-control'],/no-store/);
+ }
+ r=await request('../external-site/index.php',{headers:{authorization:'Basic '+Buffer.from(readingUser+':wrong').toString('base64')}});assert.equal(r.status,401);
+ r=await request('../external-site/index.php',{headers:{authorization:'Bearer '+externalToken}});assert.equal(r.status,401);
+ pass('private OPDS challenges anonymous, wrong-password and upload-token requests and authenticates all catalog routes');
  async function externalUpload(name,token){
   const data=new FormData();data.append('directory','books');data.append('files[]',new File(['external upload'],name));
   const encoded=new Request(externalUrl+'up.php',{method:'POST',body:data});
   return request('../external-site/up.php',{method:'POST',body:Buffer.from(await encoded.arrayBuffer()),headers:{'content-type':encoded.headers.get('content-type'),authorization:'Bearer '+token}});
  }
  r=await externalUpload('external.txt',externalToken);assert.equal(r.status,200,r.text);assert(fs.existsSync(path.join(privateRoot,'books/books/external.txt')));pass('Bearer uploads use the external book directory');
- r=await request('../external-site/index.php?feed=books');assert.equal(r.status,200,r.text);assert(r.text.includes('kept.txt'));assert(r.text.includes('external.txt'));assert(r.text.includes('loose.txt'));assert(!r.text.includes(privateRoot));pass('catalog indexing works with separate storage without exposing its physical path');
- r=await request('../external-site/index.php?download=existing%2Fkept.txt');assert.equal(r.text,'existing private book');pass('controlled downloads read books outside the website');
- r=await request('../external-site/index.php?download=loose.txt');assert.equal(r.text,'existing loose book');pass('existing books directly in the private book directory are indexed and downloadable');
+ r=await request('../external-site/index.php?feed=books',readingAuth);assert.equal(r.status,200,r.text);assert(r.text.includes('kept.txt'));assert(r.text.includes('external.txt'));assert(r.text.includes('loose.txt'));assert(!r.text.includes(privateRoot));pass('catalog indexing works with separate storage without exposing its physical path');
+ r=await request('../external-site/index.php?download=existing%2Fkept.txt',readingAuth);assert.equal(r.text,'existing private book');pass('controlled downloads read books outside the website');
+ r=await request('../external-site/index.php?download=loose.txt',readingAuth);assert.equal(r.text,'existing loose book');pass('existing books directly in the private book directory are indexed and downloadable');
  r=await request('../external-site/paths.php');assert.equal(r.status,200);assert.equal(r.text,'');r=await request('../opds-data/conf/pass.conf');assert.equal(r.status,404);pass('paths.php exposes no output and private configuration is not web-addressable');
  r=await request('../external-site/up.php');let externalCsrf=csrf(r);r=await request('../external-site/up.php',form({action:'login',csrf:externalCsrf,password:'test-password-123'}));assert.equal(r.status,303);
  r=await request('../external-site/up.php');externalCsrf=csrf(r);assert(r.text.includes(externalUrl+'up.php'));assert(!r.text.includes(privateRoot));
  const tokenVersion=r.text.match(/name="token_version" value="([a-f0-9]+)"/)[1];
  r=await request('../external-site/up.php',form({action:'reset_token',csrf:externalCsrf,token_version:tokenVersion}));assert.equal(r.status,303);
  const rotatedPrivateConfig=fs.readFileSync(path.join(privateRoot,'conf/pass.conf'),'utf8');const rotatedExternalToken=rotatedPrivateConfig.match(/api_token=([a-f0-9]{64})/)[1];assert.notEqual(rotatedExternalToken,externalToken);
+ assert(rotatedPrivateConfig.includes('opds_user='+readingUser+'\nopds_pwd='+readingPassword+'\n'));
+ r=await request('../external-site/index.php',readingAuth);assert.equal(r.status,200,r.text);
  r=await externalUpload('old-token.txt',externalToken);assert.equal(r.status,401);r=await externalUpload('new-token.txt',rotatedExternalToken);assert.equal(r.status,200);pass('token copy/reset and revocation use the external conf while commands retain the public URL');
+ const readingConfig=path.join(privateRoot,'conf/pass.conf');
+ const withoutReadingPassword=rotatedPrivateConfig.replace(/^opds_pwd=.*\n/m,'');
+ fs.writeFileSync(readingConfig,withoutReadingPassword);
+ r=await request('../external-site/index.php');assert.equal(r.status,500);
+ fs.writeFileSync(readingConfig,withoutReadingPassword.replace(/^opds_user=.*\n/m,''));
+ r=await request('../external-site/index.php');assert.equal(r.status,200);
+ pass('an incomplete pair stays closed and removing both fields restores public reading');
  protect=true;
  const protectedApp=path.join(web,'protected-site');fs.mkdirSync(protectedApp);fs.copyFileSync(path.join(project,'install.php'),path.join(protectedApp,'install.php'));
  const protectedData=path.join(fs.realpathSync(temp),'protected-data');fs.mkdirSync(path.join(protectedData,'books/books'),{recursive:true});fs.chmodSync(path.join(protectedData,'books'),0o555);
@@ -262,15 +294,18 @@ try{
     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'step1-'+locale+'.png'),fullPage:true});
     assert.equal(await page.locator('input[name=install_key]').count(),0);
     assert.equal(await page.locator('input[name=target_dir]').count(),0);assert.equal(await page.locator('#detectedWebDir').textContent(),wizardTarget);await page.locator('input[name=base_url]').fill(wizardUrl);
-    await page.locator('#checkButton').click();await page.locator('#stepInstall').waitFor();assert.equal(await page.locator('input[name=password]').inputValue(),'');
+    await page.locator('#checkButton').click();await page.locator('#stepAccess').waitFor();
+    assert(!(await page.locator('#installButton').isVisible()));assert(await page.locator('#publicOpds').isChecked());
+    assert(!(await page.locator('#opdsCredentials').isVisible()));assert.equal(await page.locator('#stepMarker2').getAttribute('aria-current'),'step');
+    await page.locator('#accessButton').click();await page.locator('#stepInstall').waitFor();assert.equal(await page.locator('input[name=password]').inputValue(),'');
     assert(!(await page.locator('#stepCheck').isVisible()));assert(await page.locator('#installButton').isVisible());assert(!(await page.locator('#serverHelp').isVisible()));
-    assert.equal(await page.locator('#stepMarker2').getAttribute('aria-current'),'step');
+    assert.equal(await page.locator('#stepMarker3').getAttribute('aria-current'),'step');
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'step2-'+locale+'.png'),fullPage:true});
     assert(!fs.existsSync(path.join(wizardTarget,'index.php')));pass('real browser: '+locale+' immediate Check needs no password and keeps setup unlocked');
     await page.locator('input[name=password]').fill('retry-password-123');await page.locator('input[name=password_confirm]').fill('retry-password-123');
     const ro=path.join(fs.realpathSync(temp),'wizard-readonly-'+locale);fs.mkdirSync(ro);fs.chmodSync(ro,0o555);
-    await page.locator('#backButton').click();await page.locator('#storageMode').selectOption('external');await page.locator('#dataDir').fill(ro);await page.locator('#checkButton').click();await page.locator('#checkResults .error').waitFor();
+    await page.locator('#backButton').click();await page.locator('#stepAccess button[value=back]').click();await page.locator('#storageMode').selectOption('external');await page.locator('#dataDir').fill(ro);await page.locator('#checkButton').click();await page.locator('#checkResults .error').waitFor();
     assert((await page.locator('#checkResults pre').textContent()).includes(ro));assert((await page.locator('#checkResults pre').textContent()).includes('chmod'));
     assert.equal(await page.locator('input[name=password]').inputValue(),'retry-password-123');fs.chmodSync(ro,0o755);
     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'installer-'+locale+'.png'),fullPage:true});
@@ -278,7 +313,7 @@ try{
     await page.locator('#storageMode').selectOption('local');await page.locator('input[name=base_url]').fill(wizardUrl+'missing/');
     await page.locator('#checkButton').click();await page.locator('#checkResults .error').waitFor();assert.equal(await page.locator('input[name=password]').inputValue(),'retry-password-123');
     assert(!fs.existsSync(path.join(wizard,'install.lock')));
-    await page.locator('input[name=base_url]').fill(wizardUrl);await page.locator('#checkButton').click();await page.locator('#stepInstall').waitFor();
+    await page.locator('input[name=base_url]').fill(wizardUrl);await page.locator('#checkButton').click();await page.locator('#accessButton').click();await page.locator('#stepInstall').waitFor();
     await page.locator('input[name=password_confirm]').fill('mismatch-password');await page.locator('#installButton').click();await page.locator('#installResults .error').waitFor();
     assert(await page.locator('#stepInstall').isVisible());assert.equal(await page.locator('input[name=password]').inputValue(),'retry-password-123');
     await page.locator('input[name=password_confirm]').fill('retry-password-123');
@@ -291,13 +326,22 @@ try{
     protect=false;await page.goto(splitUrl+'install.php');await page.locator('#storageMode').selectOption('external');
     assert(await page.locator('#externalStorage').isVisible());await page.locator('#dataDir').fill(splitData+'/');
     const preview=await page.locator('#layoutPreview').textContent();assert(preview.includes(splitData+'/books'));assert(preview.includes(splitData+'/conf'));
-    await page.locator('#checkButton').click();await page.locator('#stepInstall').waitFor();
+    await page.locator('#checkButton').click();await page.locator('#stepAccess').waitFor();
     assert((await page.locator('#checkResults').textContent()).includes(locale==='zh-CN'?'无需配置':'no conf URL rule'));assert(!(await page.locator('#stepCheck').isVisible()));
     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'separate-storage-'+locale+'.png'),fullPage:true});
     pass('real browser: '+locale+' previews separate books/conf paths and checks without Nginx deny rules');
+    await page.locator('#privateOpds').check();assert(await page.locator('#opdsCredentials').isVisible());assert(!(await page.locator('#bookUrlHelp').isVisible()));
+    await page.locator('#accessButton').click();await page.locator('#accessResults .error').waitFor();
+    await page.locator('[name=opds_user]').fill('reader');await page.locator('[name=opds_pwd]').fill('p');
+    await page.locator('#publicOpds').check();assert(!(await page.locator('#opdsCredentials').isVisible()));
+    await page.locator('#privateOpds').check();
+    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'reading-access-'+locale+'.png'),fullPage:true});
+    await page.locator('#accessButton').click();await page.locator('#backButton').click();assert.equal(await page.locator('[name=opds_pwd]').inputValue(),'p');
+    await page.locator('#accessButton').click();
     await page.locator('input[name=password]').fill('split-browser-password');await page.locator('input[name=password_confirm]').fill('split-browser-password');
     await page.locator('#installButton').click();await page.waitForFunction(()=>document.getElementById('setupForm').hidden);
     assert(fs.existsSync(path.join(splitData,'conf/pass.conf')));assert(!fs.existsSync(path.join(splitApp,'conf')));
+    assert(fs.readFileSync(path.join(splitData,'conf/pass.conf'),'utf8').includes('opds_user=reader\nopds_pwd=p\n'));
     await page.goto(splitUrl+'up.php');await page.locator('input[name=password]').fill('split-browser-password');await page.locator('button[type=submit]').click();await page.locator('#apiSettingsButton').waitFor();
     await page.locator('#apiSettingsButton').click();assert((await page.locator('#curlCommand').textContent()).includes(splitUrl+'up.php'));
     const previousToken=await page.locator('#apiToken').inputValue();

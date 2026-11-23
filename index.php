@@ -4,7 +4,38 @@ require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/security.php';
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
+header('Cache-Control: no-cache');
 const ATOM = 'http://www.w3.org/2005/Atom';
+
+function requireOpdsAccess(): void
+{
+    $config = readCredentials();
+    if (!isset($config['opds_user'])) return;
+
+    header('Cache-Control: private, no-store');
+    header('Vary: Authorization');
+    if (!in_array(strtolower((string) ($_SERVER['HTTPS'] ?? '')), ['on', '1'], true)) {
+        reject(tr('HTTPS is required to access this private OPDS library.'), 403);
+    }
+
+    $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null;
+    $user = $password = '';
+    if ($header === null) {
+        $user = (string) ($_SERVER['PHP_AUTH_USER'] ?? '');
+        $password = (string) ($_SERVER['PHP_AUTH_PW'] ?? '');
+    } elseif (strlen($header) <= 24000 && preg_match('/\ABasic +([a-z0-9+\/=]+)\z/iD', $header, $match)) {
+        $decoded = base64_decode($match[1], true);
+        if ($decoded !== false && str_contains($decoded, ':')) {
+            [$user, $password] = explode(':', $decoded, 2);
+        }
+    }
+    $validUser = hash_equals(hash('sha256', $config['opds_user']), hash('sha256', $user));
+    $validPassword = hash_equals(hash('sha256', $config['opds_pwd']), hash('sha256', $password));
+    if (!$validUser || !$validPassword) {
+        header('WWW-Authenticate: Basic realm="OPDS", charset="UTF-8"');
+        reject(tr('Enter the OPDS reading username and password.'), 401);
+    }
+}
 
 function parameter(string $name, string $default = ''): string
 {
@@ -124,6 +155,7 @@ function linkNode(DOMDocument $doc, DOMElement $parent, string $rel, string $url
 }
 try {
     if (!in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['GET','HEAD'], true)) { header('Allow: GET, HEAD'); reject(tr('Method not allowed.'),405); }
+    requireOpdsAccess();
     if (isset($_GET['search'])) {
         if (parameter('search') !== '1') reject(tr('Invalid search parameter.'));
         $doc=new DOMDocument('1.0','UTF-8');
@@ -187,11 +219,13 @@ try {
                 strtolower(pathinfo($book['path'],PATHINFO_EXTENSION)) === 'epub' ? 'application/epub+zip' : 'text/plain');
         }
     }
-    header('Content-Type: application/atom+xml; charset=UTF-8'); header('Cache-Control: no-cache');
+    header('Content-Type: application/atom+xml; charset=UTF-8');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') echo $doc->saveXML();
 } catch (Throwable $e) {
     http_response_code($e instanceof RequestError ? $e->getCode() : 500);
     header('Content-Type: text/plain; charset=UTF-8');
-    echo $e instanceof RequestError ? $e->getMessage() : tr('The library is temporarily unavailable.');
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') {
+        echo $e instanceof RequestError ? $e->getMessage() : tr('The library is temporarily unavailable.');
+    }
     if (!$e instanceof RequestError) error_log('OPDS: internal catalogue error.');
 }

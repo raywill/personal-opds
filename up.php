@@ -84,97 +84,6 @@ function verifyCsrf(): void
     }
 }
 
-function privateDirectory(): string
-{
-    clearstatcache(true);
-    $root = realpath(CONFIG_DIR);
-    $mode = fileperms(CONFIG_DIR);
-    if (is_link(CONFIG_DIR) || $root === false || !is_dir($root)
-        || $mode === false || ($mode & 0077) !== 0) {
-        throw new RuntimeException('CONFIG_DIR must be a private directory with mode 0700.');
-    }
-    return $root;
-}
-
-function openPrivateState(string $path)
-{
-    $root = privateDirectory();
-    if (dirname($path) !== CONFIG_DIR || is_link($path)) {
-        throw new RuntimeException('Invalid private state path.');
-    }
-    $handle = fopen($path, 'c+b');
-    if ($handle === false) {
-        throw new RuntimeException('Cannot open private state file.');
-    }
-    $stat = fstat($handle);
-    if ($stat === false || ($stat['mode'] & 0170000) !== 0100000
-        || ($stat['mode'] & 0077) !== 0 || $stat['nlink'] !== 1
-        || realpath(dirname($path)) !== $root) {
-        fclose($handle);
-        throw new RuntimeException('Private state must be a regular, non-shared 0600 file.');
-    }
-    return $handle;
-}
-
-// Caller holds CONFIG_LOCK_FILE, which is never replaced or deleted.
-function readCredentialsUnlocked(): array
-{
-    clearstatcache(true, PASSWORD_FILE);
-    if (is_link(PASSWORD_FILE) || !is_file(PASSWORD_FILE)) {
-        throw new RuntimeException('pass.conf is unavailable.');
-    }
-    $handle = fopen(PASSWORD_FILE, 'rb');
-    if ($handle === false) {
-        throw new RuntimeException('Cannot read pass.conf.');
-    }
-    try {
-        $stat = fstat($handle);
-        if ($stat === false || ($stat['mode'] & 0170000) !== 0100000
-            || ($stat['mode'] & 0077) !== 0 || $stat['nlink'] !== 1) {
-            throw new RuntimeException('pass.conf must be a private regular file with mode 0600.');
-        }
-        $raw = stream_get_contents($handle, 16385);
-    } finally {
-        fclose($handle);
-    }
-    if ($raw === false || strlen($raw) > 16384 || str_contains($raw, "\0")) {
-        throw new RuntimeException('Invalid pass.conf size or encoding.');
-    }
-    $config = [];
-    foreach (preg_split('/\r\n|\n|\r/', $raw) ?: [] as $line) {
-        $line = trim($line);
-        if ($line === '' || str_starts_with($line, '#')) {
-            continue;
-        }
-        $parts = explode('=', $line, 2);
-        if (count($parts) !== 2 || !in_array($parts[0], ['password', 'api_token'], true)
-            || isset($config[$parts[0]])) {
-            throw new RuntimeException('pass.conf contains an unknown or duplicate key.');
-        }
-        $config[$parts[0]] = $parts[1];
-    }
-    if (!isset($config['password'], $config['api_token']) || $config['password'] === ''
-        || strlen($config['password']) > 1024 || preg_match('/[\x00-\x1F\x7F]/', $config['password'])
-        || preg_match('/\A[a-f0-9]{64}\z/D', $config['api_token']) !== 1) {
-        throw new RuntimeException('pass.conf requires password and a 64-character lowercase hex api_token.');
-    }
-    return $config;
-}
-
-function readCredentials(): array
-{
-    $lock = openPrivateState(CONFIG_LOCK_FILE);
-    try {
-        if (!flock($lock, LOCK_SH)) {
-            throw new RuntimeException('Cannot lock credentials.');
-        }
-        return readCredentialsUnlocked();
-    } finally {
-        flock($lock, LOCK_UN);
-        fclose($lock);
-    }
-}
-
 function verifyPassword(string $password, string $configured): bool
 {
     if (strlen($password) > 1024 || str_contains($password, "\0")) {
@@ -217,7 +126,10 @@ function resetApiToken(string $expectedTokenVersion, string $sessionCredential):
             reject(tr('Another request updated the token. Refresh the page.'), 409);
         }
         $config['api_token'] = bin2hex(random_bytes(32));
-        $encoded = 'password=' . $config['password'] . "\napi_token=" . $config['api_token'] . "\n";
+        $encoded = '';
+        foreach ($config as $key => $value) {
+            $encoded .= $key . '=' . $value . "\n";
+        }
         $temp = CONFIG_DIR . '/.pass-' . bin2hex(random_bytes(16)) . '.tmp';
         $handle = fopen($temp, 'x+b');
         if ($handle === false) {

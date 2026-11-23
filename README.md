@@ -15,6 +15,7 @@ Your OPDS reader fetches the catalog and downloads books. Agents only need HTTPS
 ## Features
 
 - OPDS navigation, category feeds, all-books view, OpenSearch discovery, title/author search, and paginated acquisition feeds.
+- Public browsing and downloads by default, with optional HTTP Basic authentication for readers.
 - EPUB and TXT downloads through the catalog endpoint, with persistent metadata caching.
 - Multiple top-level categories, including Unicode names. Traversal is depth-aware, with a server-side guard currently enforcing exactly one category level.
 - Browser uploads with per-file and overall progress, validation results, and a stop-after-current-file button.
@@ -54,8 +55,9 @@ The application accepts **20** files. The parser needs **at least 21 slots** so 
 2. Open the installer over HTTPS immediately after uploading it. The web application directory is detected automatically from `install.php`. Application files are generated beside the installer; there is no directory field to fill in, and a submitted `target_dir` cannot relocate PHP files.
 3. Choose a storage mode: **Separate data directory** for private storage outside the website, or **Inside the web application directory** for the original layout. Set **BASE_URL** to the HTTPS URL serving the web application directory, never the private data directory. It is already filled from the installer's URL directory; change it only if your public URL mapping requires it. Changing the separate data directory does not change BASE_URL.
 4. **Step 1: Check.** Choose your initial categories (one per line), then run the check. For site-local storage, protect the application's `conf` URL path as described below. Separate storage outside the document root does **not** require a `conf` URL blocking rule. No password is needed at this step. It checks PHP, directory permissions and book-root ownership, existing application files, the public URL, and configuration protection. Missing target directories are created when possible; temporary probes and draft configuration are cleaned up without installing application files or credentials. Failures stay on this page with repair instructions.
-5. **Step 2: Install** appears only after the checks pass, replacing the first page. Enter a library name and upload password, then install. **Previous step** returns to the storage settings and keeps your entries; run Check again to advance. Installation repeats all server checks before saving anything. If it fails, inputs remain available. A valid password is also retained as a hash in the setup session for 30 minutes, so a retry can leave both password fields blank. Plaintext passwords are not stored in the session or returned in HTML/JSON.
-6. On success, the installer writes **`install.lock` next to `install.php`** and refuses every later GET, Check, or Install request, including requests selecting a different target. It also writes `installed.lock` in the chosen configuration directory. You can delete `install.php` after completion; rerunning it is not an upgrade mechanism.
+5. **Step 2: OPDS access.** Keep **No password** to allow public reading, or choose **Require a username and password** to reveal the two fields. The reading password has no minimum length beyond being nonempty. With site-local storage, configure the book URL protection below before installing a private library.
+6. **Step 3: Install.** Enter a library name and upload password, then install. **Previous step** returns to the previous page and keeps your entries in the browser. Installation repeats the server checks before saving credentials. A valid upload password is also retained as a hash in the setup session for 30 minutes, so a retry can leave both upload password fields blank. The installer does not store the reading password in its session or return it in HTML/JSON.
+7. On success, the installer writes **`install.lock` next to `install.php`** and refuses every later GET, Check, or Install request, including requests selecting a different target. It also writes `installed.lock` in the chosen configuration directory. You can delete `install.php` after completion. Update an existing installation by replacing application files as directed in the release notes.
 
 ### Fix directory permissions
 
@@ -146,7 +148,14 @@ location ^~ /opds/conf/ { deny all; }
 
 For Apache, the installer writes `conf/.htaccess` with `Require all denied`; the host must allow that directive to take effect. A file existing on disk is not proof of protection. Setup places harmless temporary probes, checks the exact `conf/pass.conf` path and an additional file under `conf`, and only writes credentials after those paths return 403/404. It first verifies a separate random probe in the installation directory to make sure `BASE_URL` points to the correct site. Requests do not follow redirects or disable certificate verification.
 
-**Site-local storage allows direct HTTP access to books by default.** Separate storage is outside the website and uses controlled downloads through `index.php`. Generated UI/catalog links use `index.php` and do not advertise the physical storage-directory name. This is presentation, not access control: anyone who guesses a direct file URL may access it. Configure book-directory access restrictions separately if you want them. Credentials, unlike books, must not be directly accessible.
+**Site-local storage allows direct HTTP access to books by default.** If you enable private reading with this layout, deny direct access to the entire `books-data` URL, including its subdirectories and any public aliases. PHP still serves authenticated downloads through `index.php`. On Nginx for an installation at `/opds/`:
+
+```nginx
+location = /opds/books-data { return 404; }
+location ^~ /opds/books-data/ { deny all; }
+```
+
+On Apache, set `Require all denied` for the book directory in the site configuration or an enabled `.htaccess` file. The installer checks temporary TXT and EPUB URLs before enabling private reading on site-local storage. Separate storage outside the website needs no book URL rule as long as it is not otherwise exposed. Configure any custom aliases yourself.
 
 Check the actual PHP upload location as well:
 
@@ -162,7 +171,7 @@ Merge these into the existing site configuration; this is not a complete virtual
 
 ## Read and upload
 
-Add `https://your-host/opds/index.php` to your OPDS reader. The catalog and book downloads are public by default. Open `https://your-host/opds/up.php` and sign in to upload or manage the token.
+Add `https://your-host/opds/index.php` to your OPDS reader. Leave its username and password blank for a public library. For a private library, enter the configured reading credentials in a reader that supports HTTP Basic authentication over HTTPS. Directory feeds, searches, and downloads all use the same credentials. Put `HTTP_AUTHORIZATION` and `HTTPS` in the FastCGI settings for `index.php` as well as `up.php` when needed. Open `https://your-host/opds/up.php` and use the separate upload password to upload or manage the token.
 
 Upload limits are enforced on the server:
 
@@ -241,7 +250,16 @@ password=PASSWORD_HASH
 api_token=64_LOWERCASE_HEX_CHARACTERS
 ```
 
-The installer writes a password hash; legacy plaintext password values remain supported. Older site-local installations without `paths.php` continue to load their original `books-data` and `conf` paths. Tokens remain recoverable because the authenticated UI must display/copy them. Files are private (`0600`) and the directory is `0700`. Keep them out of public backups, logs, and Git. When manually maintaining credentials, acquire the fixed `.config.lock` and replace the file atomically; do not edit concurrently with UI resets or remove active lock files.
+To enable private reading on an existing installation, first prevent public access to book files as described above, then append these two optional lines to `pass.conf`:
+
+```ini
+opds_user=reader
+opds_pwd=your-reading-password
+```
+
+The reading credentials are stored as plain text, with their spaces and `=` characters preserved. Both values must be set together. Usernames cannot contain a colon because HTTP Basic uses it as the separator. Neither value can contain a line break or other control character. Remove both lines to make the catalog and downloads public again. Resetting the upload token preserves both reading fields.
+
+The installer hashes the upload `password` field. Legacy plaintext upload passwords remain supported. Older site-local installations without `paths.php` continue to load their original `books-data` and `conf` paths. The authenticated upload UI can display the API token. Files are private (`0600`) and the directory is `0700`. Keep them out of public backups, logs, and Git. When manually maintaining credentials, acquire the fixed `.config.lock` and replace the file atomically. Do not edit concurrently with UI resets or remove active lock files.
 
 ## Security boundaries
 
