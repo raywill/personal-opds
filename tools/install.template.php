@@ -224,7 +224,7 @@ function verifyBookUrlProtection(string $books, string $url, string $id): void {
 function payloadFiles(string $root): array {
     $decoded=gzdecode(base64_decode(PAYLOAD,true) ?: '');
     $payload=$decoded===false ? null : json_decode($decoded,true,16,JSON_THROW_ON_ERROR);
-    if (!is_array($payload) || array_keys($payload)!==['i18n.php','bootstrap.php','security.php','index.php','up.php','LICENSE','NOTICE']) stopInstall(tr('The installation payload is damaged.'));
+    if (!is_array($payload) || array_keys($payload)!==['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','LICENSE','NOTICE']) stopInstall(tr('The installation payload is damaged.'));
     $files=[];
     foreach ($payload as $name=>$entry) {
         $content=base64_decode($entry['content'],true);
@@ -521,7 +521,7 @@ location ^~ /opds/conf/ { deny all; }</pre>
 post_max_size = 205M
 max_file_uploads = 21
 session.upload_progress.enabled = 0</pre>
-<p><?=tr_html('PHP needs ZIP, DOM, SimpleXML, session, filter, and zlib. HTTPS probes need OpenSSL and allow_url_fopen. The upload location must pass HTTP_AUTHORIZATION and HTTPS, with client_max_body_size 205m. Setup needs at least two PHP workers so self-check requests can complete.')?></p>
+<p><?=tr_html('PHP needs ZIP, DOM, SimpleXML, session, filter, and zlib. HTTPS probes need OpenSSL and allow_url_fopen. Forward HTTPS to PHP and HTTP_AUTHORIZATION to index.php and api.php. Allow uploads up to 205 MiB at up.php and api.php. Setup needs at least two PHP workers for its HTTPS checks.')?></p>
 </details><?php endif; ?></main>
 <script nonce="<?=esc($nonce)?>">
 (() => {

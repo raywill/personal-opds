@@ -81,6 +81,8 @@ opds/
 ├── install.lock           # next to install.php when using the default path
 ├── index.php
 ├── up.php
+├── api.php
+├── upload-common.php
 ├── bootstrap.php
 ├── security.php
 ├── i18n.php
@@ -107,6 +109,8 @@ Keep the PHP application in your website directory, and select a private data ro
 Website directory, served by BASE_URL
 ├── index.php
 ├── up.php
+├── api.php
+├── upload-common.php
 ├── bootstrap.php / security.php / i18n.php
 ├── paths.php
 └── install.lock
@@ -130,7 +134,7 @@ Fill the installer as follows:
 | Web application directory | Automatic: the directory containing `install.php`; no input required |
 | Storage mode | Separate data directory |
 | Separate data directory | `/home/wwwroot/opds-data` |
-| BASE_URL | The original public HTTPS URL for `index.php` and `up.php` |
+| BASE_URL | The public HTTPS folder containing `index.php`, `up.php`, and `api.php` |
 
 The preview shows the resulting web, book, and configuration paths immediately. The private root does **not** need a public URL. Check verifies the available permissions and that the path is outside both the server's actual `DOCUMENT_ROOT` and the application directory. The HTTPS self-check during installation probes the **web application directory**. The runtime loads the chosen book/configuration paths through `paths.php`. This generated PHP file outputs nothing when requested directly and contains no passwords or tokens.
 
@@ -158,7 +162,7 @@ location ^~ /opds/books-data/ { deny all; }
 
 On Apache, set `Require all denied` for the book directory in the site configuration or an enabled `.htaccess` file. The installer checks temporary TXT and EPUB URLs before enabling private reading on site-local storage. Separate storage outside the website needs no book URL rule as long as it is not otherwise exposed. Configure any custom aliases yourself.
 
-Check the actual PHP upload location as well:
+Check the PHP locations for both `up.php` and `api.php`:
 
 ```nginx
 client_max_body_size 205m;
@@ -172,7 +176,7 @@ Merge these into the existing site configuration; this is not a complete virtual
 
 ## Read and upload
 
-Add `https://your-host/opds/index.php` to your OPDS reader. Leave its username and password blank for a public library. For a private library, enter the configured reading credentials in a reader that supports HTTP Basic authentication over HTTPS. Directory feeds, searches, and downloads all use the same credentials. Put `HTTP_AUTHORIZATION` and `HTTPS` in the FastCGI settings for `index.php` as well as `up.php` when needed. Open `https://your-host/opds/up.php` and use the separate upload password to upload or manage the token.
+Add `https://your-host/opds/index.php` to your OPDS reader. Leave its username and password blank for a public library. For a private library, enter the configured reading credentials in a reader that supports HTTP Basic authentication over HTTPS. Directory feeds, searches, and downloads all use the same credentials. Forward `HTTP_AUTHORIZATION` to `index.php` for private reading and to `api.php` for Bearer uploads. Set the trusted `HTTPS` flag for all three entry points. Open `https://your-host/opds/up.php` and use the separate upload password to upload or manage the token. The browser uploader uses a session and CSRF protection, even when a browser carries cached OPDS Basic credentials.
 
 Upload limits are enforced on the server:
 
@@ -195,7 +199,7 @@ The generated skill is written in English, regardless of the interface language.
 
 Expand **curl command** in the dialog for direct CLI use. Update its local file path before running it.
 
-The API uses `POST up.php`, a Bearer token, and multipart form data:
+The API uses `POST api.php`, a Bearer token, and multipart form data:
 
 ```bash
 export OPDS_TOKEN='YOUR_API_TOKEN'
@@ -204,12 +208,14 @@ curl --fail-with-body --show-error --progress-bar \
   -H "Authorization: Bearer $OPDS_TOKEN" \
   --form-string 'directory=books' \
   -F 'files[]=@./article.epub' \
-  -- 'https://your-host/opds/up.php'
+  -- 'https://your-host/opds/api.php'
 ```
 
 The placeholders above are documentation only. The dialog substitutes real values. Requires curl 7.76+ and a POSIX shell such as Bash or zsh. Repeat `-F 'files[]=@./another.epub'` for multiple files. `--form-string` keeps category names literal, including names beginning with `@`. Standard local-file uploads provide the required Content-Length; unbounded streaming uploads without it are not supported.
 
-Tokens are accepted only in `Authorization`; they cannot be supplied by URL, form field, or Cookie. Requests carrying Authorization never fall back to a browser login. The API grants upload access only, not token rotation or configuration access. Browser uploads and token resets use session authentication and CSRF checks.
+Send the token in `Authorization`. The API ignores browser sessions and only grants upload access. Browser uploads and token resets use session authentication and CSRF checks.
+
+When upgrading from v0.1.7, deploy `bootstrap.php`, `i18n.php`, `up.php`, `api.php`, and `upload-common.php` together. Update existing scripts and agent skills to use `api.php`, or generate a fresh skill in **CLI / API**. Existing API tokens and upload passwords work with the new endpoint.
 
 Example response:
 

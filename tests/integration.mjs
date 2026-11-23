@@ -97,7 +97,7 @@ try{
  assert.equal(r.status,400);assert.equal(r.json.step,2);pass('final installation rejects missing categories and returns to the library step');
  r=await request('install.php',form({...fields,base_url:base+'wrong/'}));assert.equal(r.status,400);assert(!fs.existsSync(path.join(app,'conf/pass.conf')));pass('BASE_URL is checked against this installation using a random probe');
  r=await request('install.php',form({...fields,password:'',password_confirm:''}));assert.equal(r.status,200,r.text);assert(r.text.includes('安装完成'));pass('retry reuses the session password hash without re-entering a password');
- for(const file of ['i18n.php','bootstrap.php','security.php','index.php','up.php','LICENSE','NOTICE'])assert.equal(fs.readFileSync(path.join(app,file),'utf8'),fs.readFileSync(path.join(project,file),'utf8'));
+ for(const file of ['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','LICENSE','NOTICE'])assert.equal(fs.readFileSync(path.join(app,file),'utf8'),fs.readFileSync(path.join(project,file),'utf8'));
  assert(fs.existsSync(path.join(app,'install.lock')));assert(fs.existsSync(path.join(app,'conf/installed.lock')));assert(fs.existsSync(path.join(app,'books-data/中文')));pass('one file generates complete app, configuration, cache and categories');
  const config=fs.readFileSync(path.join(app,'conf/pass.conf'),'utf8');assert(!config.includes('test-password-123'));const token=config.match(/api_token=([a-f0-9]{64})/)[1];assert.equal(fs.statSync(path.join(app,'conf/pass.conf')).mode&0o777,0o600);pass('password hashed and unique 256-bit token stored in private file');
  assert(!config.includes('opds_user=')&&!config.includes('opds_pwd='));
@@ -116,14 +116,25 @@ try{
  r=await request('index.php?download=books%2Fsame.epub');assert.equal(r.status,200);assert.equal(r.headers['content-type'],'application/epub+zip');pass('controlled EPUB download');
  for(const value of ['../conf/pass.conf','books/nested/hidden.txt','/etc/passwd']){r=await request('index.php?download='+encodeURIComponent(value));assert(r.status>=400);}pass('download rejects traversal and depth beyond temporary limit');
  fs.symlinkSync(path.join(app,'conf/pass.conf'),path.join(app,'books-data/books/link.txt'));r=await request('index.php?download=books%2Flink.txt');assert.equal(r.status,404);pass('symlink download rejected');
- r=await request('up.php');assert.equal(r.status,200,r.text);const uploadCsrf=csrf(r);
- r=await request('up.php',form({action:'login',csrf:uploadCsrf,password:'test-password-123'}));assert.equal(r.status,303);
- r=await request('up.php');assert(r.text.includes(token));assert(r.text.includes('<dialog id="apiDialog"'));assert(r.text.includes(base+'up.php'));pass('generated uploader login, API dialog and deployment-specific command');
+ const basicHeader='Basic '+Buffer.from('reader:fixture').toString('base64');
+ r=await request('up.php',{headers:{authorization:basicHeader}});assert.equal(r.status,200,r.text);assert.match(r.headers['content-type'],/^text\/html/);const uploadCsrf=csrf(r);
+ assert(!r.text.includes(token));
+ const webLogin=form({action:'login',csrf:uploadCsrf,password:'test-password-123'});
+ r=await request('up.php',{...webLogin,headers:{...webLogin.headers,authorization:basicHeader}});assert.equal(r.status,303);
+ r=await request('up.php',{headers:{authorization:basicHeader}});assert.equal(r.status,200,r.text);assert(r.text.includes(token));assert(r.text.includes('<dialog id="apiDialog"'));assert(r.text.includes(base+'api.php'));pass('cached OPDS Basic credentials do not change the web uploader login or generated API URL');
  r=await request('up.php',{headers:{'accept-language':'en-US'}});assert(r.text.includes('Upload books'));assert(!r.text.includes('上传电子书'));assert(r.text.includes('const tr ='));pass('uploader renders English UI with localized JavaScript messages');
  r=await request('index.php?search=1');assert(r.text.includes('OpenSearchDescription'));assert(r.text.includes('{searchTerms}'));pass('OPDS exposes OpenSearch discovery');
  const data=new FormData();data.append('directory','books');data.append('files[]',new File(['uploaded'],'api.txt'));
- const encoded=new Request(base+'up.php',{method:'POST',body:data});const body=Buffer.from(await encoded.arrayBuffer());
- r=await request('up.php',{method:'POST',body,headers:{'content-type':encoded.headers.get('content-type'),authorization:'Bearer '+token}});assert.equal(r.status,200,r.text);pass('generated application accepts Bearer upload without login dependency');
+ const encoded=new Request(base+'api.php',{method:'POST',body:data});const body=Buffer.from(await encoded.arrayBuffer());
+ const apiUpload={method:'POST',body,headers:{'content-type':encoded.headers.get('content-type')}};
+ r=await request('api.php');assert.equal(r.status,405);assert.equal(r.headers.allow,'POST');assert.equal(r.json.success,false);assert(!r.headers['set-cookie']);
+ r=await request('api.php',apiUpload);assert.equal(r.status,401);assert.match(r.headers['www-authenticate'],/^Bearer/);assert(!r.headers['set-cookie']);
+ r=await request('api.php',{...apiUpload,headers:{...apiUpload.headers,authorization:basicHeader}});assert.equal(r.status,401);
+ const bearerHeaders={...apiUpload.headers,authorization:'Bearer '+token};
+ r=await request('up.php?action=upload',{...apiUpload,headers:bearerHeaders});assert.equal(r.status,403);assert.equal(r.json.success,false);
+ assert(!fs.existsSync(path.join(app,'books-data/books/api.txt')));
+ r=await request('api.php',{...apiUpload,headers:{...bearerHeaders,cookie:''}});assert.equal(r.status,200,r.text);assert(!r.headers['set-cookie']);
+ pass('API only accepts POST with a Bearer token and web upload still requires CSRF');
  r=await request('index.php?feed=books&q=api');assert(r.text.includes('api.txt'));pass('uploaded book is indexed automatically');
  r=await request('books-data/2026/note.txt');assert.equal(r.text,'Some text');pass('direct book access remains allowed by default');
  const cfg=path.join(app,'conf/config.php');const original=fs.readFileSync(cfg,'utf8');fs.writeFileSync(cfg,original.replace("'max_category_depth' => 1","'max_category_depth' => 2"));r=await request('index.php');assert.equal(r.status,503);fs.writeFileSync(cfg,original);pass('server temporarily enforces exactly one category level');
@@ -188,8 +199,8 @@ try{
  pass('private OPDS challenges anonymous, wrong-password and upload-token requests and authenticates all catalog routes');
  async function externalUpload(name,token){
   const data=new FormData();data.append('directory','books');data.append('files[]',new File(['external upload'],name));
-  const encoded=new Request(externalUrl+'up.php',{method:'POST',body:data});
-  return request('../external-site/up.php',{method:'POST',body:Buffer.from(await encoded.arrayBuffer()),headers:{'content-type':encoded.headers.get('content-type'),authorization:'Bearer '+token}});
+  const encoded=new Request(externalUrl+'api.php',{method:'POST',body:data});
+  return request('../external-site/api.php',{method:'POST',body:Buffer.from(await encoded.arrayBuffer()),headers:{'content-type':encoded.headers.get('content-type'),authorization:'Bearer '+token}});
  }
  r=await externalUpload('external.txt',externalToken);assert.equal(r.status,200,r.text);assert(fs.existsSync(path.join(privateRoot,'books/books/external.txt')));pass('Bearer uploads use the external book directory');
  r=await request('../external-site/index.php?feed=books',readingAuth);assert.equal(r.status,200,r.text);assert(r.text.includes('kept.txt'));assert(r.text.includes('external.txt'));assert(r.text.includes('loose.txt'));assert(!r.text.includes(privateRoot));pass('catalog indexing works with separate storage without exposing its physical path');
@@ -197,7 +208,7 @@ try{
  r=await request('../external-site/index.php?download=loose.txt',readingAuth);assert.equal(r.text,'existing loose book');pass('existing books directly in the private book directory are indexed and downloadable');
  r=await request('../external-site/paths.php');assert.equal(r.status,200);assert.equal(r.text,'');r=await request('../opds-data/conf/pass.conf');assert.equal(r.status,404);pass('paths.php exposes no output and private configuration is not web-addressable');
  r=await request('../external-site/up.php');let externalCsrf=csrf(r);r=await request('../external-site/up.php',form({action:'login',csrf:externalCsrf,password:'test-password-123'}));assert.equal(r.status,303);
- r=await request('../external-site/up.php');externalCsrf=csrf(r);assert(r.text.includes(externalUrl+'up.php'));assert(!r.text.includes(privateRoot));
+ r=await request('../external-site/up.php');externalCsrf=csrf(r);assert(r.text.includes(externalUrl+'api.php'));assert(!r.text.includes(privateRoot));
  const tokenVersion=r.text.match(/name="token_version" value="([a-f0-9]+)"/)[1];
  r=await request('../external-site/up.php',form({action:'reset_token',csrf:externalCsrf,token_version:tokenVersion}));assert.equal(r.status,303);
  const rotatedPrivateConfig=fs.readFileSync(path.join(privateRoot,'conf/pass.conf'),'utf8');const rotatedExternalToken=rotatedPrivateConfig.match(/api_token=([a-f0-9]{64})/)[1];assert.notEqual(rotatedExternalToken,externalToken);
@@ -247,6 +258,7 @@ try{
    for(const locale of ['en-US','zh-CN']){
     const context=await browser.newContext({locale,ignoreHTTPSErrors:true,viewport:{width:390,height:844},permissions:['clipboard-read','clipboard-write']});
     const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+    await page.setExtraHTTPHeaders({authorization:basicHeader});
     await page.goto(base+'up.php');await page.locator('input[name=password]').fill('test-password-123');
     await page.locator('button[type=submit]').click();await page.locator('#apiSettingsButton').waitFor();
     assert.equal(await page.locator('html').getAttribute('lang'),locale==='zh-CN'?'zh-CN':'en');
@@ -254,7 +266,7 @@ try{
     assert.equal(await page.locator('h2').textContent(),locale==='zh-CN'?'上传电子书':'Upload books');
     await page.locator('#apiSettingsButton').click();await page.locator('#copyToken').click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),token);
     assert((await page.locator('#copyToken').textContent()).startsWith('✓ '));
-    assert((await page.locator('#curlCommand').textContent()).includes(base+'up.php'));
+    assert((await page.locator('#curlCommand').textContent()).includes(base+'api.php'));
     assert(!(await page.locator('#skillPanel').isVisible()));
     await page.locator('#generateSkill').click();assert(await page.locator('#skillPanel').isVisible());
     assert.equal(await page.locator('#generateSkill').getAttribute('aria-expanded'),'true');
@@ -267,7 +279,7 @@ try{
     await page.locator('#apiDirectory').selectOption(shellCategory);assert(!(await page.locator('#copySkill').textContent()).startsWith('✓ '));
     const skill=await page.locator('#skillContent').textContent();assert(skill.startsWith('---\nname: personal-opds-upload\n'));
     const skillSettings=JSON.parse(skill.match(/```json\n([\s\S]*?)\n```/)[1]);
-    assert.equal(skillSettings.upload_url,base+'up.php');assert.equal(skillSettings.catalog_url,base+'index.php');assert.equal(skillSettings.default_category,shellCategory);assert(skillSettings.available_categories.includes('中文'));assert(skill.includes(token));
+    assert.equal(skillSettings.upload_url,base+'api.php');assert.equal(skillSettings.catalog_url,base+'index.php');assert.equal(skillSettings.default_category,shellCategory);assert(skillSettings.available_categories.includes('中文'));assert(skill.includes(token));
     await page.locator('#copySkill').click();await page.waitForFunction(()=>document.getElementById('copySkill').classList.contains('copied'));assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),skill);
     assert((await page.locator('#copySkill').textContent()).startsWith('✓ '));
     assert(await page.evaluate(()=>document.getElementById('apiDialog').scrollWidth<=document.getElementById('apiDialog').clientWidth));
@@ -292,6 +304,7 @@ try{
     await page.locator('#fileInput').setInputFiles([{name:'ui-'+locale+'.txt',mimeType:'text/plain',buffer:Buffer.from('from browser')}]);
     await page.locator('#uploadButton').click();await page.waitForFunction(()=>document.getElementById('uploadButton').disabled && !document.getElementById('fileInput').disabled);
     assert((await page.locator('#batchStatus').textContent()).includes(locale==='zh-CN'?'已保存 1':'saved 1'));
+    await page.setExtraHTTPHeaders({});
     assert.deepEqual(errors,[]);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,locale+'.png'),fullPage:true});}
     const wizardName='wizard-'+locale;const wizard=path.join(web,wizardName);fs.mkdirSync(wizard);fs.copyFileSync(path.join(project,'install.php'),path.join(wizard,'install.php'));
@@ -362,13 +375,13 @@ try{
     assert(fs.existsSync(path.join(splitData,'conf/pass.conf')));assert(!fs.existsSync(path.join(splitApp,'conf')));
     assert(fs.readFileSync(path.join(splitData,'conf/pass.conf'),'utf8').includes('opds_user=reader\nopds_pwd=p\n'));
     await page.goto(splitUrl+'up.php');await page.locator('input[name=password]').fill('split-browser-password');await page.locator('button[type=submit]').click();await page.locator('#apiSettingsButton').waitFor();
-    await page.locator('#apiSettingsButton').click();assert((await page.locator('#curlCommand').textContent()).includes(splitUrl+'up.php'));
+    await page.locator('#apiSettingsButton').click();assert((await page.locator('#curlCommand').textContent()).includes(splitUrl+'api.php'));
     const previousToken=await page.locator('#apiToken').inputValue();
     await page.locator('#generateSkill').click();assert((await page.locator('#skillContent').textContent()).includes(previousToken));
     await page.locator('#resetTokenForm summary').click();page.once('dialog',dialog=>dialog.accept());
     await Promise.all([page.waitForNavigation(),page.locator('#resetTokenButton').click()]);
     const nextToken=await page.locator('#apiToken').inputValue();assert.notEqual(nextToken,previousToken);assert(!(await page.locator('#skillPanel').isVisible()));
-    await page.locator('#generateSkill').click();const refreshedSkill=await page.locator('#skillContent').textContent();assert(refreshedSkill.includes(nextToken));assert(!refreshedSkill.includes(previousToken));assert(refreshedSkill.includes(splitUrl+'up.php'));
+    await page.locator('#generateSkill').click();const refreshedSkill=await page.locator('#skillContent').textContent();assert(refreshedSkill.includes(nextToken));assert(!refreshedSkill.includes(previousToken));assert(refreshedSkill.includes(splitUrl+'api.php'));
     assert.deepEqual(errors,[]);protect=true;pass('real browser: '+locale+' installs separate storage and signs in through the original web URL');
     await context.close();pass('real browser: '+locale+' adaptive UI, API dialog, clipboard, and live upload');
    }
