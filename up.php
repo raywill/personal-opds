@@ -1,825 +1,304 @@
 <?php
 declare(strict_types=1);
+require __DIR__.'/bootstrap.php';
+require __DIR__.'/security.php';
+require __DIR__.'/upload-common.php';
+require __DIR__.'/accounts.php';
+require __DIR__.'/catalogue.php';
 
-/* PHP 8.1 syntax; deploy on a currently supported, patched PHP release.
- * Required extensions: session, zip, SimpleXML, libxml.
- * See README.md for the required private configuration directory and PHP limits.
- */
-require __DIR__ . '/bootstrap.php';
-require __DIR__ . '/security.php';
-require __DIR__ . '/upload-common.php';
-
-ini_set('display_errors', '0');
-ini_set('log_errors', '1');
-ini_set('session.use_strict_mode', '1');
-ini_set('session.use_only_cookies', '1');
-ini_set('session.use_trans_sid', '0');
-umask(0077);
-
-$nonce = base64_encode(random_bytes(24));
+header('Cache-Control: private, no-store');
 header('X-Content-Type-Options: nosniff');
-header('X-Frame-Options: DENY');
 header('Referrer-Policy: no-referrer');
-header('Cache-Control: no-store');
-header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; style-src 'nonce-$nonce'; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'");
-header('Content-Type: text/html; charset=UTF-8');
-
-
-function startBrowserSession(): void
-{
-    session_name('OPDS_UPLOAD_SESSION');
-    session_set_cookie_params([
-        'lifetime' => 0, 'path' => COOKIE_PATH, 'secure' => true,
-        'httponly' => true, 'samesite' => 'Strict',
-    ]);
-    if (!session_start()) {
-        throw new RuntimeException('Session service unavailable.');
-    }
+$nonce=base64_encode(random_bytes(18));
+header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$nonce'; script-src 'nonce-$nonce'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+try { requireUploadHttps(); } catch (RequestError $e) { http_response_code($e->getCode()); exit($e->getMessage()); }
+ini_set('session.use_strict_mode','1');
+session_name('OPDS_LIBRARY');
+session_set_cookie_params(['path'=>COOKIE_PATH,'secure'=>true,'httponly'=>true,'samesite'=>'Strict']);
+session_start();
+$_SESSION['csrf']??=bin2hex(random_bytes(32));
+function h(string $value): string { return htmlspecialchars($value,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }
+function field(string $key,array $source): string {
+    $v=$source[$key]??'';
+    if (!is_string($v)||strlen($v)>2048) reject('Invalid input.');
+    return $v;
 }
-
-function h(string $value): string
-{
-    return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
-
-function redirectSelf(): never
-{
-    header('Location: up.php', true, 303);
+function go(string $dir=''): never {
+    header('Location: '.BASE_URL.'up.php'.($dir===''?'':'?'.http_build_query(['dir'=>$dir],'','&',PHP_QUERY_RFC3986)),true,303);
     exit;
 }
-
-function csrfToken(): string
-{
-    if (!isset($_SESSION['csrf']) || !is_string($_SESSION['csrf'])) {
-        $_SESSION['csrf'] = bin2hex(random_bytes(32));
-    }
-    return $_SESSION['csrf'];
+function managementDownload(string $dir,string $name): never {
+    $path=managedBook($dir,$name);
+    $f=fopen($path,'rb'); if (!$f) reject('Book not found.',404);
+    $stat=fstat($f);
+    if (!$stat) { fclose($f); reject('Book not found.',404); }
+    header('Content-Type: application/octet-stream');
+    header("Content-Disposition: attachment; filename*=UTF-8''".rawurlencode($name));
+    header('Content-Length: '.$stat['size']);
+    session_write_close();
+    if ($_SERVER['REQUEST_METHOD']!=='HEAD') fpassthru($f);
+    fclose($f); exit;
 }
-
-function verifyCsrf(): void
-{
-    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? $_POST['csrf'] ?? '';
-    if (!is_string($token) || !isset($_SESSION['csrf'])
-        || !is_string($_SESSION['csrf']) || !hash_equals($_SESSION['csrf'], $token)) {
-        reject(tr('Invalid request token. Refresh the page.'), 403);
-    }
-}
-
-function verifyPassword(string $password, string $configured): bool
-{
-    if (strlen($password) > 1024 || str_contains($password, "\0")) {
-        return false;
-    }
-    $info = password_get_info($configured);
-    if (($info['algoName'] ?? 'unknown') !== 'unknown') {
-        return ($info['algoName'] !== 'bcrypt' || strlen($password) <= 72)
-            && password_verify($password, $configured);
-    }
-    // Compatibility with the supplied password=plaintext configuration.
-    return hash_equals(hash('sha256', $configured), hash('sha256', $password));
-}
-
-function resetApiToken(string $expectedTokenVersion, string $sessionCredential): void
-{
-    $lock = openPrivateState(CONFIG_LOCK_FILE);
-    $temp = null;
-    try {
-        if (!flock($lock, LOCK_EX)) {
-            throw new RuntimeException('Cannot lock credentials for update.');
-        }
-        $config = readCredentialsUnlocked();
-        if (!hash_equals(hash('sha256', $config['password']), $sessionCredential)) {
-            reject(tr('The password changed. Sign in again.'), 401);
-        }
-        if (!hash_equals(hash('sha256', $config['api_token']), $expectedTokenVersion)) {
-            reject(tr('Another request updated the token. Refresh the page.'), 409);
-        }
-        $config['api_token'] = bin2hex(random_bytes(32));
-        $encoded = '';
-        foreach ($config as $key => $value) {
-            $encoded .= $key . '=' . $value . "\n";
-        }
-        $temp = CONFIG_DIR . '/.pass-' . bin2hex(random_bytes(16)) . '.tmp';
-        $handle = fopen($temp, 'x+b');
-        if ($handle === false) {
-            throw new RuntimeException('Cannot create replacement credentials.');
-        }
-        try {
-            if (!chmod($temp, 0600)) {
-                throw new RuntimeException('Cannot protect replacement credentials.');
-            }
-            writeAll($handle, $encoded);
-            if (!fflush($handle) || !fsync($handle)) {
-                throw new RuntimeException('Cannot sync replacement credentials.');
-            }
-        } finally {
-            fclose($handle);
-        }
-        if (!rename($temp, PASSWORD_FILE)) {
-            throw new RuntimeException('Cannot atomically replace pass.conf.');
-        }
-        $temp = null;
-        clearstatcache(true, PASSWORD_FILE);
-    } finally {
-        if ($temp !== null) {
-            @unlink($temp);
-        }
-        flock($lock, LOCK_UN);
-        fclose($lock);
-    }
-}
-
-function publicUploadUrl(): string
-{
-    if (PUBLIC_UPLOAD_URL === '') {
-        return '';
-    }
-    $parts = parse_url(PUBLIC_UPLOAD_URL);
-    if ($parts === false || !filter_var(PUBLIC_UPLOAD_URL, FILTER_VALIDATE_URL)
-        || ($parts['scheme'] ?? '') !== 'https' || empty($parts['host'])
-        || isset($parts['user']) || isset($parts['pass'])
-        || isset($parts['query']) || isset($parts['fragment'])
-        || preg_match('/[\x00-\x20\x7F]/', PUBLIC_UPLOAD_URL)) {
-        throw new RuntimeException('PUBLIC_UPLOAD_URL must be an HTTPS URL without credentials, query or fragment.');
-    }
-    return PUBLIC_UPLOAD_URL;
-}
-
-function shellQuote(string $value): string
-{
-    return "'" . str_replace("'", "'\"'\"'", $value) . "'";
-}
-
-function curlCommand(string $apiToken, string $directory, string $url): string
-{
-    return 'export OPDS_TOKEN=' . shellQuote($apiToken) . "\n\n"
-        . "curl --fail-with-body --show-error --progress-bar \\\n"
-        . '  -H "Authorization: Bearer $OPDS_TOKEN" ' . "\\\n"
-        . '  --form-string ' . shellQuote('directory=' . $directory) . " \\\n"
-        . "  -F 'files[]=@./article.epub' \\\n"
-        . '  -- ' . shellQuote($url);
-}
-
-$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-// A browser may include its cached catalogue Basic header here.
-// Web uploads authenticate through the uploader session and CSRF token.
-$browserUpload = ($_GET['action'] ?? null) === 'upload';
-$error = '';
-$messages = [];
-$directories = [];
-$authenticated = false;
-$token = '';
-$apiToken = '';
-$uploadUrl = '';
-$notice = '';
+$method=$_SERVER['REQUEST_METHOD'];
+$viewer=(string)($_SESSION['account']??'');
+$user=activeAccount($viewer);
+$now=time();
+if (!$user || !hash_equals($user['password'],$_SESSION['password']??'') ||
+    $now-($_SESSION['activity']??0)>SESSION_IDLE_TTL || $now-($_SESSION['issued']??0)>SESSION_ABSOLUTE_TTL) {
+    $viewer=''; $user=null;
+    unset($_SESSION['account'],$_SESSION['password'],$_SESSION['activity'],$_SESSION['issued']);
+} else { $_SESSION['activity']=$now; setAccountScope($viewer); }
+$error=''; $notice=''; $token=''; $dir=''; $activate=''; $activateFor=''; $preview=false;
+$action=is_string($_POST['action']??null)?$_POST['action']:'';
 try {
-    requireUploadHttps();
-    if (!in_array($method, ['GET', 'POST'], true)) {
-        header('Allow: GET, POST');
-        reject(tr('Unsupported request method.'), 405);
-    }
-    if ($browserUpload && $method !== 'POST') {
-        header('Allow: POST');
-        reject(tr('The upload endpoint only accepts POST.'), 405);
-    }
-    startBrowserSession();
-    $token = csrfToken();
-    if ($method === 'POST' && empty($_POST) && empty($_FILES)) {
-        reject(tr('The request is empty or exceeds post_max_size / client_max_body_size.'), 413);
-    }
-    $action = $browserUpload ? 'upload' : ($_POST['action'] ?? '');
-    if (!is_string($action)) {
-        reject(tr('Invalid request action.'));
-    }
-    if ($method === 'POST' && $action === 'logout') {
-        verifyCsrf();
-        $_SESSION = [];
-        setcookie(session_name(), '', [
-            'expires' => time() - 42000, 'path' => COOKIE_PATH,
-            'secure' => true, 'httponly' => true, 'samesite' => 'Strict',
-        ]);
-        session_destroy();
-        redirectSelf();
-    }
-    if ($method === 'POST' && $action === 'login') {
-        verifyCsrf();
-        reserveRateAttempt('login', LOGIN_IP_LIMIT, LOGIN_GLOBAL_LIMIT);
-        $config = readCredentials();
-        $password = $_POST['password'] ?? '';
-        if (!is_string($password) || !verifyPassword($password, $config['password'])) {
-            reject(tr('Incorrect password.'), 401);
+    if (!in_array($method,['GET','HEAD','POST'],true)) reject('Method not allowed.',405);
+    $activate=field('activate',$_GET); $activateFor=field('account',$_GET);
+    $dir=field('dir',$_GET);
+    if ($method==='POST') {
+        if ($action==='upload') { requireMultipart(); unset($_POST['dir']); }
+        if (!hash_equals($_SESSION['csrf'],field('csrf',$_POST))) reject(tr('Session changed; reload the page.'),403);
+        if ($action==='activate') {
+            $activate=field('activate',$_POST); $activateFor=field('account',$_POST);
+            reserveRateAttempt('activate',12,180);
+            $password=field('password',$_POST);
+            if ($password!==field('confirm',$_POST)) reject(tr('Passwords do not match.'));
+            activateAccount($activateFor,$activate,$password);
+            $_SESSION=[]; session_regenerate_id(true);
+            $_SESSION['notice']=tr('Password set. Sign in with your new password.');
+            go();
         }
-        if (!session_regenerate_id(true)) {
-            throw new RuntimeException('Cannot regenerate session ID.');
+        if ($action==='login') {
+            $name=trim(field('username',$_POST)); $password=field('password',$_POST);
+            reserveRateAttempt('login',LOGIN_IP_LIMIT,LOGIN_GLOBAL_LIMIT);
+            $verified=loginAccount($name,$password);
+            if (!$verified) reject(tr('Incorrect username or password, or account not activated.'),401);
+            session_regenerate_id(true);
+            $_SESSION=['csrf'=>bin2hex(random_bytes(32)),'account'=>$name,'password'=>$verified['password'],'activity'=>$now,'issued'=>$now];
+            go();
         }
-        $_SESSION = [
-            'authenticated' => true, 'issued_at' => time(), 'last_seen' => time(),
-            'credential' => hash('sha256', $config['password']), 'csrf' => bin2hex(random_bytes(32)),
-        ];
-        redirectSelf();
-    }
-    if (($_SESSION['authenticated'] ?? false) === true) {
-        $now = time();
-        $issued = $_SESSION['issued_at'] ?? 0;
-        $seen = $_SESSION['last_seen'] ?? 0;
-        $credential = $_SESSION['credential'] ?? '';
-        $authenticated = is_int($issued) && is_int($seen) && is_string($credential)
-            && $now - $issued < SESSION_ABSOLUTE_TTL && $now - $seen < SESSION_IDLE_TTL
-            && hash_equals(hash('sha256', readCredentials()['password']), $credential);
-        if ($authenticated) {
-            $_SESSION['last_seen'] = $now;
-        } else {
-            $_SESSION = [];
-            $token = csrfToken();
+        if (!$user) reject(tr('Sign in again.'),401);
+        if ($action==='logout') { $_SESSION=[]; session_regenerate_id(true); go(); }
+        if ($action==='upload') {
+            session_write_close();
+            uploadJsonResponse(processUpload(singleFile:true,bearer:false));
+        }
+        $dir=field('dir',$_POST);
+        resolveDestinationDirectory($dir);
+        switch ($action) {
+            case 'folder':
+                $new=field('folder',$_POST); createCategory($new);
+                $_SESSION['notice']=tr('Folder ready.'); go($new);
+            case 'share':
+            case 'revoke':
+                manageShare($dir,$action==='revoke');
+                $_SESSION['notice']=$action==='revoke'?tr('Share revoked.'):tr('Share link ready.'); go($dir);
+            case 'move':
+            case 'delete':
+                manageBook($action,$dir,field('file',$_POST),field('destination',$_POST));
+                $_SESSION['notice']=$action==='move'?tr('Book moved.'):tr('Book deleted.'); go($dir);
+            case 'token':
+                $token=rotateUploadToken($viewer,$user['password']);
+                break;
+            default: reject('Unknown action.');
         }
     }
-    if ($method === 'POST' && $action === 'reset_token') {
-        if (!$authenticated) {
-            reject(tr('Sign in again before resetting the token.'), 401);
+    if ($user && $activate==='') {
+        resolveDestinationDirectory($dir);
+        if (($_GET['skill']??'')==='1') {
+            $downloadSkill=true;
         }
-        verifyCsrf();
-        $version = $_POST['token_version'] ?? '';
-        if (!is_string($version) || preg_match('/\A[a-f0-9]{64}\z/D', $version) !== 1) {
-            reject(tr('Invalid token version. Refresh the page.'));
-        }
-        reserveRateAttempt('reset-token', 10, 30);
-        resetApiToken($version, $_SESSION['credential']);
-        $_SESSION['notice'] = tr('API token reset. The old token is invalid. Generate a new SKILL.md for your agent.');
-        redirectSelf();
-    } elseif ($method === 'POST' && $action === 'upload') {
-        if (!$authenticated) {
-            reject(tr('Your login expired. Refresh the page and sign in again.'), 401);
-        }
-        verifyCsrf();
-        session_write_close(); // no session lock during validation and disk I/O
-        $messages = processUpload(singleFile: $browserUpload, bearer: false);
-        if ($browserUpload) {
-            uploadJsonResponse($messages);
-        }
-    } elseif ($method === 'POST') {
-        reject(tr('Unknown action.'));
-    }
-    if ($authenticated) {
-        $directories = getDirectories();
-        $apiToken = readCredentials()['api_token'];
-        $uploadUrl = publicUploadUrl();
-        $notice = is_string($_SESSION['notice'] ?? null) ? $_SESSION['notice'] : '';
-        unset($_SESSION['notice']);
+        if (isset($_GET['download'])) managementDownload($dir,field('download',$_GET));
+        $preview=($_GET['preview']??'')==='1'&&$dir!=='';
     }
 } catch (Throwable $e) {
-    $status = $e instanceof RequestError ? $e->getCode() : 500;
-    $error = publicError($e);
-    if ($browserUpload) {
-        jsonResponse(['success' => false, 'message' => $error, 'results' => []], $status);
-    }
+    $status=$e instanceof RequestError?$e->getCode():500;
+    if ($action==='upload') jsonResponse(['success'=>false,'message'=>publicError($e),'results'=>[]],$status);
     http_response_code($status);
+    $error=publicError($e);
+    if ($user) { try { resolveDestinationDirectory($dir); } catch (Throwable) { $dir=''; } }
 }
-if (session_status() === PHP_SESSION_ACTIVE) {
-    session_write_close();
+$notice=$_SESSION['notice']??''; unset($_SESSION['notice']);
+$csrf=$_SESSION['csrf'];
+session_write_close();
+$directories=$user?array_map('strval',array_keys(libraryDirectories())):[];
+$mine=[];
+if ($user) foreach (stateRead('shares') as $id=>$row) {
+    if ($row['owner']===$viewer) $mine[$row['category']]=['id'=>(string)$id]+$row;
+}
+function ownerShareStatus(array $share): string {
+    try { $id=categoryIdentity(resolveDestinationDirectory($share['category'])); }
+    catch (RequestError) { return 'Unavailable'; }
+    return $id===$share['identity']?shareStatus($share):'Unavailable';
+}
+function libraryHref(string $dir,array $extra=[]): string {
+    return 'up.php?'.http_build_query(['dir'=>$dir]+$extra,'','&',PHP_QUERY_RFC3986);
+}
+function hidden(string $csrf,string $action,string $dir=''): void {
+    echo '<input type="hidden" name="csrf" value="'.h($csrf).'"><input type="hidden" name="action" value="'.h($action).'"><input type="hidden" name="dir" value="'.h($dir).'">';
+}
+$skill=<<<'SKILL'
+---
+name: personal-opds-upload
+description: Upload EPUB and TXT to the authenticated user's personal OPDS library.
+---
+
+Use the configured OPDS_TOKEN environment variable. Do not print or store it in the skill.
+Upload to the HTTPS URL below using multipart files[]. Omit directory for the library root.
+For a subdirectory, add --form-string 'directory=Reading notes'; a valid missing folder is created.
+Only one level is supported. Inspect success, results, and already_exists. Identical retries succeed
+without replacing files; a conflicting file with different contents is never overwritten.
+For partial success retry only failed files. For a network interruption, retry the identical file.
+Limits: 20 files per API request, 100 MiB per file, 200 MiB combined, subject to user quotas.
+
+    curl --fail-with-body --show-error -H "Authorization: Bearer $OPDS_TOKEN" \
+      -F 'files[]=@./article.epub' -- '__OPDS_UPLOAD_URL__'
+
+SKILL;
+$skill=str_replace("__OPDS_UPLOAD_URL__",str_replace("'","'\"'\"'",PUBLIC_UPLOAD_URL),$skill);
+if (!empty($downloadSkill)) {
+    header('Content-Type: text/markdown; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="SKILL.md"');
+    echo $skill; exit;
+}
+function shareBadge(string $status): string {
+    return match($status) { 'Expiring soon'=>'badge pill-warn','Expired','Revoked','Unavailable','Not shared'=>'badge pill-off',default=>'badge' };
+}
+function fileSizeLabel(int $size): string {
+    return $size>=1048576?number_format($size/1048576,1).' MiB':($size>=1024?number_format($size/1024,1).' KiB':$size.' B');
 }
 ?>
-<!DOCTYPE html>
-<html lang="<?=uiLanguage() === 'zh' ? 'zh-CN' : 'en'?>">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title><?=tr_html('Book uploader')?></title>
-<style nonce="<?= h($nonce) ?>">
-* { box-sizing: border-box; }
-[hidden] { display: none !important; }
-body { margin: 0; padding: 40px 16px; background: #f5f6f8; color: #222; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.container { max-width: 660px; margin: auto; background: #fff; padding: 30px; border-radius: 14px; box-shadow: 0 4px 20px #0000000f; }
-h2 { margin-top: 0; font-size: 23px; }
-input, select, button { width: 100%; padding: 13px; margin: 10px 0; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; }
-button { background: #222; color: #fff; border: 0; cursor: pointer; }
-button:hover { background: #444; }
-button:disabled { opacity: .5; cursor: default; }
-label { display: block; margin-top: 20px; font-weight: 600; }
-.dropzone { margin: 20px 0; padding: 30px 20px; text-align: center; border: 2px dashed #bbb; border-radius: 12px; background: #fafafa; cursor: pointer; }
-.dropzone.dragover { border-color: #333; background: #eee; }
-.dropzone[aria-disabled="true"] { opacity: .6; cursor: default; }
-.note { color: #666; font-size: 13px; line-height: 1.7; }
-.error, .messages { padding: 12px; margin: 12px 0; border-radius: 8px; overflow-wrap: anywhere; }
-.error { background: #ffecec; color: #a00; }
-.messages { background: #f5f7f5; line-height: 1.8; }
-.success { color: #16803c; }
-.failure { color: #c22; }
-.toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 24px; }
-.toolbar form { margin: 0; }
-.toolbar button { width: auto; padding: 7px 12px; margin: 0; background: transparent; color: #555; border: 1px solid #ddd; font-size: 13px; }
-.toolbar button:hover { background: #f5f6f8; }
-.file-row { padding: 12px 0; border-bottom: 1px solid #eee; overflow-wrap: anywhere; font-size: 14px; }
-.file-state { display: block; margin: 5px 0; font-size: 13px; }
-progress { display: block; width: 100%; height: 14px; accent-color: #16803c; }
-#overall { margin: 20px 0; }
-#stopButton { background: #eee; color: #333; }
-.api-panel { margin: 0; }
-.api-panel h3 { margin: 0 0 12px; }
-.api-panel pre { padding: 16px; background: #f5f6f8; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
-.api-panel code, #apiToken { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-.api-panel .secondary { background: #eee; color: #333; }
-.api-panel .danger { background: #a52828; }
-.api-panel button { transition: background-color .15s, color .15s; }
-.api-panel button.copied { background: #e7f5ec; color: #16803c; }
-.skill-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; }
-.skill-heading h4 { margin: 0; }
-#skillHeading { scroll-margin-top: 100px; }
-.skill-heading button { width: auto; margin: 0; flex-shrink: 0; }
-#skillContent { display: block; max-height: 360px; overflow: auto; }
-@media (prefers-reduced-motion: reduce) { .api-panel button { transition: none; } }
-.api-panel summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
-#apiToken { font-size: 13px; }
-#apiDialog { width: min(760px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; padding: 24px; border: 0; border-radius: 14px; color: #222; box-shadow: 0 12px 60px #0003; }
-#apiDialog::backdrop { background: #14181e80; }
-.dialog-heading { position: sticky; top: -24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; background: #fff; z-index: 1; }
-.dialog-heading h3 { margin: 0; font-size: 18px; }
-.dialog-heading button { width: auto; padding: 7px 12px; margin: 0; background: #eee; color: #333; font-size: 13px; flex-shrink: 0; }
-</style>
-</head>
-<body>
-<main class="container">
-<?php if (!$authenticated): ?>
-    <h2>EPUB Library</h2>
-    <p><?=tr_html('Enter your upload password.')?></p>
-    <?php if ($error !== ''): ?><div class="error" role="alert"><?= h($error) ?></div><?php endif; ?>
-    <form method="post" action="up.php">
-        <input type="hidden" name="action" value="login">
-        <input type="hidden" name="csrf" value="<?= h($token) ?>">
-        <input type="password" name="password" aria-label="<?=tr_html('Upload password')?>" placeholder="Password" required autofocus autocomplete="current-password">
-        <button type="submit"><?=tr_html('Sign in')?></button>
-    </form>
-<?php else: ?>
-    <div class="toolbar">
-        <?php if ($apiToken !== ''): ?>
-            <button type="button" id="apiSettingsButton" aria-haspopup="dialog" aria-controls="apiDialog"><?=tr_html('CLI / API')?></button>
-        <?php endif; ?>
-        <form method="post" action="up.php" id="logoutForm">
-            <input type="hidden" name="action" value="logout">
-            <input type="hidden" name="csrf" value="<?= h($token) ?>">
-            <button type="submit" id="logoutButton"><?=tr_html('Sign out')?></button>
-        </form>
-    </div>
-    <h2><?=tr_html('Upload books')?></h2>
-    <?php if ($error !== ''): ?><div class="error" role="alert"><?= h($error) ?></div><?php endif; ?>
-    <?php if ($messages): ?>
-        <div class="messages">
-        <?php foreach ($messages as $message): ?>
-            <div class="<?= $message['success'] ? 'success' : 'failure' ?>"><?= h($message['text']) ?></div>
-        <?php endforeach; ?>
-        </div>
-    <?php endif; ?>
-    <?php if (!$directories): ?>
-        <div class="error"><?=tr_html('No writable categories found. Check directory permissions.')?></div>
-    <?php else: ?>
-    <form method="post" action="up.php" enctype="multipart/form-data" id="uploadForm">
-        <input type="hidden" name="action" value="upload">
-        <input type="hidden" name="csrf" value="<?= h($token) ?>">
-        <label for="directory"><?=tr_html('Destination category')?></label>
-        <select name="directory" id="directory" required>
-        <?php foreach ($directories as $name): ?>
-            <option value="<?= h($name) ?>"<?= $name === 'books' ? ' selected' : '' ?>><?= h($name) ?></option>
-        <?php endforeach; ?>
-        </select>
-        <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-controls="fileInput" hidden>
-            <strong><?=tr_html('Drop files here')?></strong>
-            <p><?=tr_html('or click to choose files')?></p>
-        </div>
-        <p class="note"><?=tr_html('EPUB and TXT only. Up to 100 MiB per file, 20 files and 200 MiB per batch.')?></p>
-        <input type="file" id="fileInput" name="files[]" aria-label="<?=tr_html('Choose books')?>" accept=".epub,.txt" multiple required>
-        <div id="clientError" class="error" role="alert" hidden></div>
-        <div id="fileList"></div>
-        <div id="overall" hidden>
-            <label for="totalProgress"><?=tr_html('Overall transfer progress')?></label>
-            <progress id="totalProgress" max="100" value="0"></progress>
-            <p id="transferStatus" class="note"></p>
-            <p id="batchStatus" role="status" aria-live="polite"></p>
-        </div>
-        <button type="submit" id="uploadButton"><?=tr_html('Start upload')?></button>
-        <button type="button" id="stopButton" hidden><?=tr_html('Stop after this file')?></button>
-        <noscript><p class="note"><?=tr_html('Using a standard form. Enable JavaScript for live progress.')?></p></noscript>
-    </form>
-    <?php endif; ?>
-    <?php if ($apiToken !== ''): ?>
-    <dialog id="apiDialog" aria-labelledby="apiHeading">
-        <div class="dialog-heading">
-            <h3 id="apiHeading"><?=tr_html('Command-line upload / Agent')?></h3>
-            <button type="button" id="closeApiDialog" autofocus><?=tr_html('Close')?></button>
-        </div>
-    <section class="api-panel" aria-labelledby="apiHeading">
-        <?php if ($notice !== ''): ?><div class="messages success" role="status"><?= h($notice) ?></div><?php endif; ?>
-        <p class="note"><?=tr_html('Your agent uploads over HTTPS from its own environment. No SSH, browser login, or cookies are needed. This command contains your current token. Update the local file path before running it.')?></p>
-        <label for="apiToken"><?=tr_html('Current API token')?></label>
-        <input type="text" id="apiToken" value="<?= h($apiToken) ?>" readonly autocomplete="off" spellcheck="false">
-        <button type="button" id="copyToken" class="secondary"><?=tr_html('Copy token')?></button>
-        <form method="post" action="up.php" id="resetTokenForm">
-            <input type="hidden" name="action" value="reset_token">
-            <input type="hidden" name="csrf" value="<?= h($token) ?>">
-            <input type="hidden" name="token_version" value="<?= h(hash('sha256', $apiToken)) ?>">
-            <details>
-                <summary><?=tr_html('Reset token')?></summary>
-                <p class="note"><?=tr_html('The old token will become invalid. Update existing scripts. Your password and browser login remain unchanged. Already-authorized uploads may finish.')?></p>
-                <button type="submit" id="resetTokenButton" class="danger"><?=tr_html('Confirm token reset')?></button>
-            </details>
-        </form>
-        <?php if ($uploadUrl === ''): ?>
-            <div class="error"><?=tr_html('Configure the actual HTTPS base URL in conf/config.php to generate a usable command.')?></div>
-        <?php elseif ($directories): ?>
-            <label for="apiDirectory"><?=tr_html('Command destination category')?></label>
-            <select id="apiDirectory">
-            <?php foreach ($directories as $name): ?>
-                <option value="<?= h($name) ?>"<?= $name === 'books' ? ' selected' : '' ?>><?= h($name) ?></option>
-            <?php endforeach; ?>
-            </select>
-            <details>
-                <summary><?=tr_html('curl command')?></summary>
-                <pre><code id="curlCommand" data-upload-url="<?= h($uploadUrl) ?>"><?= h(curlCommand($apiToken, in_array('books', $directories, true) ? 'books' : $directories[0], $uploadUrl)) ?></code></pre>
-            </details>
-            <button type="button" id="generateSkill" aria-expanded="false" aria-controls="skillPanel"><?=tr_html('Generate SKILL.md')?></button>
-            <section id="skillPanel" hidden aria-labelledby="skillHeading">
-                <div class="skill-heading">
-                    <h4 id="skillHeading" tabindex="-1">SKILL.md</h4>
-                    <button type="button" id="copySkill" class="secondary"><?=tr_html('Copy SKILL.md')?></button>
-                </div>
-                <p class="note"><?=tr_html('Copy this content into personal-opds-upload/SKILL.md for your agent. It includes the current token, selected category, endpoint, and upload instructions. The skill is written in English.')?></p>
-                <pre id="skillContent" tabindex="0"></pre>
-            </section>
-        <?php endif; ?>
-        <p id="copyStatus" class="note" role="status" aria-live="polite"></p>
-        <details>
-            <summary><?=tr_html('HTTP parameters, batch uploads, and responses')?></summary>
-            <p class="note"><?=tr_html('POST to this installation\'s api.php with Authorization: Bearer TOKEN. The multipart form requires directory (a category name) and files[] (files). Tokens are accepted only in the header, never in URLs or form fields.')?></p>
-            <p class="note"><?=tr_html('Requires curl 7.76+. For multiple files, repeat')?> <code>-F 'files[]=@./second.epub'</code><?=tr_html('. Each file is limited to 100 MiB; a request accepts up to 20 files and 200 MiB total. Existing files are never overwritten.')?></p>
-            <p class="note"><?=tr_html('directory uses --form-string so category names are treated as literal text. The server validates filenames and destinations independently of the selection list.')?></p>
-            <pre><code><?=tr_html('{"success":true,"message":"Saved: article.epub","results":[{"name":"article.epub","success":true,"message":"Saved: article.epub","status":200}]}')?></code></pre>
-            <p class="note"><?=tr_html('All saved: HTTP 200. Invalid parameters: 400; invalid token: 401; duplicate: 409; too large: 413; unsupported request type: 415; validation or partial failure: 422; rate/concurrency limit: 429. Internal errors return 5xx. See results for individual files. Partial success is preserved and curl exits with a nonzero status.')?></p>
-            <p class="note"><?=tr_html('After 100% transfer, wait for server validation and saving. Check the library before retrying an interrupted request. This command contains credentials: share it only with agents that need upload access, and keep it out of public logs and repositories.')?></p>
-        </details>
-    </section>
-    </dialog>
-    <?php endif; ?>
-<?php endif; ?>
+<!doctype html><html lang="<?=uiLanguage()==='zh'?'zh-CN':'en'?>"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title><?=h(LIBRARY_TITLE)?> · Personal OPDS</title>
+<style nonce="<?=h($nonce)?>">
+:root{color-scheme:light;--ink:#17292d;--soft:#4d666b;--line:#dbe7e7;--paper:#fff;--bg:#f0f7f6;--accent:#076e64;--mint:#daf4eb;--warn:#9d263a}*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,sans-serif}a{color:var(--accent)}header.top{background:#0c3437;color:#fff;padding:16px max(20px,calc((100vw - 1240px)/2));display:flex;justify-content:space-between;align-items:center;gap:12px}.top strong{display:block;font-size:1.1rem}.top small{color:#9cd8ce;letter-spacing:.12em;text-transform:uppercase}.top form{display:flex;gap:10px;align-items:center}
+main{max-width:1280px;margin:auto;padding:28px 20px 60px}.layout{display:grid;grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:20px}.panel{border:1px solid var(--line);border-radius:19px;background:var(--paper);padding:22px;box-shadow:0 8px 25px #193d3b0a;min-width:0}.side{align-self:start}.side a{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:9px;border-radius:10px;text-decoration:none;overflow-wrap:anywhere}.side a[aria-current]{background:var(--mint);font-weight:720}.auth{max-width:460px;margin:45px auto}.stack>*+*{margin-top:16px}.bar,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar{justify-content:space-between}.muted,small{color:var(--soft)}h1,h2,h3,p{margin:0 0 12px}h1{font-size:clamp(1.65rem,4vw,2.42rem);letter-spacing:-.04em;overflow-wrap:anywhere}h2{font-size:1.13rem}.eyebrow{font-size:.73rem;color:var(--accent);letter-spacing:.14em;font-weight:800;text-transform:uppercase}.badge{font-size:.74rem;background:var(--mint);color:#105c51;border-radius:100px;padding:3px 9px;white-space:nowrap}.status,.error{padding:11px 13px;border-radius:10px;margin-bottom:12px;background:var(--mint)}.error{background:#fae9ed;color:var(--warn)}button,.button{font:inherit;font-size:.9rem;font-weight:680;background:#edf5f4;color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:7px 11px;cursor:pointer;text-decoration:none;display:inline-block}.primary{background:var(--accent);color:white;border-color:var(--accent)}button.danger{color:var(--warn)}button:disabled{opacity:.5}input,select,textarea{max-width:100%;font:inherit;border:1px solid #aec5c6;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin-bottom:10px;font-weight:600}.auth input{width:100%}.book{padding:10px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}.book strong{flex:1}.book form{display:inline-flex;gap:6px;align-items:center}.book select{max-width:180px}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:130px}.upload{border:1px dashed #82b5ad;border-radius:13px;background:#f6fbfa;padding:14px}progress{max-width:120px}.folder-form{margin-top:14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px}.folder-form input{min-width:0;width:100%}.upload h2{margin-bottom:8px}.upload input[type=file]{display:block;width:100%;margin-top:5px}.upload input::file-selector-button{border:0;padding:6px 10px;border-radius:6px;background:var(--mint);color:var(--ink);font:inherit;margin-right:8px}.upload progress{accent-color:var(--accent)}.actions{margin-top:6px}.book .actions{margin-top:0}.pagination{margin-top:12px}.pill-warn{background:#fff1d8;color:#793e00}.pill-off{background:#edf1f3;color:#4d5d68}.code-short{font:700 .9rem ui-monospace,monospace;white-space:nowrap}.dialog-close{margin-left:auto}dialog{width:min(440px,calc(100% - 24px));border:1px solid var(--line);border-radius:16px;padding:22px;color:var(--ink)}dialog::backdrop{background:#0c343783}dialog select{width:100%}summary{cursor:pointer;font-weight:650}
+@media(max-width:680px){main{padding:14px 10px}.layout{grid-template-columns:1fr;gap:10px}.panel{padding:15px}.folders{display:flex;overflow:auto;gap:4px;padding-bottom:4px}.folders a{white-space:nowrap}.folder-form{display:flex;gap:5px}.folder-form input{min-width:0;flex:1}}
+</style></head><body>
+<header class="top"><div><small>Personal OPDS</small><strong><?=h(LIBRARY_TITLE)?></strong></div>
+<?php if ($user): ?><form action="up.php" method="post"><?php hidden($csrf,'logout');?><span><?=h($viewer)?></span><button><?=tr_html('Sign out')?></button></form><?php endif;?></header>
+<main>
+<?php if ($notice!==''): ?><p role="status" class="status"><?=h($notice)?></p><?php endif;?>
+<?php if ($error!==''): ?><p role="alert" class="error"><?=h($error)?></p><?php endif;?>
+<?php if ($activate!=='' || !$user): ?><section class="panel auth">
+<p class="eyebrow"><?=tr_html('Private library')?></p>
+<?php if ($activate!==''): ?><h1><?=tr_html('Set your password')?></h1><p class="muted">Activate <?=h($activateFor)?>. Use the same password in your OPDS reader.</p>
+<form method="post" action="up.php"><?php hidden($csrf,'activate');?><input type="hidden" name="activate" value="<?=h($activate)?>"><input type="hidden" name="account" value="<?=h($activateFor)?>">
+<label><?=tr_html('New password')?><input type="password" name="password" required minlength="12" autocomplete="new-password"></label><label><?=tr_html('Confirm password')?><input type="password" name="confirm" required autocomplete="new-password"></label><button class="primary"><?=tr_html('Set password')?></button></form>
+<?php else: ?><h1><?=tr_html('Your reading room')?></h1><p class="muted"><?=tr_html('Sign in to organize your books and share a shelf.')?></p>
+<form action="up.php" method="post"><?php hidden($csrf,'login');?><label><?=tr_html('Username')?><input name="username" required autocomplete="username" autocapitalize="none"></label><label><?=tr_html('Password')?><input type="password" name="password" required autocomplete="current-password"></label><button class="primary"><?=tr_html('Sign in')?></button></form>
+<?php endif;?></section>
+<?php else:
+$selectedShare=$mine[$dir]??null; $status=$selectedShare?ownerShareStatus($selectedShare):'Not shared';
+$active=in_array($status,['Shared','Expiring soon'],true);
+$files=listBookFiles(resolveDestinationDirectory($dir));
+$statuses=array_map('ownerShareStatus',$mine);
+ksort($files,SORT_NATURAL|SORT_FLAG_CASE);
+$fileCount=count($files);
+$pages=max(1,(int)ceil($fileCount/40));
+$pageParam=$_GET['page']??'1';
+$page=is_string($pageParam)&&preg_match('/\A[0-9]{1,6}\z/D',$pageParam)?max(1,min($pages,(int)$pageParam)):1;
+$pageFiles=array_slice($files,($page-1)*40,40,true);
+$previewBooks=[];
+if ($preview) {
+    $GLOBALS['shareCategory']=$dir;
+    try {
+        $previewBooks=books([$dir=>resolveDestinationDirectory($dir)]);
+        usort($previewBooks,static fn($a,$b)=>strcasecmp($a['title'],$b['title']));
+    } finally { unset($GLOBALS['shareCategory']); }
+}
+?>
+<div class="layout"><aside class="panel side"><h2><?=tr_html('Folders')?></h2><nav class="folders" aria-label="Library folders">
+<?php foreach (['',...$directories] as $item): $row=$mine[$item]??null; ?>
+<a href="<?=h(libraryHref($item))?>" <?=$item===$dir?'aria-current="page"':''?>><?=h($item===''?tr('Library root'):$item)?><?php if ($row): ?><span class="<?=shareBadge($statuses[$item])?>"><?=h(tr($statuses[$item]))?></span><?php endif;?></a>
+<?php endforeach;?></nav>
+<form class="folder-form" method="post" action="up.php"><?php hidden($csrf,'folder',$dir);?><input name="folder" aria-label="<?=tr_html('New folder name')?>" placeholder="<?=tr_html('New folder name')?>" required maxlength="240"><button><?=tr_html('Create')?></button></form>
+</aside><section class="panel stack">
+<div><p class="eyebrow"><?=tr_html('Your library')?></p><div class="bar"><h1><?=h($dir===''?tr('Library root'):$dir)?></h1><a class="button" href="index.php"><?=tr_html('OPDS catalog')?></a></div>
+</div>
+<?php if ($dir!==''): ?>
+<section aria-label="Subscription" class="upload"><div class="bar"><h2><?=tr_html('Subscription share')?></h2><?php if ($selectedShare): ?><small>Expires <?=h(gmdate('Y-m-d',$selectedShare['expires']))?> UTC</small><?php endif;?></div>
+<?php if ($active): $shareId=$selectedShare['id'].'-'.shareCode($selectedShare['id'],$selectedShare['salt']); $shareUrl=publicShareUrl($shareId); ?>
+<p><span class="<?=shareBadge($status)?>"><?=h(tr($status))?></span> <code class="code-short"><?=h($shareId)?></code></p>
+<input class="share-link" id="share-url" readonly value="<?=h($shareUrl)?>" aria-label="<?=tr_html('Subscription URL')?>">
+<?php else: ?><p><span class="<?=shareBadge($status)?>"><?=h(tr($status))?></span></p><?php endif; ?>
+<div class="actions">
+<a class="button" href="<?=h(libraryHref($dir,['preview'=>$preview?'0':'1']))?>"><?=tr_html($preview?'Close preview':'Preview')?></a>
+<?php if ($active): ?><button type="button" id="copy-share"><?=tr_html('Copy URL')?></button><span id="copy-status" role="status"></span><?php endif;?>
+<form action="up.php" method="post" <?=$active?'data-confirm="'.tr_html('Replace this link? The old link stops working immediately.').'"':''?>><?php hidden($csrf,'share',$dir);?><button class="primary"><?=tr_html($active?'Replace link':'Create share')?></button></form>
+<?php if ($active): ?><form action="up.php" method="post" data-confirm="<?=tr_html('Revoke this share? Subscribers will immediately lose access.')?>"><?php hidden($csrf,'revoke',$dir);?><button class="danger"><?=tr_html('Revoke')?></button></form><?php endif;?>
+</div>
+<?php if ($preview): ?><p class="muted">Read-only preview · <?=count($previewBooks)?> titles visible in the subscription</p><ul><?php foreach (array_slice($previewBooks,0,100) as $book): ?><li><?=h($book['title'])?></li><?php endforeach;?></ul><?php endif;?>
+</section>
+<?php endif;?>
+<section class="upload"><h2><?=tr_html('Upload books')?></h2>
+<form id="upload" method="post" enctype="multipart/form-data" action="up.php"><?php hidden($csrf,'upload');?><input type="hidden" name="directory" value="<?=h($dir)?>">
+<label>To <?=h($dir===''?tr('Library root'):$dir)?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
+<button class="primary"><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
+</form><div id="queue" aria-live="polite"></div></section>
+<section id="books-panel"><div class="bar"><h2><?=tr_html('Books')?></h2><small><?=number_format($fileCount)?> <?=tr_html('Books')?></small></div><?php if (!$files): ?><p class="muted"><?=tr_html('No books here yet. Upload an EPUB or TXT to get started.')?></p><?php endif;?>
+<?php foreach ($pageFiles as $name=>$size): ?>
+<div class="book bar"><strong><?=h($name)?> <small><?=h(fileSizeLabel($size))?></small></strong><div class="actions">
+<a class="button" href="<?=h(libraryHref($dir,['download'=>$name]))?>"><?=tr_html('Download')?></a>
+<?php if ($directories): ?><button type="button" data-book-move="<?=h($name)?>"><?=tr_html('Move')?></button><?php endif;?>
+<form action="up.php" method="post" data-confirm="<?=$active?tr_html('Delete this book? Subscribers will no longer be able to download it.'):tr_html('Delete this book?')?>"><?php hidden($csrf,'delete',$dir);?><input type="hidden" name="file" value="<?=h($name)?>"><button class="danger"><?=tr_html('Delete')?></button></form>
+</div></div><?php endforeach;?>
+<?php if ($pages>1): ?><nav class="bar pagination" aria-label="Pagination"><?php if($page>1):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page-1]))?>"><?=tr_html('Previous')?></a><?php endif;?><small><?=$page?> / <?=$pages?></small><?php if($page<$pages):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page+1]))?>"><?=tr_html('Next')?></a><?php endif;?></nav><?php endif;?>
+</section>
+<?php if ($directories): ?><dialog id="move-dialog"><form method="post" action="up.php" data-move="<?=$active?'1':'0'?>"><?php hidden($csrf,'move',$dir);?>
+<div class="bar"><h2><?=tr_html('Move')?></h2><button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button></div><p id="moving-book"></p>
+<input type="hidden" name="file"><label><?=tr_html('Move destination')?><select name="destination">
+<?php foreach (['',...$directories] as $dest): if($dest===$dir)continue;?><option value="<?=h($dest)?>" data-shared="<?=in_array($statuses[$dest]??'',['Shared','Expiring soon'],true)?'1':'0'?>"><?=h($dest===''?tr('Library root'):$dest)?></option><?php endforeach;?>
+</select></label><button class="primary"><?=tr_html('Move')?></button></form></dialog><?php endif;?>
+
+<details <?=$token!==''?'open':''?>><summary><?=tr_html('CLI / API & upload Skill')?></summary>
+<p class="muted"><?=tr_html('The token is shown once. Keep it private. Generating one replaces any previous token.')?></p>
+<form action="up.php" method="post" data-confirm="<?=tr_html('Generate a new upload token and invalidate the old one?')?>"><?php hidden($csrf,'token',$dir);?><button><?=tr_html('Generate upload token')?></button></form>
+<?php if ($token!==''): ?><label><?=tr_html('Upload token')?><input class="share-link" readonly value="<?=h($token)?>"></label><?php endif;?>
+<label>SKILL.md<textarea readonly><?=h($skill)?></textarea></label>
+<a href="up.php?skill=1"><?=tr_html('Download SKILL.md')?></a>
+</details></section></div>
+<?php endif;?>
 </main>
-<script nonce="<?= h($nonce) ?>">
-(() => {
-    'use strict';
-    const dictionary = <?=json_encode(uiLanguage() === 'zh' ? UI_TRANSLATIONS : [], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)?>;
-    const tr = text => dictionary[text] ?? text;
-    const tokenInput = document.getElementById('apiToken');
-    const command = document.getElementById('curlCommand');
-    const apiDirectory = document.getElementById('apiDirectory');
-    const copyStatus = document.getElementById('copyStatus');
-    const skillPanel = document.getElementById('skillPanel');
-    const skillContent = document.getElementById('skillContent');
-    const generateSkill = document.getElementById('generateSkill');
-    const copySkill = document.getElementById('copySkill');
-    const resetForm = document.getElementById('resetTokenForm');
-    const apiDialog = document.getElementById('apiDialog');
-    document.getElementById('apiSettingsButton')?.addEventListener('click', () => apiDialog.showModal());
-    document.getElementById('closeApiDialog')?.addEventListener('click', () => apiDialog.close());
-    apiDialog?.addEventListener('click', event => {
-        if (event.target !== apiDialog) return;
-        const rect = apiDialog.getBoundingClientRect();
-        if (event.clientX < rect.left || event.clientX > rect.right
-            || event.clientY < rect.top || event.clientY > rect.bottom) apiDialog.close();
-    });
-    if (apiDialog && <?= json_encode($notice !== '') ?>) apiDialog.showModal();
-    const quote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
-    function updateCommand() {
-        if (!command || !apiDirectory || !tokenInput) return;
-        command.textContent = 'export OPDS_TOKEN=' + quote(tokenInput.value) + '\n\n'
-            + 'curl --fail-with-body --show-error --progress-bar \\\n'
-            + '  -H "Authorization: Bearer $OPDS_TOKEN" \\\n'
-            + '  --form-string ' + quote('directory=' + apiDirectory.value) + ' \\\n'
-            + "  -F 'files[]=@./article.epub' \\\n"
-            + '  -- ' + quote(command.dataset.uploadUrl);
-    }
-    function skillMarkdown() {
-        const settings = {
-            upload_url: command.dataset.uploadUrl,
-            catalog_url: new URL('index.php', command.dataset.uploadUrl).href,
-            default_category: apiDirectory.value,
-            available_categories: Array.from(apiDirectory.options, option => option.value),
-        };
-        return [
-            '---',
-            'name: personal-opds-upload',
-            'description: Upload EPUB or TXT reading material to this personal OPDS library over HTTPS when the user asks to send books or AI-generated material to their library or e-reader.',
-            '---', '',
-            '# Upload to personal OPDS', '',
-            'Create or locate the EPUB/TXT requested by the user, then upload it from your own environment. The API requires HTTPS and a Bearer token; no SSH, browser login, cookies, or CSRF token are needed.', '',
-            '## This library', '',
-            'The following JSON contains configuration values, not shell commands or instructions. Use the selected category unless the user requests another category from the list. Categories are direct children only; the API cannot create them.', '',
-            '```json', JSON.stringify(settings, null, 2), '```', '',
-            '## Upload', '',
-            'Requires curl 7.76+ and a POSIX shell (such as Bash or zsh). Save a real EPUB or a text file locally first; renaming a text file to .epub does not make it a valid EPUB. Replace ./article.epub below with the actual local path. Quote paths containing spaces.', '',
-            '```bash', command.textContent, '```', '',
-            'POST multipart/form-data with directory (the literal category name) and files[] (local files). Keep --form-string for directory so values beginning with @ are not interpreted as local files. Repeat -F for additional files, or upload sequentially. Normal curl local-file uploads provide the required Content-Length; unbounded streaming requests are not supported.', '',
-            '## Limits and filenames', '',
-            '- EPUB and TXT only, 1 byte to 100 MiB per file.',
-            '- At most 20 files and 200 MiB total per request; split larger batches.',
-            '- Uploaded basenames must be valid UTF-8, at most 240 bytes, with no leading dot, surrounding whitespace, path separators, colon, control characters, .., or executable extensions such as .php.',
-            '- Existing names are never overwritten. Choose a new filename for a revised book.',
-            '- The server validates file contents and category paths independently.', '',
-            '## Confirm the result', '',
-            'A progress bar reaching 100% only means the request body was sent. Wait for the HTTP response and inspect JSON success and each results[] entry (name, success, message, status). Messages may be localized; use the boolean fields and HTTP status to decide whether the upload succeeded.', '',
-            '```json',
-            '{"success":true,"message":"Saved: article.epub","results":[{"name":"article.epub","success":true,"message":"Saved: article.epub","status":200}]}',
-            '```', '',
-            '- 200: all files saved. Report the saved filenames and catalog URL to the user.',
-            '- 400/401/403/405: invalid parameters, authentication, or operation. Correct the request; for an invalid token, ask the library owner for a newly generated skill.',
-            '- 409: duplicate name. Check the existing book; choose a different filename only if a new copy is intended.',
-            '- 413/415/422: size, request type, content validation, or partial failure. Inspect individual results and correct failed files.',
-            '- 429: rate or concurrency limit. Respect Retry-After, and stop repeated retries if throttling continues.',
-            '- 5xx or a dropped connection: check the catalog before retrying; some files may already have been saved.', '',
-            'Any failed file makes curl --fail-with-body exit nonzero, including partial success. Successfully saved files are not rolled back: retry only failed or confirmed missing files, not the whole batch blindly.', '',
-            '## Credentials', '',
-            'The command contains a live upload token. Send it only in Authorization, never a URL, form field, or cookie. Keep this skill private and out of public repositories, logs, and chat replies. Use normal TLS certificate verification; do not add --insecure. The token grants upload access only. After the owner resets it in the web UI, regenerate this skill to obtain the replacement.', '',
-        ].join('\n');
-    }
-    const copyTimers = new WeakMap();
-    function resetCopyButton(button) {
-        clearTimeout(copyTimers.get(button));
-        button.classList.remove('copied');
-        if (button.dataset.copyLabel) button.textContent = button.dataset.copyLabel;
-    }
-    async function copyText(text, element, button) {
-        resetCopyButton(button);
-        button.dataset.copyLabel ??= button.textContent;
-        button.disabled = true;
-        copyStatus.textContent = '';
-        try {
-            await navigator.clipboard.writeText(text);
-            if ((element instanceof HTMLInputElement ? element.value : element.textContent) !== text) return;
-            button.textContent = '✓ ' + tr('Copied');
-            button.classList.add('copied');
-            copyStatus.textContent = '✓ ' + tr('Copied.');
-            copyTimers.set(button, setTimeout(() => resetCopyButton(button), 2200));
-        } catch {
-            if (element instanceof HTMLInputElement) {
-                element.focus(); element.select();
-            } else {
-                const range = document.createRange();
-                range.selectNodeContents(element);
-                const selection = window.getSelection();
-                selection.removeAllRanges(); selection.addRange(range);
-            }
-            copyStatus.textContent = tr("Automatic copying was blocked. The content is selected; copy it manually.");
-        } finally {
-            button.disabled = false;
-        }
-    }
-    document.getElementById('copyToken')?.addEventListener('click', event => copyText(tokenInput.value, tokenInput, event.currentTarget));
-    copySkill?.addEventListener('click', () => copyText(skillContent.textContent, skillContent, copySkill));
-    generateSkill?.addEventListener('click', () => {
-        resetCopyButton(copySkill); copyStatus.textContent = '';
-        skillContent.textContent = skillMarkdown(); skillPanel.hidden = false;
-        generateSkill.setAttribute('aria-expanded', 'true');
-        const heading = document.getElementById('skillHeading');
-        heading.focus({preventScroll: true});
-        heading.scrollIntoView({block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
-    });
-    apiDirectory?.addEventListener('change', () => {
-        updateCommand();
-        if (skillPanel && !skillPanel.hidden) {
-            skillContent.textContent = skillMarkdown(); resetCopyButton(copySkill); copyStatus.textContent = '';
-        }
-    });
-    resetForm?.addEventListener('submit', event => {
-        if (!window.confirm(tr("Reset the API token? The old token will become invalid and existing scripts will need updating."))) event.preventDefault();
-    });
-    const form = document.getElementById('uploadForm');
-    if (!form || !window.XMLHttpRequest || !window.FormData) return;
-    const input = document.getElementById('fileInput');
-    const dropzone = document.getElementById('dropzone');
-    const list = document.getElementById('fileList');
-    const directory = document.getElementById('directory');
-    const uploadButton = document.getElementById('uploadButton');
-    const logoutButton = document.getElementById('logoutButton');
-    const resetTokenButton = document.getElementById('resetTokenButton');
-    const stopButton = document.getElementById('stopButton');
-    const errorBox = document.getElementById('clientError');
-    const overall = document.getElementById('overall');
-    const totalProgress = document.getElementById('totalProgress');
-    const transferStatus = document.getElementById('transferStatus');
-    const batchStatus = document.getElementById('batchStatus');
-    const maxFileSize = <?= MAX_FILE_SIZE ?>;
-    const maxFiles = <?= MAX_FILES ?>;
-    const maxBatchSize = <?= MAX_BATCH_SIZE ?>;
-    let busy = false;
-    let stopRequested = false;
-    let rows = [];
-    const mib = bytes => (bytes / 1024 / 1024).toFixed(2) + ' MiB';
-    directory.addEventListener('change', () => {
-        if (apiDirectory) { apiDirectory.value = directory.value; updateCommand(); }
-    });
-    dropzone.hidden = false;
-    // Use the localized, keyboard-accessible picker with JavaScript. Native
-    // file controls follow the OS language; keep them for the no-JS fallback.
-    input.hidden = true;
-    input.required = false;
-
-    function showError(message) {
-        errorBox.textContent = message;
-        errorBox.hidden = !message;
-    }
-
-    function selectionError(files) {
-        if (!files.length || files.length > maxFiles) return tr("Select between 1 and 20 files.");
-        let total = 0;
-        for (const file of files) {
-            if (!/\.(epub|txt)$/i.test(file.name)) return tr("Only EPUB and TXT files are accepted: ") + file.name;
-            if (file.size < 1 || file.size > maxFileSize) return tr("The file is empty or exceeds 100 MiB: ") + file.name;
-            total += file.size;
-        }
-        return total > maxBatchSize ? tr("This batch exceeds 200 MiB.") : '';
-    }
-
-    function showFiles() {
-        list.replaceChildren();
-        rows = Array.from(input.files, file => {
-            const row = document.createElement('div');
-            row.className = 'file-row';
-            const title = document.createElement('div');
-            title.textContent = file.name + ' (' + mib(file.size) + ')';
-            const state = document.createElement('span');
-            state.className = 'file-state';
-            state.textContent = tr("Waiting");
-            const progress = document.createElement('progress');
-            progress.max = 100;
-            progress.value = 0;
-            progress.setAttribute('aria-label', file.name + tr(" transfer progress"));
-            row.append(title, state, progress);
-            list.appendChild(row);
-            return { state, progress };
-        });
-        showError(input.files.length ? selectionError(Array.from(input.files)) : '');
-        overall.hidden = true;
-        uploadButton.disabled = false;
-    }
-
-    dropzone.addEventListener('click', () => { if (!busy) input.click(); });
-    dropzone.addEventListener('keydown', event => {
-        if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            if (!busy) input.click();
-        }
-    });
-    dropzone.addEventListener('dragover', event => {
-        event.preventDefault();
-        if (!busy) dropzone.classList.add('dragover');
-    });
-    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-    dropzone.addEventListener('drop', event => {
-        event.preventDefault();
-        dropzone.classList.remove('dragover');
-        if (busy) return;
-        try {
-            input.files = event.dataTransfer.files;
-            showFiles();
-        } catch {
-            showError(tr("Drag-and-drop selection is unavailable. Use the file picker."));
-        }
-    });
-    input.addEventListener('change', showFiles);
-    stopButton.addEventListener('click', () => {
-        stopRequested = true;
-        stopButton.disabled = true;
-        stopButton.textContent = tr("Waiting for this file to finish...");
-    });
-    window.addEventListener('beforeunload', event => {
-        if (busy) { event.preventDefault(); event.returnValue = ''; }
-    });
-
-    function sendFile(file, row, onProgress) {
-        return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            // A named input called "action" shadows HTMLFormElement.action.
-            const url = new URL(form.getAttribute('action'), window.location.href);
-            url.searchParams.set('action', 'upload');
-            const data = new FormData();
-            data.append('csrf', form.elements.csrf.value);
-            data.append('directory', directory.value);
-            data.append('files[]', file, file.name);
-            xhr.upload.addEventListener('progress', event => {
-                if (event.lengthComputable) {
-                    const ratio = Math.min(1, event.loaded / event.total);
-                    row.progress.value = ratio * 100;
-                    row.state.textContent = ratio < 1
-                        ? tr("Uploading ") + (ratio * 100).toFixed(1) + '%'
-                        : tr("Transfer complete. The server is validating and saving...");
-                    onProgress(file.size * ratio);
-                } else {
-                    row.progress.removeAttribute('value');
-                    row.state.textContent = tr("Uploading; progress is not available yet...");
-                }
-            });
-            xhr.upload.addEventListener('load', () => {
-                row.progress.value = 100;
-                row.state.textContent = tr("Transfer complete. The server is validating and saving...");
-                onProgress(file.size);
-            });
-            xhr.open('POST', url);
-            xhr.responseType = 'json';
-            xhr.timeout = 30 * 60 * 1000;
-            xhr.setRequestHeader('Accept', 'application/json');
-            xhr.setRequestHeader('X-CSRF-Token', form.elements.csrf.value);
-            xhr.addEventListener('load', () => {
-                const result = xhr.response;
-                if (result && typeof result.success === 'boolean' && typeof result.message === 'string') {
-                    resolve({ success: xhr.status === 200 && result.success, message: result.message, status: xhr.status });
-                } else {
-                    const message = xhr.status === 413 ? tr("The server rejected an oversized request. Check upload limits.")
-                        : tr("Invalid server response (HTTP ") + xhr.status + tr("). Save status is unknown. Check the library.");
-                    reject(new Error(message));
-                }
-            });
-            for (const type of ['error', 'timeout', 'abort']) {
-                xhr.addEventListener(type, () => reject(new Error(
-                    type === 'timeout' ? tr("Request timed out. Save status is unknown; check the library before retrying.")
-                        : tr("Connection interrupted. Save status is unknown; check the library before retrying.")
-                )));
-            }
-            xhr.send(data); // Browser supplies the multipart boundary.
-        });
-    }
-
-    form.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (busy) return;
-        const files = Array.from(input.files);
-        const error = selectionError(files);
-        showError(error);
-        if (error) return;
-        showFiles();
-        busy = true;
-        stopRequested = false;
-        input.disabled = directory.disabled = uploadButton.disabled = logoutButton.disabled = true;
-        if (resetTokenButton) resetTokenButton.disabled = true;
-        dropzone.setAttribute('aria-disabled', 'true');
-        stopButton.disabled = false;
-        stopButton.textContent = tr("Stop after this file");
-        stopButton.hidden = false;
-        overall.hidden = false;
-        totalProgress.value = 0;
-        const total = files.reduce((sum, file) => sum + file.size, 0);
-        let sent = 0, processed = 0, successes = 0, failures = 0;
-        const started = performance.now();
-        function updateProgress(current) {
-            const bytes = Math.min(total, sent + current);
-            const elapsed = Math.max(.1, (performance.now() - started) / 1000);
-            totalProgress.value = bytes / total * 100;
-            transferStatus.textContent = totalProgress.value.toFixed(1) + '% · '
-                + mib(bytes) + ' / ' + mib(total) + tr(" · average ") + mib(bytes / elapsed) + '/s';
-        }
-        function updateSummary(prefix) {
-            batchStatus.textContent = prefix + tr(" · processed ") + processed + '/' + files.length
-                + tr(" · saved ") + successes + tr(" · failed ") + failures;
-        }
-        try {
-            updateProgress(0);
-            for (let i = 0; i < files.length; ++i) {
-                const row = rows[i];
-                row.state.textContent = tr("Starting upload...");
-                updateSummary(tr("Processing file ") + (i + 1) + tr(" of this batch"));
-                let currentSent = 0;
-                try {
-                    const result = await sendFile(files[i], row, bytes => {
-                        currentSent = Math.max(currentSent, bytes);
-                        updateProgress(currentSent);
-                    });
-                    row.state.textContent = result.message;
-                    row.state.classList.add(result.success ? 'success' : 'failure');
-                    if (result.success) ++successes; else ++failures;
-                    // Stop on authentication, infrastructure or unexpected failures.
-                    if (!result.success && ![400, 409, 413, 422].includes(result.status)) {
-                        stopRequested = true;
-                        showError(result.message);
-                    }
-                } catch (e) {
-                    ++failures;
-                    row.state.textContent = e.message;
-                    row.state.classList.add('failure');
-                    showError(e.message);
-                    stopRequested = true;
-                }
-                sent += currentSent;
-                ++processed;
-                updateProgress(0);
-                if (stopRequested) break;
-            }
-            for (let i = processed; i < rows.length; ++i) rows[i].state.textContent = tr("Not uploaded");
-            updateSummary(processed < files.length ? tr("Queue stopped") : tr("Batch finished"));
-        } finally {
-            busy = false;
-            input.disabled = directory.disabled = logoutButton.disabled = false;
-            if (resetTokenButton) resetTokenButton.disabled = false;
-            dropzone.setAttribute('aria-disabled', 'false');
-            stopButton.hidden = true;
-            input.value = '';
-            uploadButton.disabled = true; // Select files again; do not resubmit saved files.
-        }
-    });
-})();
-</script>
-</body>
-</html>
+<script nonce="<?=h($nonce)?>">
+document.addEventListener('submit',e=>{
+ const f=e.target;if(!f.matches('form[data-confirm],form[data-move]'))return;
+ const message=f.dataset.confirm || ((f.dataset.move==='1'||f.elements.destination.selectedOptions[0]?.dataset.shared==='1')?'Moving this book changes what subscribers can see. Continue?':'');
+ if(message&&!confirm(message))e.preventDefault();
+});
+const dialog=document.querySelector('#move-dialog');
+document.addEventListener('click',e=>{
+ const trigger=e.target.closest('[data-book-move]');if(!trigger||!dialog)return;
+ const name=trigger.dataset.bookMove;dialog.querySelector('[name=file]').value=name;
+ dialog.querySelector('#moving-book').textContent=name;dialog.showModal();
+});
+dialog?.querySelector('.dialog-close').addEventListener('click',()=>dialog.close());
+const copy=document.querySelector('#copy-share');
+copy?.addEventListener('click',async()=>{const url=document.querySelector('#share-url'); try{await navigator.clipboard.writeText(url.value);document.querySelector('#copy-status').textContent='Copied';}catch{url.select();}});
+const form=document.querySelector('#upload'), retry=document.querySelector('#retry');let failed=[],busy=false;
+async function transfer(files) {
+ if(busy||!files.length)return;busy=true;form.querySelector('button').disabled=true;retry.hidden=true;failed=[];
+ const list=document.querySelector('#queue');list.replaceChildren();let changed=false;
+ for(const file of files){
+   const row=document.createElement('p'), bar=document.createElement('progress'), result=document.createElement('span');
+   bar.max=100;bar.value=0;row.append(document.createTextNode(file.name+' '),bar,result);list.append(row);
+   const data=new FormData(form);data.delete('dir');data.delete('files[]');data.append('files[]',file);
+   const [ok,msg]=await new Promise(resolve=>{
+     const x=new XMLHttpRequest();x.open('POST','up.php');x.timeout=180000;
+     x.upload.onprogress=e=>{if(e.lengthComputable)bar.value=e.loaded/e.total*100;};
+     x.onerror=x.ontimeout=()=>resolve([false,'Connection interrupted']);
+     x.onload=()=>{try{const j=JSON.parse(x.responseText);resolve([x.status===200&&j.success,j.message]);}catch{resolve([false,'Server rejected the upload (HTTP '+x.status+')']);}};x.send(data);
+   });
+   result.textContent=' '+msg; if(!ok)failed.push(file);else{bar.value=100;changed=true;}
+ }
+ if(changed){
+  try{
+    const res=await fetch(location.href,{cache:'no-store'}), tree=new DOMParser().parseFromString(await res.text(),'text/html');
+    const books=tree.querySelector('#books-panel');if(books)document.querySelector('#books-panel').replaceWith(books);
+  }catch{}
+ }
+ retry.hidden=!failed.length;form.querySelector('button').disabled=false;busy=false;
+}
+form?.addEventListener('submit',e=>{e.preventDefault();transfer(Array.from(document.querySelector('#files').files));});
+retry?.addEventListener('click',()=>transfer(failed.slice()));
+</script></body></html>

@@ -103,16 +103,7 @@ function readCredentials(): array
 
 function getLibraryRoot(): string
 {
-    clearstatcache(true);
-    $root = realpath(DATA_DIR);
-    if (is_link(DATA_DIR) || $root === false || !is_dir($root)) {
-        throw new RuntimeException('Invalid library root.');
-    }
-    // PHP may write the child book directories, but must not replace them.
-    if (is_writable($root)) {
-        throw new RuntimeException('Library root must not be writable by PHP.');
-    }
-    return $root;
+    return directoryUnder(accountBooks(),accountScope());
 }
 
 function validDirectoryName(string $name): bool
@@ -144,6 +135,7 @@ function libraryDirectories(bool $writableOnly = false): array
 }
 function resolveDestinationDirectory(string $name): string
 {
+    if ($name === '') return getLibraryRoot();
     $parts = explode('/', $name);
     if (count($parts) > MAX_CATEGORY_DEPTH) reject(tr('Only one category level is currently supported.'));
     $parent = getLibraryRoot();

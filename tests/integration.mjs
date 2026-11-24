@@ -26,11 +26,8 @@ fs.writeFileSync(path.join(web,'router.php'),`<?php $_SERVER['HTTPS']='on'; retu
 fs.mkdirSync(path.join(temp,'sessions'));
 const log=fs.openSync(path.join(temp,'php.log'),'w');
 const server=spawn(php,['-d','display_errors=0','-d','session.upload_progress.enabled=0','-d','max_file_uploads=21','-d','upload_max_filesize=100M','-d','post_max_size=205M','-d',`openssl.cafile=${cert}`,'-d',`session.save_path=${temp}/sessions`,'-S',`127.0.0.1:${back}`,'-t',web,path.join(web,'router.php')],{env:{...process.env,PHP_CLI_SERVER_WORKERS:'4'},stdio:['ignore',log,log],detached:true});
-let protect=false, protectBooks=false; const httpPaths=[];
+
 const proxy=https.createServer({key:fs.readFileSync(tlsKey),cert:fs.readFileSync(cert)},(req,res)=>{
- httpPaths.push(req.url);
- if(protect && /\/conf(?:\/|$)/.test(req.url)){res.writeHead(404);res.end();return;}
- if(protectBooks && /\/books-data(?:\/|$)/.test(req.url)){res.writeHead(404);res.end();return;}
  const upstream=http.request({host:'127.0.0.1',port:back,path:req.url,method:req.method,headers:req.headers},out=>{res.writeHead(out.statusCode,out.headers);out.pipe(res);});
  upstream.on('error',()=>{res.writeHead(502);res.end();});req.pipe(upstream);
 });await new Promise(r=>proxy.listen(front,'127.0.0.1',r));
@@ -38,356 +35,179 @@ const cookies=new Map(),results=[];
 const pass=name=>{console.log('PASS '+name);results.push(name);};
 async function request(endpoint='install.php',options={}){
  return new Promise((resolve,reject)=>{
-  const req=https.request(new URL(endpoint,base),{rejectUnauthorized:false,method:options.method||'GET',headers:{'accept-language':'zh-CN',cookie:[...cookies.values()].join('; '),...options.headers,...(options.body?{'content-length':options.body.length}:{})}},res=>{
+  const req=https.request(new URL(endpoint,base),{rejectUnauthorized:false,method:options.method||'GET',headers:{'accept-language':'en',cookie:[...cookies.values()].join('; '),...options.headers,...(options.body?{'content-length':options.body.length}:{})}},res=>{
    const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>{for(const cookie of res.headers['set-cookie']??[])cookies.set(cookie.split('=')[0],cookie.split(';')[0]);const text=Buffer.concat(chunks).toString();let json;try{json=JSON.parse(text);}catch{}resolve({status:res.statusCode,text,json,headers:res.headers});});
   });req.on('error',reject);if(options.body)req.write(options.body);req.end();
  });
 }
 const form=fields=>({method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:Buffer.from(new URLSearchParams(fields).toString())});
 const csrf=r=>{const m=r.text.match(/name="csrf" value="([a-f0-9]+)"/);assert(m,r.text.slice(0,400));return m[1];};
+const data=path.join(temp,'opds-data');
+const settings={base_url:base,data_dir:data,title:'Test Library',username:'alice'};
+const auth=(user,password)=>({authorization:'Basic '+Buffer.from(user+':'+password).toString('base64')});
+const password='safe-test-password-123';
+function cli(...args){return execFileSync(php,[path.join(app,'admin.php'),...args],{encoding:'utf8'}).trim();}
+const post=(url,f,h={})=>{const o=form(f);Object.assign(o.headers,h);return request(url,o);};
+async function ui(fields){let page=await request('up.php'); return post('up.php',{csrf:csrf(page),...fields});}
+async function activate(u,link,secret=password){
+ const page=await request(link);assert.equal(page.status,200);
+ return post('up.php',{action:'activate',csrf:csrf(page),account:u,activate:new URL(link).searchParams.get('activate'),password:secret,confirm:secret});
+}
+function upload(token,dir,files,url='api.php',fields={}){
+ const b='OPDSTEST'+crypto.randomBytes(12).toString('hex'); let text='';const chunks=[];
+ const add=(name,val)=>{text+=`--${b}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${val}\r\n`;};
+ for(const [name,val] of Object.entries(fields))add(name,val);
+ if(dir!==undefined)add('directory',dir);
+ chunks.push(Buffer.from(text));
+ for(const [name,content] of files)chunks.push(Buffer.from(`--${b}\r\nContent-Disposition: form-data; name="files[]"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`),Buffer.from(content),Buffer.from('\r\n'));
+ chunks.push(Buffer.from(`--${b}--\r\n`));
+ const headers={'content-type':'multipart/form-data; boundary='+b};if(token)headers.authorization='Bearer '+token;
+ return request(url,{method:'POST',headers,body:Buffer.concat(chunks)});
+}
+const url=(f)=>'index.php?'+new URLSearchParams(f);
+const opds=(u,params={})=>request(url(params),{headers:auth(u,password)});
+const getToken=async()=>{const r=await ui({action:'token'}); assert.equal(r.status,200,r.text);return r.text.match(/readonly value="([a-f0-9]{64})"/)?.[1];};
 try{
- // Exercise ownership diagnostics without changing /tmp or requiring sudo.
- const definitions=fs.readFileSync(path.join(project,'install.php'),'utf8').split("$error='';")[0];
- const permissionHelper=path.join(temp,'permissions.php');
- fs.writeFileSync(permissionHelper,definitions+String.raw`
- $book=getenv('READ_ONLY_BOOKS');
- protectBookDirectory($book);
- $before=stat(realpath('/tmp'));
- try { inspectBookDirectory(realpath('/tmp'),[],true); echo json_encode(['error'=>false]); }
- catch (InstallProblem $e) { echo json_encode(['error'=>true,'message'=>$e->getMessage(),'commands'=>$e->commands]); }
- clearstatcache(true);$after=stat(realpath('/tmp'));
- if($before['uid']!==$after['uid'] || $before['mode']!==$after['mode']) exit(7);
- `);
- const protectedRoot=path.join(temp,'protected-books');fs.mkdirSync(protectedRoot);fs.chmodSync(protectedRoot,0o555);
- const ownership=JSON.parse(execFileSync(php,[permissionHelper],{env:{...process.env,READ_ONLY_BOOKS:protectedRoot},encoding:'utf8'}));
- assert.equal(fs.statSync(protectedRoot).mode&0o777,0o555);assert.equal(ownership.error,true);
- assert(ownership.commands.some(c=>c.includes('chown')));assert(ownership.message.includes('0550'));
- pass('Check explains writable but non-owned book roots with repair commands; protected roots need no chmod');
- let ready=false;for(let i=0;i<60;++i){try{const r=await request();if(r.status!==502){ready=true;break;}}catch{}await delay(100);}assert(ready);
- let r=await request('install.php',{headers:{'accept-language':'en-US,en;q=0.9,zh;q=0.5'}});assert.equal(r.status,200,r.text);assert(r.text.includes('Install your OPDS library'));assert(!r.text.includes('安装 OPDS 书库'));pass('installer selects English by browser language preference');
- r=await request();assert.equal(r.status,200,r.text);const installCsrf=csrf(r);assert(r.text.includes('安装 OPDS 书库'));pass('standalone installer opens in Chinese over HTTPS');
- const shellCategory="Agent ' $(touch OPDS_DOLLAR) `touch OPDS_TICK`";
- const fields={action:'install',csrf:installCsrf,base_url:base,title:'测试书库',password:'test-password-123',password_confirm:'test-password-123',categories:'books\n中文\n2026\n'+shellCategory};
- assert(!r.text.includes('name="install_key"'));pass('installer runs without an installation code or source edits');
- const startOffset=httpPaths.length;
- const pendingData=path.join(fs.realpathSync(temp),'not-created','opds-data');
- r=await request('install.php',form({...fields,action:'check',storage_mode:'external',data_dir:pendingData,categories:''}));
- assert.equal(r.status,200,r.text);assert(r.text.includes('id="stepLibrary"'));assert(!fs.existsSync(path.dirname(pendingData)));
- r=await request('install.php',form({...fields,action:'back'}));assert.equal(r.status,200);
- r=await request('install.php',form({...fields,action:''}));assert.equal(r.status,400);
- assert.deepEqual(fs.readdirSync(app),['install.php']);assert.deepEqual(fs.readdirSync(path.join(temp,'sessions')),[]);
- assert.deepEqual(httpPaths.slice(startOffset),Array(3).fill('/library/install.php'));
- pass('Check and Back leave the application, data paths and PHP session directory untouched');
- r=await request('install.php',form({...fields,csrf:'bad'}));assert.equal(r.status,400);pass('installation CSRF enforced');
- r=await request('install.php',form({...fields,categories:'../escape'}));assert.equal(r.status,400);pass('installation rejects category traversal');
- r=await request('install.php',form(fields));assert.equal(r.status,400);assert(r.text.includes('尚未写入凭据'),r.text.slice(0,500));assert(!fs.existsSync(path.join(app,'conf/pass.conf')));pass('unprotected conf blocks installation without storing credentials');
- protect=true;
- const readonly=path.join(temp,'readonly');fs.mkdirSync(readonly);fs.chmodSync(readonly,0o555);
- const readonlyPath=fs.realpathSync(readonly);
- r=await request('install.php',{...form({...fields,action:'check',storage_mode:'external',data_dir:readonlyPath,password:'',password_confirm:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
- assert.equal(r.status,400);assert(r.json.commands.some(c=>c.includes('chmod')&&c.includes(readonlyPath)));assert(r.json.commands.some(c=>c.includes('chown')));assert(!r.json.commands.join(' ').includes('777'));fs.chmodSync(readonly,0o755);pass('Check returns actionable permission commands for the actual selected directory');
- r=await request('install.php',{...form({...fields,action:'check',password:'',password_confirm:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
- assert.equal(r.status,200,r.text);assert.equal(r.json.success,true);assert.equal(r.json.installed,false);assert(!fs.existsSync(path.join(app,'index.php')));assert(!fs.existsSync(path.join(app,'conf/pass.conf')));assert(!fs.existsSync(path.join(app,'install.lock')));pass('Check validates the environment and URL without installing or requiring a password');
- r=await request('install.php',form({...fields,action:'check',password:'',password_confirm:''}));
- assert(r.text.includes('<fieldset id="stepCheck" hidden>'));assert(r.text.includes('<fieldset id="stepLibrary">'));assert(r.text.includes('<fieldset id="stepAccess">'));assert(r.text.includes('<fieldset id="stepInstall">'));
- r=await request('install.php',form({...fields,action:'back',password:'',password_confirm:''}));
- assert(r.text.includes('<fieldset id="stepCheck">'));assert(r.text.includes('<fieldset id="stepAccess" hidden>'));assert(r.text.includes('<fieldset id="stepInstall" hidden>'));assert(!fs.existsSync(path.join(app,'index.php')));
- pass('native forms show only the current wizard page and Previous returns to Check');
- r=await request('install.php',{...form({...fields,categories:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
- assert.equal(r.status,400);assert.equal(r.json.step,2);pass('final installation rejects missing categories and returns to the library step');
- r=await request('install.php',form({...fields,base_url:base+'wrong/'}));assert.equal(r.status,400);assert(!fs.existsSync(path.join(app,'conf/pass.conf')));pass('BASE_URL is checked against this installation using a random probe');
- r=await request('install.php',form({...fields,password:'',password_confirm:''}));assert.equal(r.status,200,r.text);assert(r.text.includes('安装完成'));pass('retry reuses the session password hash without re-entering a password');
- for(const file of ['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','LICENSE','NOTICE'])assert.equal(fs.readFileSync(path.join(app,file),'utf8'),fs.readFileSync(path.join(project,file),'utf8'));
- assert(fs.existsSync(path.join(app,'install.lock')));assert(fs.existsSync(path.join(app,'conf/installed.lock')));assert(fs.existsSync(path.join(app,'books-data/中文')));pass('one file generates complete app, configuration, cache and categories');
- const config=fs.readFileSync(path.join(app,'conf/pass.conf'),'utf8');assert(!config.includes('test-password-123'));const token=config.match(/api_token=([a-f0-9]{64})/)[1];assert.equal(fs.statSync(path.join(app,'conf/pass.conf')).mode&0o777,0o600);pass('password hashed and unique 256-bit token stored in private file');
- assert(!config.includes('opds_user=')&&!config.includes('opds_pwd='));
- r=await request();assert.equal(r.status,403);pass('completed installation cannot run again');
- r=await request('conf/pass.conf');assert.equal(r.status,404);pass('configuration cannot be downloaded');
- // Fixture EPUBs are made by native ZipArchive, without Python dependencies.
- const fixtureCode=`$z=new ZipArchive();$z->open(getenv('FIXTURE'),ZipArchive::CREATE|ZipArchive::OVERWRITE);$z->addFromString('mimetype','application/epub+zip');$z->setCompressionName('mimetype',ZipArchive::CM_STORE);$z->addFromString('META-INF/container.xml','<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');$z->addFromString('book.opf','<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Shared title</dc:title><dc:creator>测试作者</dc:creator></metadata></package>');$z->close();`;
- for(const category of ['books','中文'])execFileSync(php,['-r',fixtureCode],{env:{...process.env,FIXTURE:path.join(app,'books-data',category,'same.epub')}});
- fs.writeFileSync(path.join(app,'books-data/2026/note.txt'),'Some text');
- fs.mkdirSync(path.join(app,'books-data/books/nested'));fs.writeFileSync(path.join(app,'books-data/books/nested/hidden.txt'),'hidden');
- r=await request('index.php');assert.equal(r.status,200,r.text);assert(r.text.includes('2026'));assert(r.text.includes('中文'));assert(!r.text.includes('books-data'));pass('navigation lists multiple categories including numeric and Unicode names without physical directory');
- r=await request('index.php?feed=books');assert.equal((r.text.match(/<entry>/g)||[]).length,3,r.text);assert(!r.text.includes('books-data'));assert(!r.text.includes('hidden.txt'));pass('all-books feed includes EPUB/TXT, distinct same-named books, no deeper files');
- r=await request('index.php?feed=books&category='+encodeURIComponent('中文'));assert.equal((r.text.match(/<entry>/g)||[]).length,1);pass('category acquisition feed');
- r=await request('index.php?feed=books&q='+encodeURIComponent('测试作者'));assert.equal((r.text.match(/<entry>/g)||[]).length,2);pass('cross-category title/author search');
- r=await request('index.php?download=2026%2Fnote.txt');assert.equal(r.text,'Some text');assert.match(r.headers['content-disposition'],/attachment/);pass('controlled TXT download');
- r=await request('index.php?download=books%2Fsame.epub');assert.equal(r.status,200);assert.equal(r.headers['content-type'],'application/epub+zip');pass('controlled EPUB download');
- for(const value of ['../conf/pass.conf','books/nested/hidden.txt','/etc/passwd']){r=await request('index.php?download='+encodeURIComponent(value));assert(r.status>=400);}pass('download rejects traversal and depth beyond temporary limit');
- fs.symlinkSync(path.join(app,'conf/pass.conf'),path.join(app,'books-data/books/link.txt'));r=await request('index.php?download=books%2Flink.txt');assert.equal(r.status,404);pass('symlink download rejected');
- const basicHeader='Basic '+Buffer.from('reader:fixture').toString('base64');
- r=await request('up.php',{headers:{authorization:basicHeader}});assert.equal(r.status,200,r.text);assert.match(r.headers['content-type'],/^text\/html/);const uploadCsrf=csrf(r);
- assert(!r.text.includes(token));
- const webLogin=form({action:'login',csrf:uploadCsrf,password:'test-password-123'});
- r=await request('up.php',{...webLogin,headers:{...webLogin.headers,authorization:basicHeader}});assert.equal(r.status,303);
- r=await request('up.php',{headers:{authorization:basicHeader}});assert.equal(r.status,200,r.text);assert(r.text.includes(token));assert(r.text.includes('<dialog id="apiDialog"'));assert(r.text.includes(base+'api.php'));pass('cached OPDS Basic credentials do not change the web uploader login or generated API URL');
- r=await request('up.php',{headers:{'accept-language':'en-US'}});assert(r.text.includes('Upload books'));assert(!r.text.includes('上传电子书'));assert(r.text.includes('const tr ='));pass('uploader renders English UI with localized JavaScript messages');
- r=await request('index.php?search=1');assert(r.text.includes('OpenSearchDescription'));assert(r.text.includes('{searchTerms}'));pass('OPDS exposes OpenSearch discovery');
- const data=new FormData();data.append('directory','books');data.append('files[]',new File(['uploaded'],'api.txt'));
- const encoded=new Request(base+'api.php',{method:'POST',body:data});const body=Buffer.from(await encoded.arrayBuffer());
- const apiUpload={method:'POST',body,headers:{'content-type':encoded.headers.get('content-type')}};
- r=await request('api.php');assert.equal(r.status,405);assert.equal(r.headers.allow,'POST');assert.equal(r.json.success,false);assert(!r.headers['set-cookie']);
- r=await request('api.php',apiUpload);assert.equal(r.status,401);assert.match(r.headers['www-authenticate'],/^Bearer/);assert(!r.headers['set-cookie']);
- r=await request('api.php',{...apiUpload,headers:{...apiUpload.headers,authorization:basicHeader}});assert.equal(r.status,401);
- const bearerHeaders={...apiUpload.headers,authorization:'Bearer '+token};
- r=await request('up.php?action=upload',{...apiUpload,headers:bearerHeaders});assert.equal(r.status,403);assert.equal(r.json.success,false);
- assert(!fs.existsSync(path.join(app,'books-data/books/api.txt')));
- r=await request('api.php',{...apiUpload,headers:{...bearerHeaders,cookie:''}});assert.equal(r.status,200,r.text);assert(!r.headers['set-cookie']);
- pass('API only accepts POST with a Bearer token and web upload still requires CSRF');
- r=await request('index.php?feed=books&q=api');assert(r.text.includes('api.txt'));pass('uploaded book is indexed automatically');
- r=await request('books-data/2026/note.txt');assert.equal(r.text,'Some text');pass('direct book access remains allowed by default');
- const cfg=path.join(app,'conf/config.php');const original=fs.readFileSync(cfg,'utf8');fs.writeFileSync(cfg,original.replace("'max_category_depth' => 1","'max_category_depth' => 2"));r=await request('index.php');assert.equal(r.status,503);fs.writeFileSync(cfg,original);pass('server temporarily enforces exactly one category level');
- const custom=path.join(fs.realpathSync(web),'custom-library');fs.mkdirSync(custom);const setup=custom;fs.copyFileSync(path.join(project,'install.php'),path.join(setup,'install.php'));const customUrl=base.replace('/library/','/custom-library/');
- r=await request('../custom-library/install.php');const customFields={...fields,csrf:csrf(r),target_dir:custom+'-forged',base_url:customUrl};
- r=await request('../custom-library/install.php',{...form({...customFields,action:'check',password:'',password_confirm:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
- assert.equal(r.status,200,r.text);assert(!fs.existsSync(path.join(custom,'index.php')));assert(!fs.existsSync(path.join(setup,'install.lock')));assert(!fs.existsSync(custom+'-forged'));pass('web directory is detected from the installer and posted target_dir cannot relocate it');
- fs.writeFileSync(path.join(custom,'index.php'),'existing application');
- r=await request('../custom-library/install.php',{...form({...customFields,action:'check',password:'',password_confirm:''}),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
- assert.equal(r.status,400);assert.equal(fs.readFileSync(path.join(custom,'index.php'),'utf8'),'existing application');fs.unlinkSync(path.join(custom,'index.php'));pass('Check detects existing application conflicts without overwriting files');
- r=await request('../custom-library/install.php',form({...customFields,opds_access:'private',opds_user:'reader',opds_pwd:'x\napi_token=forged'}));
- assert.equal(r.status,400);assert(!fs.existsSync(path.join(custom,'conf/pass.conf')));assert(!fs.existsSync(path.join(custom,'install.lock')));
- const localPrivate={...customFields,opds_access:'private',opds_user:'reader',opds_pwd:'x'};
- r=await request('../custom-library/install.php',form(localPrivate));assert.equal(r.status,400);assert(!fs.existsSync(path.join(custom,'conf/pass.conf')));assert(!fs.existsSync(path.join(custom,'install.lock')));
- protectBooks=true;
- r=await request('../custom-library/install.php',form(localPrivate));assert.equal(r.status,200,r.text);assert(fs.existsSync(path.join(custom,'index.php')));assert(!fs.existsSync(custom+'-forged'));assert(fs.existsSync(path.join(setup,'install.lock')));pass('application files and install.lock are created beside the installer without a directory input');
- fs.writeFileSync(path.join(custom,'books-data/books/manual.txt'),'private');
- r=await request('../custom-library/books-data/books/manual.txt');assert.equal(r.status,404);
- r=await request('../custom-library/index.php?download=books%2Fmanual.txt',{headers:{authorization:'Basic '+Buffer.from('reader:x').toString('base64')}});assert.equal(r.text,'private');
- assert(!fs.readdirSync(path.join(custom,'books-data')).some(name=>name.startsWith('install-check-')));protectBooks=false;
- pass('site-local private setup rejects line breaks and publicly accessible books before saving credentials');
- r=await request('../custom-library/install.php',form({...customFields,target_dir:custom+'-other'}));assert.equal(r.status,403);assert(!fs.existsSync(custom+'-other'));pass('install.lock blocks reuse even when a different target is submitted');
- // Legacy site-local installations have no paths.php. Keep that loader path.
- const localPointer=fs.readFileSync(path.join(app,'paths.php'));fs.unlinkSync(path.join(app,'paths.php'));
- r=await request('index.php?feed=books');assert.equal(r.status,200,r.text);fs.writeFileSync(path.join(app,'paths.php'),localPointer,{mode:0o600});pass('legacy site-local configuration still loads without paths.php');
+ let r=await request(); for(let n=0;n<50&&r.status===502;n++){await delay(25);r=await request();} const setup=csrf(r);
+ r=await post('install.php',{csrf:setup,action:'check',...settings},{accept:'application/json'});
+ assert.equal(r.status,200,r.text);assert.equal(r.json.installed,false);assert(!fs.existsSync(data));
+ r=await post('install.php',{csrf:setup,action:'install',...settings,data_dir:path.join(web,'data')},{accept:'application/json'});
+ assert.equal(r.status,400);
+ r=await post('install.php',{csrf:setup,action:'install',...settings},{accept:'application/json'});
+ assert.equal(r.status,200,r.text);assert(r.json.installed);const aliceLink=r.json.activation_url;
+ assert.equal((await request()).status,403);
+ assert.equal(await fs.promises.stat(path.join(data,'conf','users.json')).then(s=>s.mode&0o777),0o600);
+ assert.equal((await request('admin.php')).status,404);
+ pass('standalone installer, read-only checks, protected external storage and setup lock');
 
- // Match a private /opds-data/books + /opds-data/conf layout, with no URL deny
- // rules at all. Only the PHP application directory is served by the web root.
- const externalApp=path.join(web,'external-site');fs.mkdirSync(externalApp);fs.copyFileSync(path.join(project,'install.php'),path.join(externalApp,'install.php'));
- const privateRoot=path.join(fs.realpathSync(temp),'opds-data');fs.mkdirSync(path.join(privateRoot,'books/existing'),{recursive:true});
- fs.writeFileSync(path.join(privateRoot,'books/existing/kept.txt'),'existing private book');
- fs.writeFileSync(path.join(privateRoot,'books/loose.txt'),'existing loose book');
- const externalUrl=base.replace('/library/','/external-site/');const externalEndpoint='../external-site/install.php';
- protect=false;r=await request(externalEndpoint);
- const readingUser='读者', readingPassword='x: = ';
- const readingAuth={headers:{authorization:'Basic '+Buffer.from(readingUser+':'+readingPassword).toString('base64')}};
- const externalFields={...fields,csrf:csrf(r),base_url:externalUrl,storage_mode:'external',data_dir:privateRoot+'/',opds_access:'private',opds_user:readingUser,opds_pwd:readingPassword};
- const jsonForm=fields=>{const options=form(fields);options.headers.accept='application/json';return options;};
- r=await request(externalEndpoint,jsonForm({...externalFields,action:'check',password:'',password_confirm:'',data_dir:path.join(fs.realpathSync(web),'unsafe-data')}));
- assert.equal(r.status,400,r.text);assert(!fs.existsSync(path.join(web,'unsafe-data')));pass('separate-storage mode rejects data inside the document root');
- const rootSibling=fs.realpathSync(web)+'-private';
- r=await request(externalEndpoint,jsonForm({...externalFields,action:'check',password:'',password_confirm:'',data_dir:rootSibling}));assert.equal(r.status,200,r.text);pass('outside-root detection handles sibling paths with the same name prefix');
- const requestOffset=httpPaths.length;
- r=await request(externalEndpoint,jsonForm({...externalFields,action:'check',password:'',password_confirm:''}));
- assert.equal(r.status,200,r.text);assert(!r.json.installed);assert(!fs.existsSync(path.join(externalApp,'paths.php')));assert(!fs.existsSync(path.join(privateRoot,'conf/pass.conf')));
- assert.deepEqual(httpPaths.slice(requestOffset),['/external-site/install.php']);pass('external Check inspects settings without HTTP probes');
- fs.mkdirSync(path.join(privateRoot,'conf'),{recursive:true,mode:0o755});fs.writeFileSync(path.join(privateRoot,'conf/pass.conf'),'do not overwrite',{mode:0o600});
- r=await request(externalEndpoint,jsonForm({...externalFields,action:'check',password:'',password_confirm:''}));assert.equal(r.status,400);assert.equal(fs.readFileSync(path.join(privateRoot,'conf/pass.conf'),'utf8'),'do not overwrite');assert.equal(fs.statSync(path.join(privateRoot,'conf')).mode&0o777,0o755);fs.unlinkSync(path.join(privateRoot,'conf/pass.conf'));pass('Check preserves the existing configuration and its directory permissions');
- r=await request(externalEndpoint,form(externalFields));assert.equal(r.status,200,r.text);
- assert(fs.existsSync(path.join(externalApp,'paths.php')));assert(!fs.existsSync(path.join(externalApp,'conf')));assert(!fs.existsSync(path.join(externalApp,'books-data')));
- assert(fs.existsSync(path.join(privateRoot,'conf/config.php')));assert(fs.existsSync(path.join(privateRoot,'conf/installed.lock')));assert(fs.existsSync(path.join(externalApp,'install.lock')));
- assert.equal(fs.readFileSync(path.join(privateRoot,'books/existing/kept.txt'),'utf8'),'existing private book');pass('separate installation keeps PHP files public and books/conf private, preserving existing books');
- const externalConfig=fs.readFileSync(path.join(privateRoot,'conf/pass.conf'),'utf8');const externalToken=externalConfig.match(/api_token=([a-f0-9]{64})/)[1];
- assert(externalConfig.includes('opds_user='+readingUser+'\nopds_pwd='+readingPassword+'\n'));
- for (const endpoint of ['', '?feed=books', '?search=1', '?download=loose.txt']) {
-  const url='../external-site/index.php'+endpoint;
-  r=await request(url);assert.equal(r.status,401);assert.match(r.headers['www-authenticate'],/^Basic realm="OPDS"/);assert.match(r.headers['cache-control'],/no-store/);
-  r=await request(url,{...readingAuth,method:'HEAD'});assert.equal(r.status,200);assert.equal(r.text,'');assert.match(r.headers['cache-control'],/no-store/);
+ assert.equal((await opds('alice')).status,401);
+ assert.equal((await ui({action:'login',username:'alice',password})).status,401);
+ assert.equal((await activate('alice',aliceLink)).status,303);
+ assert.equal((await activate('alice',aliceLink)).status,403);
+ const bobOld=cli('invite','bob');const bobLink=cli('invite','bob');
+ assert.equal((await activate('bob',bobOld)).status,403);
+ assert.equal((await activate('bob',bobLink)).status,303);
+ assert.equal((await ui({action:'login',username:'alice',password})).status,303);
+ const aliceToken=await getToken();assert(aliceToken);
+ assert(!fs.readFileSync(path.join(data,'conf','users.json'),'utf8').includes(aliceToken));
+ assert.equal((await request('index.php')).status,401,'browser cookie must not grant Basic-feed access');
+ assert((await request('up.php',{headers:{'accept-language':'zh-CN'}})).text.includes('我的书库'));
+ const skill=await request('up.php?skill=1');assert(skill.text.includes('$OPDS_TOKEN')&&!skill.text.includes(aliceToken));
+ pass('two-user activation, one-time links, separate login channels and hashed token');
+
+ r=await upload(aliceToken,undefined,[['private.txt','Alice root content']]);assert.equal(r.status,200,r.text);
+ const uploads=await Promise.all([
+   upload(aliceToken,'Share shelf',[['same.txt','Alice shared content']]),
+   upload(aliceToken,'Share shelf',[['other.txt','Another shared book']]),
+ ]);
+ for(const u of uploads)assert.equal(u.status,200,u.text);
+ r=await upload(aliceToken,'Share shelf',[['same.txt','Alice shared content']]);assert(r.json.results[0].already_exists);
+ r=await upload(aliceToken,'Share shelf',[['same.txt','changed'],['new.txt','saved']]);assert.equal(r.status,422,r.text);assert.equal(r.json.results[0].status,409);assert(r.json.results[1].success);
+ r=await upload(aliceToken,'nested/folder',[['no.txt','no']]);assert.equal(r.status,400);
+ r=await upload(aliceToken,undefined,[['x.txt','x']],'api.php',{username:'bob'});assert.equal(r.status,400);
+ r=await ui({action:'folder',folder:'中文 阅读',dir:''});assert.equal(r.status,303,r.text);
+ const page=await request('up.php?dir='+encodeURIComponent('中文 阅读'));
+ r=await upload(null,'中文 阅读',[['browser.txt','Browser upload']],'up.php',{action:'upload',csrf:csrf(page)});assert.equal(r.status,200,r.text);
+ r=await request('up.php?dir='+encodeURIComponent('中文 阅读')+'&download=browser.txt');assert.equal(r.text,'Browser upload');
+ pass('root, concurrent auto-creation, idempotency, partial success, Unicode and browser download');
+ const epub=path.join(temp,'book.epub');
+ execFileSync(php,['-r',`$z=new ZipArchive();$z->open($argv[1],ZipArchive::CREATE);
+ $z->addFromString("mimetype","application/epub+zip");$z->setCompressionName("mimetype",ZipArchive::CM_STORE);
+ $z->addFromString("META-INF/container.xml",'<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+ $z->addFromString("book.opf",'<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Golden EPUB</dc:title><dc:creator>Test Author</dc:creator></metadata></package>');
+ $z->close();`,epub]);
+ const epubBytes=fs.readFileSync(epub);
+ r=await upload(aliceToken,undefined,[['sample.epub',epubBytes]]);assert.equal(r.status,200,r.text);
+ assert.equal((await upload(aliceToken,undefined,[['invalid.epub','not a zip']])).status,422);
+ assert((await opds('alice',{feed:'books',q:'Golden EPUB'})).text.includes('Test Author'));
+ const book=await opds('alice',{download:'sample.epub'});
+ assert.equal(book.status,200); assert.equal(book.headers['content-type'],'application/epub+zip');
+ pass('valid EPUB upload, metadata search and download; malformed EPUB rejected');
+
+
+ r=await ui({action:'share',dir:'Share shelf'});assert.equal(r.status,303,r.text);
+ r=await request('up.php?dir=Share+shelf&preview=1');assert(r.text.includes('titles visible'));
+ const key=r.text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)?.[1]; assert(key,r.text); assert(/[A-Z]/.test(key.slice(9)) && /[0-9]/.test(key.slice(9)));
+ assert.equal((await request(url({s:key.toLowerCase(),download:'Share shelf/same.txt'}))).text,'Alice shared content');
+ assert.equal((await request(url({s:key,download:'private.txt'}))).status,404);
+ r=await request(url({s:key}));assert.equal(r.status,200);assert(r.text.includes('same'));assert(!r.text.includes('private.txt'));
+ assert.equal((await request(url({s:key,category:'中文 阅读'}))).status,404);
+ assert.equal((await request(url({s:key,search:'1'}))).status,200);
+ assert.equal((await opds('bob',{download:'Share shelf/same.txt'})).status,400);
+ assert.equal((await opds('alice',{download:'private.txt'})).text,'Alice root content');
+ pass('subscription case-folding, live scoped feed/search and account isolation');
+
+ r=await ui({action:'move',dir:'Share shelf',file:'other.txt',destination:''});assert.equal(r.status,303,r.text);
+ assert.equal((await request(url({s:key,download:'Share shelf/other.txt'}))).status,404);
+ assert.equal((await opds('alice',{download:'other.txt'})).text,'Another shared book');
+ r=await ui({action:'delete',dir:'',file:'other.txt'});assert.equal(r.status,303,r.text);
+ assert.equal((await opds('alice',{download:'other.txt'})).status,404);
+ r=await ui({action:'share',dir:'Share shelf'});assert.equal(r.status,303,r.text);
+ assert.equal((await request(url({s:key,download:'Share shelf/same.txt'}))).status,410);
+ const rotated=(await request('up.php?dir=Share+shelf')).text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)[1];
+ r=await ui({action:'revoke',dir:'Share shelf'});assert.equal(r.status,303,r.text);
+ assert.equal((await request(url({s:rotated,download:'Share shelf/same.txt'}))).status,410);
+ assert((await request('up.php?dir=Share+shelf')).text.includes('Revoked'));
+ await ui({action:'share',dir:'Share shelf'});
+ const third=(await request('up.php?dir=Share+shelf')).text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)[1];
+ const shares=path.join(data,'conf','shares.json');
+ const state=JSON.parse(fs.readFileSync(shares));const thirdId=third.split('-')[0];
+ assert.equal(state.records[thirdId].expires-state.records[thirdId].created,120*86400);
+ state.records[thirdId].expires=Math.floor(Date.now()/1000)-1;fs.writeFileSync(shares,JSON.stringify(state));
+ assert.equal((await request(url({s:third,download:'Share shelf/same.txt'}))).status,410);
+ await ui({action:'share',dir:'Share shelf'});
+ const fourth=(await request('up.php?dir=Share+shelf')).text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)[1];
+ const shelf=path.join(data,'books','alice','Share shelf');fs.renameSync(shelf,shelf+' old');fs.mkdirSync(shelf);
+ fs.writeFileSync(path.join(shelf,'same.txt'),'replacement');assert.equal((await request(url({s:fourth,download:'Share shelf/same.txt'}))).status,410);
+ pass('authenticated move/delete, share replacement, revocation, expiry and safe same-name recreation');
+
+ r=await ui({action:'logout'});assert.equal(r.status,303);
+ assert.equal((await ui({action:'login',username:'bob',password})).status,303);
+ const bobToken=await getToken();assert(bobToken && bobToken!==aliceToken);
+ const parallel=await Promise.all([upload(bobToken,undefined,[['private.txt','Bob only']]),upload(aliceToken,undefined,[['parallel.txt','Alice only']])]);
+ for (const resp of parallel) assert.equal(resp.status,200,resp.text);
+ assert.equal((await opds('bob',{download:'parallel.txt'})).status,404);
+ assert.equal((await opds('bob',{download:'private.txt'})).text,'Bob only');
+ assert.equal((await opds('alice',{download:'private.txt'})).text,'Alice root content');
+ cli('quota','bob','8','1');
+ assert.equal((await upload(bobToken,undefined,[['overflow.txt','over limit']])).status,507);
+ const reset=cli('reset','bob');
+ assert.equal((await activate('bob',reset,'new-test-password-123')).status,303);
+ assert.equal((await opds('bob')).status,401);
+ assert.equal((await request(url({download:'private.txt'}),{headers:auth('bob','new-test-password-123')})).text,'Bob only');
+ const old=path.join(temp,'old-books');fs.mkdirSync(old);fs.writeFileSync(path.join(old,'old.txt'),'old file');
+ assert(cli('migrate','alice',old).includes('Preview only'));assert(!fs.existsSync(path.join(data,'books','alice','old.txt')));
+ assert(cli('migrate','alice',old,'--apply').includes('original library retained'));assert(fs.existsSync(path.join(old,'old.txt')));
+ pass('individual quotas, password reset and non-destructive migration');
+
+ if(process.env.CHROME_BIN && process.env.PLAYWRIGHT_MODULE){
+   const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+   const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+   try{
+     const page=await browser.newPage({viewport:{width:1260,height:900},ignoreHTTPSErrors:true});
+     const errors=[];page.on('pageerror',e=>errors.push(e.message));
+     await page.goto(base+'up.php');await page.getByLabel('Username').fill('alice');await page.getByLabel('Password',{exact:true}).fill(password);
+     await page.getByRole('button',{name:'Sign in'}).click();await page.getByRole('heading',{name:'Library root'}).waitFor();
+     await page.locator('#files').setInputFiles({name:'web-ui.txt',mimeType:'text/plain',buffer:Buffer.from('Browser UI upload')});
+     await page.getByRole('button',{name:'Upload',exact:true}).click();await page.getByText('Saved: web-ui.txt').waitFor();
+     await page.locator('#books-panel').getByText('web-ui.txt').waitFor();
+     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'library-desktop.png'),fullPage:true});
+     await page.setViewportSize({width:390,height:844});await page.getByRole('link',{name:/Share shelf/}).first().click();
+     await page.getByRole('button',{name:'Create share'}).click();
+     await page.getByRole('button',{name:'Revoke',exact:true}).waitFor();
+     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'library-mobile.png'),fullPage:true});
+     page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Revoke',exact:true}).click();
+     await page.getByRole('status').getByText('Share revoked.').waitFor();assert.deepEqual(errors,[]);
+     pass('desktop and mobile browser UI: sign in, upload, live library refresh, share and revoke');
+   }finally{await browser.close();}
  }
- r=await request('../external-site/index.php',{headers:{authorization:'Basic '+Buffer.from(readingUser+':wrong').toString('base64')}});assert.equal(r.status,401);
- r=await request('../external-site/index.php',{headers:{authorization:'Bearer '+externalToken}});assert.equal(r.status,401);
- pass('private OPDS challenges anonymous, wrong-password and upload-token requests and authenticates all catalog routes');
- async function externalUpload(name,token){
-  const data=new FormData();data.append('directory','books');data.append('files[]',new File(['external upload'],name));
-  const encoded=new Request(externalUrl+'api.php',{method:'POST',body:data});
-  return request('../external-site/api.php',{method:'POST',body:Buffer.from(await encoded.arrayBuffer()),headers:{'content-type':encoded.headers.get('content-type'),authorization:'Bearer '+token}});
- }
- r=await externalUpload('external.txt',externalToken);assert.equal(r.status,200,r.text);assert(fs.existsSync(path.join(privateRoot,'books/books/external.txt')));pass('Bearer uploads use the external book directory');
- r=await request('../external-site/index.php?feed=books',readingAuth);assert.equal(r.status,200,r.text);assert(r.text.includes('kept.txt'));assert(r.text.includes('external.txt'));assert(r.text.includes('loose.txt'));assert(!r.text.includes(privateRoot));pass('catalog indexing works with separate storage without exposing its physical path');
- r=await request('../external-site/index.php?download=existing%2Fkept.txt',readingAuth);assert.equal(r.text,'existing private book');pass('controlled downloads read books outside the website');
- r=await request('../external-site/index.php?download=loose.txt',readingAuth);assert.equal(r.text,'existing loose book');pass('existing books directly in the private book directory are indexed and downloadable');
- r=await request('../external-site/paths.php');assert.equal(r.status,200);assert.equal(r.text,'');r=await request('../opds-data/conf/pass.conf');assert.equal(r.status,404);pass('paths.php exposes no output and private configuration is not web-addressable');
- r=await request('../external-site/up.php');let externalCsrf=csrf(r);r=await request('../external-site/up.php',form({action:'login',csrf:externalCsrf,password:'test-password-123'}));assert.equal(r.status,303);
- r=await request('../external-site/up.php');externalCsrf=csrf(r);assert(r.text.includes(externalUrl+'api.php'));assert(!r.text.includes(privateRoot));
- const tokenVersion=r.text.match(/name="token_version" value="([a-f0-9]+)"/)[1];
- r=await request('../external-site/up.php',form({action:'reset_token',csrf:externalCsrf,token_version:tokenVersion}));assert.equal(r.status,303);
- const rotatedPrivateConfig=fs.readFileSync(path.join(privateRoot,'conf/pass.conf'),'utf8');const rotatedExternalToken=rotatedPrivateConfig.match(/api_token=([a-f0-9]{64})/)[1];assert.notEqual(rotatedExternalToken,externalToken);
- assert(rotatedPrivateConfig.includes('opds_user='+readingUser+'\nopds_pwd='+readingPassword+'\n'));
- r=await request('../external-site/index.php',readingAuth);assert.equal(r.status,200,r.text);
- r=await externalUpload('old-token.txt',externalToken);assert.equal(r.status,401);r=await externalUpload('new-token.txt',rotatedExternalToken);assert.equal(r.status,200);pass('token copy/reset and revocation use the external conf while commands retain the public URL');
- const readingConfig=path.join(privateRoot,'conf/pass.conf');
- const withoutReadingPassword=rotatedPrivateConfig.replace(/^opds_pwd=.*\n/m,'');
- fs.writeFileSync(readingConfig,withoutReadingPassword);
- r=await request('../external-site/index.php');assert.equal(r.status,500);
- fs.writeFileSync(readingConfig,withoutReadingPassword.replace(/^opds_user=.*\n/m,''));
- r=await request('../external-site/index.php');assert.equal(r.status,200);
- pass('an incomplete pair stays closed and removing both fields restores public reading');
- protect=true;
- const protectedApp=path.join(web,'protected-site');fs.mkdirSync(protectedApp);fs.copyFileSync(path.join(project,'install.php'),path.join(protectedApp,'install.php'));
- const protectedData=path.join(fs.realpathSync(temp),'protected-data');fs.mkdirSync(path.join(protectedData,'books/books'),{recursive:true});fs.chmodSync(path.join(protectedData,'books'),0o555);
- r=await request('../protected-site/install.php');
- const protectedFields={...fields,csrf:csrf(r),categories:'books',storage_mode:'external',data_dir:protectedData,base_url:base.replace('/library/','/protected-site/')};
- r=await request('../protected-site/install.php',jsonForm({...protectedFields,action:'check',password:'',password_confirm:''}));assert.equal(r.status,200,r.text);
- r=await request('../protected-site/install.php',form(protectedFields));assert.equal(r.status,200,r.text);assert.equal(fs.statSync(path.join(protectedData,'books')).mode&0o777,0o555);
- r=await request('../protected-site/index.php');assert.equal(r.status,200,r.text);
- pass('existing protected book roots with writable categories install without changing their permissions');
- const fault=path.join(web,'permission-fault');fs.mkdirSync(fault);
- // Test-only fault injection: chmod works normally except the final 0550
- // transition while this flag exists. Production code has no such override.
- const fixture=fs.readFileSync(path.join(project,'install.php'),'utf8').replace('declare(strict_types=1);',String.raw`declare(strict_types=1);
- namespace PermissionFixture;
- use RuntimeException; use Throwable; use JsonException;
- function chmod(string $path,int $mode): bool {
-     if($mode===0550 && is_file(__DIR__.'/deny-mode.flag')) return false;
-     return \chmod($path,$mode);
- }
- `);
- fs.writeFileSync(path.join(fault,'install.php'),fixture);fs.writeFileSync(path.join(fault,'deny-mode.flag'),'1');
- r=await request('../permission-fault/install.php');const faultFields={...fields,csrf:csrf(r),base_url:base.replace('/library/','/permission-fault/')};
- r=await request('../permission-fault/install.php',{...form(faultFields),headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'}});
- assert.equal(r.status,400,r.text);assert(r.json.message.includes(path.join(fs.realpathSync(fault),'books-data')));assert(r.json.commands.some(c=>c.includes('chown')));
- assert(!fs.existsSync(path.join(fault,'conf/pass.conf')));assert(!fs.existsSync(path.join(fault,'install.lock')));assert(!fs.existsSync(path.join(fault,'index.php')));
- pass('unexpected final chmod failure gives path-specific advice and rolls back before publishing credentials');
- fs.unlinkSync(path.join(fault,'deny-mode.flag'));r=await request('../permission-fault/install.php',form({...faultFields,password:'',password_confirm:''}));assert.equal(r.status,200,r.text);
- pass('book permission failure can be repaired and retried without re-entering the password');
- if(process.env.PLAYWRIGHT_MODULE){
-  if(process.env.SCREENSHOT_DIR)fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});
-  const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
-  const browser=await chromium.launch({...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{}),headless:true});
-  try{
-   for(const locale of ['en-US','zh-CN']){
-    const context=await browser.newContext({locale,ignoreHTTPSErrors:true,viewport:{width:390,height:844},permissions:['clipboard-read','clipboard-write']});
-    const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
-    await page.setExtraHTTPHeaders({authorization:basicHeader});
-    await page.goto(base+'up.php');await page.locator('input[name=password]').fill('test-password-123');
-    await page.locator('button[type=submit]').click();await page.locator('#apiSettingsButton').waitFor();
-    assert.equal(await page.locator('html').getAttribute('lang'),locale==='zh-CN'?'zh-CN':'en');
-    assert.equal(await page.locator('#apiDialog').isVisible(),false);
-    assert.equal(await page.locator('h2').textContent(),locale==='zh-CN'?'上传电子书':'Upload books');
-    await page.locator('#apiSettingsButton').click();await page.locator('#copyToken').click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),token);
-    assert((await page.locator('#copyToken').textContent()).startsWith('✓ '));
-    assert((await page.locator('#curlCommand').textContent()).includes(base+'api.php'));
-    assert(!(await page.locator('#skillPanel').isVisible()));
-    await page.locator('#generateSkill').click();assert(await page.locator('#skillPanel').isVisible());
-    assert.equal(await page.locator('#generateSkill').getAttribute('aria-expanded'),'true');
-    await page.waitForFunction(()=>document.getElementById('skillContent').getBoundingClientRect().top<innerHeight-100);
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'skill-preview-'+locale+'.png'),fullPage:true});
-    // Generating is distinct from copying. A category change refreshes the
-    // already-generated skill and clears any prior copy-success indication.
-    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),token);
-    await page.locator('#copySkill').click();await page.waitForFunction(()=>document.getElementById('copySkill').classList.contains('copied'));assert((await page.locator('#copySkill').textContent()).startsWith('✓ '));
-    await page.locator('#apiDirectory').selectOption(shellCategory);assert(!(await page.locator('#copySkill').textContent()).startsWith('✓ '));
-    const skill=await page.locator('#skillContent').textContent();assert(skill.startsWith('---\nname: personal-opds-upload\n'));
-    const skillSettings=JSON.parse(skill.match(/```json\n([\s\S]*?)\n```/)[1]);
-    assert.equal(skillSettings.upload_url,base+'api.php');assert.equal(skillSettings.catalog_url,base+'index.php');assert.equal(skillSettings.default_category,shellCategory);assert(skillSettings.available_categories.includes('中文'));assert(skill.includes(token));
-    await page.locator('#copySkill').click();await page.waitForFunction(()=>document.getElementById('copySkill').classList.contains('copied'));assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),skill);
-    assert((await page.locator('#copySkill').textContent()).startsWith('✓ '));
-    assert(await page.evaluate(()=>document.getElementById('apiDialog').scrollWidth<=document.getElementById('apiDialog').clientWidth));
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'skill-'+locale+'.png'),fullPage:true});
-    await page.waitForFunction(()=>!document.getElementById('copySkill').classList.contains('copied'));
-    assert.equal(await page.locator('#copySkill').textContent(),locale==='zh-CN'?'复制 SKILL.md':'Copy SKILL.md');
-    // Execute the generated example against the isolated HTTPS application.
-    // Only the local filename is changed; TLS uses the fixture's trusted CA.
-    const skillFolder=path.join(process.env.SCREENSHOT_DIR||temp,'personal-opds-upload-'+locale);fs.mkdirSync(skillFolder,{recursive:true});fs.writeFileSync(path.join(skillFolder,'SKILL.md'),skill);
-    const skillFile='skill-'+locale+'.txt';fs.writeFileSync(path.join(skillFolder,skillFile),'from generated skill');
-    const skillScript=skill.match(/```bash\n([\s\S]*?)\n```/)[1].replace('files[]=@./article.epub','files[]=@./'+skillFile);
-    const skillResult=JSON.parse((await runFile('/bin/sh',['-c',skillScript],{cwd:skillFolder,env:{...process.env,CURL_CA_BUNDLE:cert},encoding:'utf8',timeout:15000})).stdout);
-    assert.equal(skillResult.success,true);assert.equal(fs.readFileSync(path.join(app,'books-data',shellCategory,skillFile),'utf8'),'from generated skill');
-    assert(!fs.existsSync(path.join(skillFolder,'OPDS_DOLLAR')));assert(!fs.existsSync(path.join(skillFolder,'OPDS_TICK')));
-    pass('real browser: '+locale+' generates and copies a usable skill, safely quotes categories, and confirms copying');
-    await page.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw new Error('Denied for test');};});
-    await page.locator('#copySkill').click();assert.equal((await page.evaluate(()=>window.getSelection().toString())).trimEnd(),skill.trimEnd());assert(!(await page.locator('#copySkill').textContent()).startsWith('✓ '));
-    assert((await page.locator('#copyStatus').textContent()).includes(locale==='zh-CN'?'手动复制':'manually'));
-    await page.evaluate(()=>{delete navigator.clipboard.writeText;});
-    pass('real browser: '+locale+' clipboard failure selects the skill without a false success indicator');
-    await page.keyboard.press('Escape');assert.equal(await page.locator('#apiDialog').isVisible(),false);
-    await page.locator('#fileInput').setInputFiles([{name:'ui-'+locale+'.txt',mimeType:'text/plain',buffer:Buffer.from('from browser')}]);
-    await page.locator('#uploadButton').click();await page.waitForFunction(()=>document.getElementById('uploadButton').disabled && !document.getElementById('fileInput').disabled);
-    assert((await page.locator('#batchStatus').textContent()).includes(locale==='zh-CN'?'已保存 1':'saved 1'));
-    await page.setExtraHTTPHeaders({});
-    assert.deepEqual(errors,[]);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,locale+'.png'),fullPage:true});}
-    const wizardName='wizard-'+locale;const wizard=path.join(web,wizardName);fs.mkdirSync(wizard);fs.copyFileSync(path.join(project,'install.php'),path.join(wizard,'install.php'));
-    const wizardTarget=fs.realpathSync(wizard);const wizardUrl=base.replace('/library/','/'+wizardName+'/');
-    await page.goto(base.replace('/library/','/'+wizardName+'/install.php'));
-    assert(await page.locator('#stepCheck').isVisible());assert(!(await page.locator('#stepInstall').isVisible()));assert(!(await page.locator('#installButton').isVisible()));
-    assert(!(await page.locator('input[name=password]').isVisible()));
-    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'step1-'+locale+'.png'),fullPage:true});
-    assert.equal(await page.locator('input[name=install_key]').count(),0);
-    assert.equal(await page.locator('input[name=target_dir]').count(),0);assert.equal(await page.locator('#detectedWebDir').textContent(),wizardTarget);await page.locator('input[name=base_url]').fill(wizardUrl);
-    const wizardSessions=fs.readdirSync(path.join(temp,'sessions')).sort();
-    await page.locator('#checkButton').click();await page.locator('#stepLibrary').waitFor();
-    assert.equal(await page.locator('#stepMarker2').getAttribute('aria-current'),'step');
-    assert(!(await page.locator('#stepAccess').isVisible()));assert(!(await page.locator('#installButton').isVisible()));
-    assert.equal(await page.locator('input[name=password]').inputValue(),'');
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'step2-'+locale+'.png'),fullPage:true});
-    await page.locator('input[name=password]').fill('retry-password-123');await page.locator('input[name=password_confirm]').fill('mismatch-password');
-    await page.locator('#libraryButton').click();await page.locator('#libraryResults .error').waitFor();
-    await page.locator('input[name=password_confirm]').fill('retry-password-123');
-    await page.locator('#libraryButton').click();await page.locator('#stepAccess').waitFor();
-    assert(!(await page.locator('#installButton').isVisible()));assert(await page.locator('#publicOpds').isChecked());
-    assert(!(await page.locator('#opdsCredentials').isVisible()));assert.equal(await page.locator('#stepMarker3').getAttribute('aria-current'),'step');
-    await page.locator('#accessButton').click();await page.locator('#stepInstall').waitFor();assert(!(await page.locator('input[name=password]').isVisible()));
-    assert(!(await page.locator('#stepCheck').isVisible()));assert(await page.locator('#installButton').isVisible());assert(!(await page.locator('#serverHelp').isVisible()));
-    assert.equal(await page.locator('#stepMarker4').getAttribute('aria-current'),'step');
-    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'step4-'+locale+'.png'),fullPage:true});
-    assert.deepEqual(fs.readdirSync(wizardTarget),['install.php']);assert.deepEqual(fs.readdirSync(path.join(temp,'sessions')).sort(),wizardSessions);
-    pass('real browser: '+locale+' completes the first three steps without server writes');
-    const ro=path.join(fs.realpathSync(temp),'wizard-readonly-'+locale);fs.mkdirSync(ro);fs.chmodSync(ro,0o555);
-    await page.locator('#backButton').click();await page.locator('#stepAccess button[value=back]').click();await page.locator('#stepLibrary button[value=back]').click();
-    await page.locator('#storageMode').selectOption('external');await page.locator('#dataDir').fill(ro);await page.locator('#checkButton').click();await page.locator('#checkResults .error').waitFor();
-    assert((await page.locator('#checkResults pre').textContent()).includes(ro));assert((await page.locator('#checkResults pre').textContent()).includes('chmod'));
-    assert.equal(await page.locator('input[name=password]').inputValue(),'retry-password-123');fs.chmodSync(ro,0o755);
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'installer-'+locale+'.png'),fullPage:true});
-    pass('real browser: '+locale+' permission checks show commands and retain entered passwords');
-    await page.locator('#storageMode').selectOption('local');await page.locator('input[name=base_url]').fill(wizardUrl+'missing/');
-    await page.locator('#checkButton').click();await page.locator('#libraryButton').click();await page.locator('#accessButton').click();
-    await page.locator('#installButton').click();await page.locator('#checkResults .error').waitFor();assert.equal(await page.locator('input[name=password]').inputValue(),'retry-password-123');
-    assert(!fs.existsSync(path.join(wizard,'install.lock')));
-    await page.locator('input[name=base_url]').fill(wizardUrl);await page.locator('#checkButton').click();await page.locator('#libraryButton').click();await page.locator('#accessButton').click();await page.locator('#stepInstall').waitFor();
-    await page.locator('#installButton').click();await page.waitForFunction(()=>document.getElementById('setupForm').hidden);
-    assert(fs.existsSync(path.join(wizard,'install.lock')));assert.equal(await page.locator('#installResults a').first().getAttribute('href'),wizardUrl+'index.php');
-    assert(await page.locator('#installResults a').first().isVisible());assert(!(await page.locator('.stepper').isVisible()));
-    assert.deepEqual(errors,[]);pass('real browser: '+locale+' wizard retains password across Back and failed checks, then shows completion links');
-    const splitName='split-ui-'+locale;const splitApp=path.join(web,splitName);fs.mkdirSync(splitApp);fs.copyFileSync(path.join(project,'install.php'),path.join(splitApp,'install.php'));
-    const splitData=path.join(fs.realpathSync(temp),'split-data-'+locale);const splitUrl=base.replace('/library/','/'+splitName+'/');
-    protect=false;await page.goto(splitUrl+'install.php');await page.locator('#storageMode').selectOption('external');
-    assert(await page.locator('#externalStorage').isVisible());await page.locator('#dataDir').fill(splitData+'/');
-    const preview=await page.locator('#layoutPreview').textContent();assert(preview.includes(splitData+'/books'));assert(preview.includes(splitData+'/conf'));
-    await page.locator('#checkButton').click();await page.locator('#stepLibrary').waitFor();
-    assert(!(await page.locator('#stepCheck').isVisible()));assert(!fs.existsSync(splitData));
-    await page.locator('input[name=password]').fill('split-browser-password');await page.locator('input[name=password_confirm]').fill('split-browser-password');
-    await page.locator('#libraryButton').click();await page.locator('#stepAccess').waitFor();
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'separate-storage-'+locale+'.png'),fullPage:true});
-    pass('real browser: '+locale+' previews separate books/conf paths and checks without Nginx deny rules');
-    await page.locator('#privateOpds').check();assert(await page.locator('#opdsCredentials').isVisible());assert(!(await page.locator('#bookUrlHelp').isVisible()));
-    await page.locator('#accessButton').click();await page.locator('#accessResults .error').waitFor();
-    await page.locator('[name=opds_user]').fill('reader');await page.locator('[name=opds_pwd]').fill('p');
-    await page.locator('#publicOpds').check();assert(!(await page.locator('#opdsCredentials').isVisible()));
-    await page.locator('#privateOpds').check();
-    if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'reading-access-'+locale+'.png'),fullPage:true});
-    await page.locator('#accessButton').click();await page.locator('#backButton').click();assert.equal(await page.locator('[name=opds_pwd]').inputValue(),'p');
-    await page.locator('#accessButton').click();
-    assert(!fs.existsSync(splitData));
-    await page.locator('#installButton').click();await page.waitForFunction(()=>document.getElementById('setupForm').hidden);
-    assert(fs.existsSync(path.join(splitData,'conf/pass.conf')));assert(!fs.existsSync(path.join(splitApp,'conf')));
-    assert(fs.readFileSync(path.join(splitData,'conf/pass.conf'),'utf8').includes('opds_user=reader\nopds_pwd=p\n'));
-    await page.goto(splitUrl+'up.php');await page.locator('input[name=password]').fill('split-browser-password');await page.locator('button[type=submit]').click();await page.locator('#apiSettingsButton').waitFor();
-    await page.locator('#apiSettingsButton').click();assert((await page.locator('#curlCommand').textContent()).includes(splitUrl+'api.php'));
-    const previousToken=await page.locator('#apiToken').inputValue();
-    await page.locator('#generateSkill').click();assert((await page.locator('#skillContent').textContent()).includes(previousToken));
-    await page.locator('#resetTokenForm summary').click();page.once('dialog',dialog=>dialog.accept());
-    await Promise.all([page.waitForNavigation(),page.locator('#resetTokenButton').click()]);
-    const nextToken=await page.locator('#apiToken').inputValue();assert.notEqual(nextToken,previousToken);assert(!(await page.locator('#skillPanel').isVisible()));
-    await page.locator('#generateSkill').click();const refreshedSkill=await page.locator('#skillContent').textContent();assert(refreshedSkill.includes(nextToken));assert(!refreshedSkill.includes(previousToken));assert(refreshedSkill.includes(splitUrl+'api.php'));
-    assert.deepEqual(errors,[]);protect=true;pass('real browser: '+locale+' installs separate storage and signs in through the original web URL');
-    await context.close();pass('real browser: '+locale+' adaptive UI, API dialog, clipboard, and live upload');
-   }
-  }finally{await browser.close();}
- }
- console.log(`${results.length} integration checks passed.`);
- if(process.env.TEST_REPORT)fs.writeFileSync(process.env.TEST_REPORT,JSON.stringify(results,null,2));
-}catch(e){console.error('Test files retained at '+temp);console.error(fs.readFileSync(path.join(temp,'php.log'),'utf8').slice(-3000));throw e;}
-finally{proxy.closeAllConnections();proxy.close();try{process.kill(-server.pid,'SIGTERM');}catch{} }
+ console.log(`Passed ${results.length} integration suites.`);
+} catch(e) {
+ console.error(fs.readFileSync(path.join(temp,'php.log'),'utf8').split('\n').slice(-30).join('\n').replace(/((?:activate|s)=)[^&\s]+/g,'$1[redacted]'));
+ throw e;
+} finally {
+ proxy.closeAllConnections();await new Promise(r=>proxy.close(r));
+ try{process.kill(-server.pid,'SIGTERM');}catch{}
+ fs.closeSync(log);fs.rmSync(temp,{recursive:true,force:true});
+}

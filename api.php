@@ -9,6 +9,7 @@ header('Referrer-Policy: no-referrer');
 require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/security.php';
 require __DIR__ . '/upload-common.php';
+require __DIR__ . '/accounts.php';
 
 function verifyUploadToken(): void
 {
@@ -17,14 +18,14 @@ function verifyUploadToken(): void
         && $_SERVER['HTTP_AUTHORIZATION'] !== $_SERVER['REDIRECT_HTTP_AUTHORIZATION']) {
         reject(tr('Ambiguous Authorization headers.'), 401);
     }
-    $config = readCredentials();
     if (!is_string($header) || strlen($header) > 128
         || preg_match('/\ABearer ([a-f0-9]{64})\z/iD', $header, $match) !== 1
-        || !hash_equals($config['api_token'], $match[1])) {
+        || ($user=tokenAccount($match[1]))===null) {
         reserveRateAttempt('invalid-token', 30, 300);
         header('WWW-Authenticate: Bearer realm="opds-upload"');
         reject(tr('Missing or invalid API token. Use the Authorization: Bearer header.'), 401);
     }
+    setAccountScope($user);
     // A Bearer token can upload only. It cannot access the UI or rotate itself.
     if (array_diff(array_keys($_GET), ['action'])) {
         reject(tr('URL parameters are not accepted. Send credentials only in the Authorization header.'));

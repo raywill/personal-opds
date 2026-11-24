@@ -14,7 +14,7 @@ function requireUploadHttps(): void
 function publicError(Throwable $error): string
 {
     if ($error instanceof RequestError) {
-        return $error->getMessage();
+        return tr($error->getMessage());
     }
     // Details (including filesystem paths) stay in the server log.
     // Do not log a stack trace: its arguments could contain credentials.
@@ -115,7 +115,7 @@ function acquireUploadSlot()
     reject(tr('All upload processing slots are busy. Try again later.'), 429);
 }
 
-function saveUpload(string $tmpPath, string $filename, string $directoryName): void
+function saveUpload(string $tmpPath, string $filename, string $directoryName,?array &$quota): bool
 {
     $filename = safeFilename($filename);
     if (!is_uploaded_file($tmpPath)) {
@@ -133,8 +133,13 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName): v
     $destination = resolveDestinationDirectory($directoryName);
     $target = $destination . DIRECTORY_SEPARATOR . $filename;
     if (file_exists($target) || is_link($target)) {
+        if (!is_link($target) && is_file($target) && filesize($target)===$size) {
+            $existing=hash_file('sha256',$target); $incoming=hash_file('sha256',$tmpPath);
+            if (is_string($existing) && is_string($incoming) && hash_equals($existing,$incoming)) return false;
+        }
         reject(tr('File already exists; not overwritten: ') . $filename, 409);
     }
+    enforceAccountQuota($size,$quota);
     // Reserve the random staging name exclusively; do not overwrite a link.
     $temp = $destination . '/.upload-' . bin2hex(random_bytes(24)) . '.tmp';
     $reservation = fopen($temp, 'x+b');
@@ -161,11 +166,12 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName): v
             error_log('EPUB uploader: unable to remove staging file.');
         }
     }
+    $quota['bytes']+=$size; $quota['files']++;
+    return true;
 }
 
-function receiveUploads(string $directory, bool $singleFile): array
+function receiveUploads(string $directory, bool $singleFile,bool $create): array
 {
-    $destination = resolveDestinationDirectory($directory);
     // PHP silently truncates excess uploads BEFORE user code runs. One extra
     // parser slot lets the application reject more than MAX_FILES safely.
     if ((int) ini_get('max_file_uploads') < MAX_FILES + 1) {
@@ -205,11 +211,12 @@ function receiveUploads(string $directory, bool $singleFile): array
             $total += $actual;
         }
     }
+    $destination = $create && $directory!=='' ? createCategory($directory) : resolveDestinationDirectory($directory);
     $free = disk_free_space($destination);
     if ($free === false || $free - $total < MIN_FREE_SPACE) {
         reject(tr('Insufficient library disk space.'), 507);
     }
-    $messages = [];
+    $messages = []; $quota=null;
     for ($i = 0; $i < $count; ++$i) {
         try {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
@@ -225,9 +232,9 @@ function receiveUploads(string $directory, bool $singleFile): array
                     default => 400,
                 });
             }
-            saveUpload($files['tmp_name'][$i], $files['name'][$i], $directory);
+            $saved=saveUpload($files['tmp_name'][$i], $files['name'][$i], $directory,$quota);
             $messages[] = ['name' => $files['name'][$i], 'success' => true,
-                'text' => tr('Saved: ') . $files['name'][$i], 'status' => 200];
+                'text' => ($saved?tr('Saved: '):tr('Already exists: ')) . $files['name'][$i], 'status' => 200, 'already_exists'=>!$saved];
         } catch (Throwable $e) {
             $messages[] = ['name' => $files['name'][$i], 'success' => false, 'text' => publicError($e),
                 'status' => $e instanceof RequestError ? $e->getCode() : 500];
@@ -265,13 +272,11 @@ function processUpload(bool $singleFile, bool $bearer): array
         reject(tr('Invalid destination directory.'));
     }
     reserveRateAttempt('upload', 120, 600);
-    $slot = acquireUploadSlot();
-    try {
-        return receiveUploads($directory, $singleFile);
-    } finally {
-        flock($slot, LOCK_UN);
-        fclose($slot);
-    }
+    return withLock('books-'.accountScope(),function () use ($directory,$singleFile,$bearer) {
+        $slot=acquireUploadSlot();
+        try { return receiveUploads($directory,$singleFile,$bearer); }
+        finally { fclose($slot); }
+    });
 }
 
 function uploadJsonResponse(array $messages): never
@@ -284,7 +289,7 @@ function uploadJsonResponse(array $messages): never
         $codes = array_unique(array_column($errors, 'status'));
         // Partial success MUST NOT return 2xx: curl --fail-with-body must fail.
         $status = count($codes) === 1 && $successes === 0 ? $errors[0]['status'] : 422;
-        if (max($codes) >= 500) {
+        if (in_array(500,$codes,true)) {
             $status = 500;
         }
     }
@@ -293,7 +298,7 @@ function uploadJsonResponse(array $messages): never
     jsonResponse([
         'success' => $success, 'message' => $message,
         'results' => array_map(static fn (array $m): array => [
-            'name' => $m['name'], 'success' => $m['success'], 'message' => $m['text'], 'status' => $m['status'],
+            'name' => $m['name'], 'success' => $m['success'], 'message' => $m['text'], 'status' => $m['status'], 'already_exists'=>$m['already_exists']??false,
         ], $messages),
     ], $status);
 }
