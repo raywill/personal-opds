@@ -35,6 +35,7 @@ function requireOpdsAccess(): void
         reject('Enter your OPDS username and password.',401);
     }
     setAccountScope($user);
+    selectLibrary(parameter('library',personalLibraryId($user)),$user,'opds');
 }
 
 function parameter(string $name, string $default = ''): string
@@ -47,6 +48,7 @@ function parameter(string $name, string $default = ''): string
 function catalogueUrl(array $params = []): string
 {
     if (isset($GLOBALS['shareKey'])) $params=['s'=>$GLOBALS['shareKey']]+$params;
+    elseif (isset($_GET['library'])) $params=['library'=>currentLibrary()['id']]+$params;
     return BASE_URL . 'index.php' . ($params ? '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986) : '');
 }
 function add(DOMDocument $doc, DOMElement $parent, string $name, string $value): DOMElement
@@ -102,7 +104,7 @@ try {
         if (!preg_match('/\A\d{1,6}\z/D',$rawOffset)) reject(tr('Invalid pagination parameter.'));
         $offset = (int)$rawOffset;
     }
-    add($doc,$feed,'id',catalogueUrl($params)); add($doc,$feed,'title',$category ?: ($share['category']??LIBRARY_TITLE));
+    add($doc,$feed,'id',catalogueUrl($params)); add($doc,$feed,'title',$category ?: ($share['category']??(isset($_GET['library'])?libraryTitle(currentLibrary(),accountScope()):LIBRARY_TITLE)));
     add($doc,$feed,'updated',gmdate('Y-m-d\TH:i:s\Z'));
     $catalogType='application/atom+xml;profile=opds-catalog;kind=' . ($mode === '' ? 'navigation' : 'acquisition');
     linkNode($doc,$feed,'self',catalogueUrl($offset > 0 ? $params+['offset'=>$offset] : $params),$catalogType);

@@ -153,7 +153,7 @@ function storageLayout(string $webRoot,string $dataDir): array {
 function payloadFiles(string $root): array {
     $decoded=gzdecode(base64_decode(PAYLOAD,true) ?: '');
     $payload=$decoded===false ? null : json_decode($decoded,true,16,JSON_THROW_ON_ERROR);
-    if (!is_array($payload) || array_keys($payload)!==['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','catalogue.php','admin.php','LICENSE','NOTICE']) stopInstall(tr('The installation payload is damaged.'));
+    if (!is_array($payload) || array_keys($payload)!==['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','agent-skill.php','library-controls.php','catalogue.php','admin.php','LICENSE','NOTICE']) stopInstall(tr('The installation payload is damaged.'));
     $files=[];
     foreach ($payload as $name=>$entry) {
         $content=base64_decode($entry['content'],true);
@@ -196,7 +196,7 @@ function inspectPrivateDirectory(string $path,string $invalidMessage,bool $priva
     throw new InstallProblem(sprintf(tr('PHP cannot read, write or enter the private directory %s. Ask the administrator to grant the PHP service account access to this dedicated directory only, or choose a new private data directory.'),$path));
 }
 function inspectConfiguration(string $conf): void {
-    foreach (['pass.conf','config.php','users.json','shares.json','installed.lock'] as $name) {
+    foreach (['pass.conf','config.php','users.json','shares.json','libraries.json','installed.lock'] as $name) {
         if (file_exists($conf.'/'.$name) || is_link($conf.'/'.$name)) stopInstall(tr('Existing configuration was not overwritten.'));
     }
 
@@ -330,6 +330,7 @@ function installLibrary(array $fields,string $url,int &$step): string {
         $record=['state'=>'pending','activation'=>['digest'=>hash('sha256',$secret),'expires'=>time()+86400]];
         writeNew($conf.'/users.json',json_encode(['version'=>1,'records'=>(object)[$fields['username']=>$record]],JSON_THROW_ON_ERROR),$created);
         writeNew($conf.'/shares.json','{"version":1,"records":{}}',$created);
+        writeNew($conf.'/libraries.json','{"version":1,"records":{}}',$created);
         writeNew($conf.'/installed.lock',"installed\n",$created);
         writeNew(__DIR__.'/install.lock',"installed\n",$created);
         // Publish paths last so application entry points cannot see a half-installed state.

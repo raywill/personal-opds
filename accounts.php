@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__.'/libraries.php';
 
 const ACTIVATION_TTL = 86400;
 const SHARE_TTL = 120 * 86400;
@@ -77,18 +78,23 @@ function stateUpdate(string $key, callable $change): mixed
     return withLock($key,function () use ($key,$change) {
         $records=stateRead($key);
         $result=$change($records);
-        $data=json_encode(['version'=>1,'records'=>(object)$records],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
-        if (strlen($data)>8*1024*1024) reject('State capacity reached.',507);
-        $temp=CONFIG_DIR.'/.'.bin2hex(random_bytes(16)).'.tmp';
-        try {
-            $f=fopen($temp,'xb');
-            if (!$f) throw new RuntimeException('Cannot write private state.');
-            try { writeAll($f,$data); if (!fflush($f) || !fsync($f)) throw new RuntimeException('Cannot flush private state.'); }
-            finally { fclose($f); }
-            if (!rename($temp,CONFIG_DIR.'/'.$key.'.json')) throw new RuntimeException('Cannot publish private state.');
-        } finally { if (is_file($temp)) @unlink($temp); }
+        stateWrite($key,$records);
         return $result;
     });
+}
+
+function stateWrite(string $key,array $records): void
+{
+    $data=json_encode(['version'=>1,'records'=>(object)$records],JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE);
+    if (strlen($data)>8*1024*1024) reject('State capacity reached.',507);
+    $temp=CONFIG_DIR.'/.'.bin2hex(random_bytes(16)).'.tmp';
+    try {
+        $f=fopen($temp,'xb');
+        if (!$f) throw new RuntimeException('Cannot write private state.');
+        try { writeAll($f,$data); if (!fflush($f) || !fsync($f)) throw new RuntimeException('Cannot flush private state.'); }
+        finally { fclose($f); }
+        if (!rename($temp,CONFIG_DIR.'/'.$key.'.json')) throw new RuntimeException('Cannot publish private state.');
+    } finally { if (is_file($temp)) @unlink($temp); }
 }
 
 function setAccountScope(string $name): void
@@ -131,7 +137,7 @@ function createCategory(string $name): string
 {
     if (!validCategory($name)) reject('Enter a valid single-level category name.');
     $root=getLibraryRoot();
-    return withLock('category-'.accountScope(),function () use ($root,$name) {
+    return withLock('category-'.libraryStorageKey(),function () use ($root,$name) {
         if (!is_dir($root.'/'.$name) && count(libraryDirectories())>=1000) reject('Category limit reached.',507);
         return directoryUnder($root,$name,true);
     });
@@ -145,23 +151,14 @@ function activateAccount(string $name,string $secret,string $password): void
 {
     if (!accountName($name) || !preg_match('/\A[a-f0-9]{64}\z/D',$secret)) reject('Activation link is invalid or expired.',403);
     if ($password==='') reject(tr('Password cannot be empty.'));
-    stateUpdate('users',function (&$users) use ($name,$secret,$password) {
+    withLock('libraries',fn()=>stateUpdate('users',function (&$users) use ($name,$secret,$password) {
         $row=$users[$name]??[];
         if (!in_array($row['state']??null,['pending','active'],true) || ($row['activation']['expires']??0)<=time() ||
             !hash_equals($row['activation']['digest']??'',hash('sha256',$secret))) reject('Activation link is invalid or expired.',403);
         directoryUnder(accountBooks(),$name);
         $row['password']=ACCOUNT_PASSWORD_FORMAT.password_hash(accountPasswordMaterial($password),PASSWORD_DEFAULT);
         $row['state']='active'; unset($row['activation']); $users[$name]=$row;
-    });
-}
-function rotateUploadToken(string $name,string $passwordVersion): string
-{
-    $token=bin2hex(random_bytes(32));
-    stateUpdate('users',function (&$users) use ($name,$token,$passwordVersion) {
-        if (($users[$name]['state']??null)!=='active'||!hash_equals($users[$name]['password']??'',$passwordVersion)) reject('Sign in again.',401);
-        $users[$name]['token']=hash('sha256',$token);
-    });
-    return $token;
+    }));
 }
 function tokenAccount(string $token): ?string
 {
@@ -208,27 +205,30 @@ function publicShareUrl(string $key): string { return BASE_URL.'index.php?s='.$k
 function manageShare(string $category,bool $revoke): void
 {
     if (!validCategory($category)) reject('Select a subdirectory to share.');
-    $owner=accountScope();
-    stateUpdate('shares',function (&$records) use ($category,$revoke,$owner) {
+    $library=currentLibrary()??libraryInfo(personalLibraryId(accountScope()));
+    $owner=$library['legacy']??$library['owner'];
+    stateUpdate('shares',function (&$records) use ($category,$revoke,$owner,$library) {
         foreach ($records as &$old) {
-            if ($old['owner']===$owner && $old['category']===$category && empty($old['revoked'])) $old['revoked']=time();
+            if (shareLibraryId($old)===$library['id'] && $old['category']===$category && empty($old['revoked'])) $old['revoked']=time();
         }
         unset($old);
         if ($revoke) return;
         $id=categoryIdentity(resolveDestinationDirectory($category),true);
         if ($id===null) reject('Cannot identify the share directory.',409);
         do { $number=''; for ($i=0;$i<8;$i++) $number.=random_int(1,9); } while(isset($records[$number]));
-        $records[$number]=['owner'=>$owner,'category'=>$category,'identity'=>$id,'salt'=>bin2hex(random_bytes(16)),'created'=>time(),'expires'=>time()+SHARE_TTL];
+        $records[$number]=['owner'=>$owner,'library'=>$library['id'],'category'=>$category,'identity'=>$id,'salt'=>bin2hex(random_bytes(16)),'created'=>time(),'expires'=>time()+SHARE_TTL];
     });
 }
+function shareLibraryId(array $row): string { return $row['library']??personalLibraryId($row['owner']); }
 function resolveShare(string $key): array
 {
     if (preg_match('/\A([1-9]{8})-([A-Z0-9]{4})\z/iD',$key,$m)) {
         $row=stateRead('shares')[$m[1]]??null;
         if (is_array($row) && hash_equals(shareCode($m[1],$row['salt']),strtoupper($m[2]))) {
-            if (!empty($row['revoked']) || $row['expires']<=time() || !activeAccount($row['owner']))
+            if (!empty($row['revoked']) || $row['expires']<=time() || !($library=libraryInfo(shareLibraryId($row))) || !empty($library['archived']) ||
+                ($library['legacy']!==null && $library['owner']===$library['legacy'] && !activeAccount($library['legacy'])))
                 reject('Subscription unavailable. Ask the owner for a new link.',410);
-            setAccountScope($row['owner']);
+            setAccountScope($row['owner']); setLibraryScope($library);
             try { $identity=categoryIdentity(resolveDestinationDirectory($row['category'])); }
             catch (RequestError) { $identity=null; }
             if ($identity!==null && hash_equals($row['identity'],$identity)) return $row;
@@ -254,7 +254,7 @@ function listBookFiles(string $dir): array
 function enforceAccountQuota(int $incoming, ?array &$quota=null): void
 {
     if ($quota===null) {
-        $account=activeAccount(accountScope())??throw new RequestError('Account disabled.',401);
+        $account=currentLibrary()??activeAccount(accountScope())??throw new RequestError('Account disabled.',401);
         $quota=['bytes'=>0,'files'=>0,'max_bytes'=>$account['quota_bytes']??5*1024*1024*1024,'max_files'=>$account['quota_files']??5000];
         foreach ([getLibraryRoot(),...array_values(libraryDirectories())] as $dir) {
             $items=listBookFiles($dir); $quota['bytes']+=array_sum($items); $quota['files']+=count($items);
@@ -273,7 +273,7 @@ function managedBook(string $category,string $name): string
 }
 function manageBook(string $action,string $category,string $name,string $to): void
 {
-    withLock('books-'.accountScope(),function () use ($action,$category,$name,$to) {
+    withLock('books-'.libraryStorageKey(),fn()=>uploadCommit(function () use ($action,$category,$name,$to) {
         $source=managedBook($category,$name);
         if ($action==='delete') {
             if (!unlink($source)) reject('Could not delete the book.',409);
@@ -301,5 +301,5 @@ function manageBook(string $action,string $category,string $name,string $to): vo
             @unlink($target);
             reject('Could not remove the original book.',409);
         }
-    });
+    }));
 }

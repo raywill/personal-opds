@@ -9,3 +9,5 @@ Public subscription URLs are bearer capabilities. They are intentionally short t
 Upload and metadata limits reduce resource consumption but do not replace web server limits, OS quotas or monitoring. Uploaded EPUB validation does not replace antivirus or EPUBCheck. Read with a maintained e-reader, and do not render book HTML under the application origin.
 
 Please report security issues privately through GitHub's security reporting interface if enabled.
+
+Do not export private RBAC metadata, which includes account and role mappings and upload-token digests. Personalized Agent setup text intentionally contains an upload-only secret, unlike the generic Skill download. Paste it only into the intended agent environment. Revoke its credential in **CLI / API & upload Skill** if you stop using that agent. A folder-scoped token does not authenticate OPDS or website reads. The verification endpoint checks the token without making writes.

@@ -11,7 +11,7 @@ require __DIR__ . '/security.php';
 require __DIR__ . '/upload-common.php';
 require __DIR__ . '/accounts.php';
 
-function verifyUploadToken(): void
+function verifyUploadToken(): array
 {
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
     if (isset($_SERVER['HTTP_AUTHORIZATION'], $_SERVER['REDIRECT_HTTP_AUTHORIZATION'])
@@ -19,30 +19,40 @@ function verifyUploadToken(): void
         reject(tr('Ambiguous Authorization headers.'), 401);
     }
     if (!is_string($header) || strlen($header) > 128
-        || preg_match('/\ABearer ([a-f0-9]{64})\z/iD', $header, $match) !== 1
-        || ($user=tokenAccount($match[1]))===null) {
+        || preg_match('/\ABearer ([a-z0-9.]+)\z/iD', $header, $match) !== 1
+        || ($scope=agentScope($match[1]))===null) {
         reserveRateAttempt('invalid-token', 30, 300);
         header('WWW-Authenticate: Bearer realm="opds-upload"');
         reject(tr('Missing or invalid API token. Use the Authorization: Bearer header.'), 401);
     }
-    setAccountScope($user);
+    setAccountScope($scope['user']);
+    setLibraryScope($scope['library']);
+    $GLOBALS['opdsUploadGuard']=static function () use ($match,$scope) {
+        $check=agentScope($match[1]);
+        if (!$check || $check['library']['id']!==$scope['library']['id']) reject('Upload authorization changed.',403);
+    };
     // A Bearer token can upload only. It cannot access the UI or rotate itself.
     if (array_diff(array_keys($_GET), ['action'])) {
         reject(tr('URL parameters are not accepted. Send credentials only in the Authorization header.'));
     }
-    if (isset($_GET['action']) && $_GET['action'] !== 'upload') {
+    if (isset($_GET['action']) && !in_array($_GET['action'],['upload','verify'],true)) {
         reject(tr('This API only supports file uploads.'), 403);
     }
+    return $scope;
 }
 
 try {
     requireUploadHttps();
-    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
-        header('Allow: POST');
-        reject(tr('The upload endpoint only accepts POST.'), 405);
+    $method=$_SERVER['REQUEST_METHOD']??'GET';
+    $verify=($_GET['action']??'')==='verify';
+    if ($method!==($verify?'GET':'POST')) {
+        header('Allow: '.($verify?'GET':'POST'));
+        reject($verify?'Verification only accepts GET.':tr('The upload endpoint only accepts POST.'),405);
     }
-    verifyUploadToken();
-    uploadJsonResponse(processUpload(singleFile: false, bearer: true));
+    $scope=verifyUploadToken();
+    if ($verify) jsonResponse(['success'=>true,'library_id'=>$scope['library']['id'],
+        'directory'=>$scope['fixed']?$scope['dir']:null,'can_create_directory'=>$scope['mkdir'],'expires_at'=>$scope['expires']?gmdate(DATE_ATOM,$scope['expires']):null]);
+    uploadJsonResponse(processUpload(singleFile:false,bearer:true,scope:$scope));
 } catch (Throwable $error) {
     jsonResponse([
         'success' => false,

@@ -103,7 +103,7 @@ function readCredentials(): array
 
 function getLibraryRoot(): string
 {
-    return directoryUnder(accountBooks(),accountScope());
+    return directoryUnder(accountBooks(),libraryStorageKey());
 }
 
 function validDirectoryName(string $name): bool

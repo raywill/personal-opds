@@ -56,11 +56,11 @@ function bookPath(string $relative): string
 }
 function books(array $directories, string $requiredCategory = '', bool $requireComplete = false): array
 {
-    $lock = openPrivateState(CONFIG_DIR . '/index-'.accountScope().'.lock');
+    $lock = openPrivateState(CONFIG_DIR . '/index-'.libraryStorageKey().'.lock');
     if (!$lock || !flock($lock, LOCK_EX)) throw new RuntimeException('Index lock unavailable.');
     $temp = null;
     try {
-        $cachePath = CONFIG_DIR . '/cache/index-'.accountScope().(isset($GLOBALS['shareCategory'])?'-'.hash('sha256',$GLOBALS['shareCategory']):'').'.json';
+        $cachePath = CONFIG_DIR . '/cache/index-'.libraryStorageKey().(isset($GLOBALS['shareCategory'])?'-'.hash('sha256',$GLOBALS['shareCategory']):'').'.json';
         $raw = is_file($cachePath) ? file_get_contents($cachePath, false, null, 0, 16*1024*1024) : '';
         $cache = $raw ? json_decode($raw, true) : [];
         if (!is_array($cache)) $cache = [];

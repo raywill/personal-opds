@@ -48,6 +48,7 @@ if (PHP_SAPI!=='cli') {
             bootstrapFailure(tr('Library data must be outside the web root.'));
     }
 }
+define('ALLOW_LIBRARY_CREATION',($settings['allow_library_creation']??true)===true);
 define('SHARE_KEY', $settings['share_key']);
 define('BASE_URL', $settings['base_url']);
 define('LIBRARY_TITLE', $settings['title']);

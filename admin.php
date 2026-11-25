@@ -8,6 +8,31 @@ require __DIR__.'/accounts.php';
 
 try {
     [$script,$command,$user]=array_pad($argv,3,'');
+    if ($command==='rbac-check') {
+        $report=withLock('libraries','libraryPreflight');
+        echo json_encode($report,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR).PHP_EOL;
+        exit($report['issues']?2:0);
+    }
+    if ($command==='rbac-audit') {
+        $events=libraryRecords()['_audit']??[];
+        echo json_encode($events,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR).PHP_EOL;
+        exit;
+    }
+    if ($command==='library-quota') {
+        $bytes=filter_var($argv[3]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+        $files=filter_var($argv[4]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>5000]]);
+        if ($bytes===false||$files===false) reject('Usage: php admin.php library-quota LIBRARY_ID BYTES FILES (max 5000 files).');
+        libraryUpdate(static function (&$rows) use ($user,$bytes,$files) {
+            $row=libraryInfo($user,$rows);
+            if (!$row) reject('Library not found.');
+            $row['quota_bytes']=$bytes;
+            $row['quota_files']=$files;
+            $rows[$user]=libraryPersisted($row);
+            libraryAudit($rows,'quota.changed','site-operator',$user);
+        });
+        echo "Library quota saved.
+"; exit;
+    }
     if (!accountName($user)) reject('Specify a lowercase username.');
     setAccountScope($user);
     if ($command==='invite'||$command==='reset') {
@@ -28,10 +53,20 @@ try {
             return $link;
         }).PHP_EOL;
     } elseif ($command==='disable') {
-        stateUpdate('users',function (&$users) use ($user) {
+        withLock('libraries',static function () use ($user) {
+            $rows=libraryRecords();
+            foreach (array_unique([personalLibraryId($user),...array_keys($rows)]) as $id) {
+                $library=libraryInfo((string)$id,$rows);
+                if (($library['owner']??null)===$user && empty($library['archived']))
+                    reject('Transfer or archive every library owned by this account before disabling it.');
+            }
+            stateUpdate('users',function (&$users) use ($user) {
             if (!isset($users[$user])) reject('Account not found.');
             $users[$user]['state']='disabled';
-            unset($users[$user]['activation'],$users[$user]['token'],$users[$user]['password']);
+                unset($users[$user]['activation'],$users[$user]['token'],$users[$user]['password']);
+            });
+            libraryAudit($rows,'account.disabled','site-operator','',['member'=>$user]);
+            stateWrite('libraries',$rows);
         });
         echo "Account disabled; library files were retained.\n";
     } elseif ($command==='quota') {
@@ -48,6 +83,9 @@ try {
         if (!$source || !is_dir($source) || is_link($argv[3]??'') || !activeAccount($user)) reject('Use an existing old books directory and an active account.');
         if ($source===accountBooks() || str_starts_with($source,accountBooks().'/') || str_starts_with(accountBooks(),rtrim($source,'/').'/'))
             reject('Migration source must be separate from the new books directory.');
+        $legacy=libraryInfo(personalLibraryId($user));
+        if (!$legacy || $legacy['owner']!==$user || !empty($legacy['archived'])) reject('Use an active personal library still owned by this account.');
+        setLibraryScope($legacy);
         withLock('books-'.$user,function () use ($source,$apply) {
             $dirs=[''=>$source];
             foreach (scandir($source)?:[] as $name) {
@@ -78,7 +116,7 @@ try {
             }
             echo "Copied; original library retained.\n";
         });
-    } else reject('Usage: php admin.php invite|reset|disable|quota|migrate USER [options]');
+    } else reject('Usage: php admin.php invite|reset|disable|quota|migrate USER [options], library-quota LIBRARY_ID BYTES FILES, rbac-check, or rbac-audit');
 } catch (Throwable $e) {
     fwrite(STDERR,$e->getMessage().PHP_EOL);exit(1);
 }

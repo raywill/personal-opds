@@ -115,7 +115,17 @@ function acquireUploadSlot()
     reject(tr('All upload processing slots are busy. Try again later.'), 429);
 }
 
-function saveUpload(string $tmpPath, string $filename, string $directoryName,?array &$quota): bool
+// Serialize permission revocation and the final publish, never EPUB parsing or copying.
+function uploadCommit(callable $commit): mixed
+{
+    if (!isset($GLOBALS['opdsUploadGuard'])) return $commit();
+    return withLock('libraries',static function () use ($commit) {
+        ($GLOBALS['opdsUploadGuard'])();
+        return $commit();
+    });
+}
+
+function saveUpload(string $tmpPath, string $filename, string $directoryName,?array &$quota): void
 {
     $filename = safeFilename($filename);
     if (!is_uploaded_file($tmpPath)) {
@@ -132,13 +142,8 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName,?ar
     }
     $destination = resolveDestinationDirectory($directoryName);
     $target = $destination . DIRECTORY_SEPARATOR . $filename;
-    if (file_exists($target) || is_link($target)) {
-        if (!is_link($target) && is_file($target) && filesize($target)===$size) {
-            $existing=hash_file('sha256',$target); $incoming=hash_file('sha256',$tmpPath);
-            if (is_string($existing) && is_string($incoming) && hash_equals($existing,$incoming)) return false;
-        }
+    if (file_exists($target) || is_link($target))
         reject(tr('File already exists; not overwritten: ') . $filename, 409);
-    }
     enforceAccountQuota($size,$quota);
     // Reserve the random staging name exclusively; do not overwrite a link.
     $temp = $destination . '/.upload-' . bin2hex(random_bytes(24)) . '.tmp';
@@ -155,19 +160,19 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName,?ar
             throw new RuntimeException('Destination changed during upload.');
         }
         // Same-directory hard link: atomic creation, never overwrites target.
-        if (!@link($temp, $target)) {
-            if (file_exists($target) || is_link($target)) {
-                reject(tr('File already exists; not overwritten: ') . $filename, 409);
+        uploadCommit(static function () use ($temp,$target,$filename) {
+            if (!@link($temp, $target)) {
+                if (file_exists($target) || is_link($target))
+                    reject(tr('File already exists; not overwritten: ') . $filename, 409);
+                throw new RuntimeException('Cannot create final hard link.');
             }
-            throw new RuntimeException('Cannot create final hard link.');
-        }
+        });
     } finally {
         if (!@unlink($temp)) {
             error_log('EPUB uploader: unable to remove staging file.');
         }
     }
     $quota['bytes']+=$size; $quota['files']++;
-    return true;
 }
 
 function receiveUploads(string $directory, bool $singleFile,bool $create): array
@@ -211,7 +216,7 @@ function receiveUploads(string $directory, bool $singleFile,bool $create): array
             $total += $actual;
         }
     }
-    $destination = $create && $directory!=='' ? createCategory($directory) : resolveDestinationDirectory($directory);
+    $destination = $create && $directory!=='' ? uploadCommit(static fn()=>createCategory($directory)) : resolveDestinationDirectory($directory);
     $free = disk_free_space($destination);
     if ($free === false || $free - $total < MIN_FREE_SPACE) {
         reject(tr('Insufficient library disk space.'), 507);
@@ -232,9 +237,9 @@ function receiveUploads(string $directory, bool $singleFile,bool $create): array
                     default => 400,
                 });
             }
-            $saved=saveUpload($files['tmp_name'][$i], $files['name'][$i], $directory,$quota);
+            saveUpload($files['tmp_name'][$i], $files['name'][$i], $directory,$quota);
             $messages[] = ['name' => $files['name'][$i], 'success' => true,
-                'text' => ($saved?tr('Saved: '):tr('Already exists: ')) . $files['name'][$i], 'status' => 200, 'already_exists'=>!$saved];
+                'text' => tr('Saved: ') . $files['name'][$i], 'status' => 200, 'already_exists'=>false];
         } catch (Throwable $e) {
             $messages[] = ['name' => $files['name'][$i], 'success' => false, 'text' => publicError($e),
                 'status' => $e instanceof RequestError ? $e->getCode() : 500];
@@ -259,11 +264,11 @@ function requireMultipart(): void
     }
 }
 
-function processUpload(bool $singleFile, bool $bearer): array
+function processUpload(bool $singleFile, bool $bearer, array $scope=[]): array
 {
     requireMultipart();
     foreach (array_keys($_POST) as $field) {
-        if (!in_array($field, $bearer ? ['directory'] : ['directory', 'csrf', 'action'], true)) {
+        if (!in_array($field, $bearer ? ['directory'] : ['directory', 'csrf', 'action', 'library'], true)) {
             reject(tr('The upload contains unsupported form fields.'));
         }
     }
@@ -271,10 +276,16 @@ function processUpload(bool $singleFile, bool $bearer): array
     if (!is_string($directory)) {
         reject(tr('Invalid destination directory.'));
     }
+    $fixed=$bearer && !empty($scope['fixed']);
+    if ($fixed) {
+        if (array_key_exists('directory',$_POST) && $directory!==$scope['dir'])
+            reject('This token is restricted to its configured destination.',403);
+        $directory=$scope['dir'];
+    }
     reserveRateAttempt('upload', 120, 600);
-    return withLock('books-'.accountScope(),function () use ($directory,$singleFile,$bearer) {
+    return withLock('books-'.libraryStorageKey(),function () use ($directory,$singleFile,$bearer,$fixed,$scope) {
         $slot=acquireUploadSlot();
-        try { return receiveUploads($directory,$singleFile,$bearer); }
+        try { return receiveUploads($directory,$singleFile,$bearer&&!$fixed&&!empty($scope['mkdir'])); }
         finally { fclose($slot); }
     });
 }
