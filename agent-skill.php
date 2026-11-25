@@ -23,10 +23,16 @@ name: personal-opds-upload
 description: Upload user-selected EPUB or TXT books to Personal OPDS, choosing a folder automatically.
 ---
 
-1. Load `~/.personal-opds-upload/profiles.json`. Use the requested library, or the only configured library. Ask only if the library is ambiguous. If the token is expired or rejected, ask for a fresh setup.
+1. Load `~/.personal-opds-upload/profiles.json`. Use the requested library, or the only configured library. Ask only if the library is ambiguous.
 2. Use HTTPS GET `endpoint?action=verify` with `Authorization: Bearer <token>` (no redirects) to refresh `folders`. For an upload the user requested, honor any folder they named. Otherwise, reuse a suitable existing folder or pick a short new name based on the books. Use one level only; the server creates missing folders. Omit `directory` to use the library root.
 3. POST multipart to `endpoint` with the same header and no redirects. Use one `files[]` field per EPUB or TXT, plus `directory` for the chosen folder. Group files by folder. Limits: 20 files per request, 100 MiB each, 200 MiB total.
 4. Check each result and tell the user which books were saved and where. Report conflicts or partial failures; never overwrite, silently rename, or blindly retry an interrupted upload. Never print the token.
+
+### If the upload token stops working
+
+If `expires_at` has passed or verify/upload returns HTTP 401, stop retrying with that token. Say “expired” only if its expiry has passed; otherwise say the token was rejected or may have been revoked. Ask the user to open the same OPDS library, then use the top-right account menu → **Connect Agent** → **Copy complete Agent setup** (「连接Agent」→「复制完整 Agent 配置」) and paste the full setup into this chat.
+
+Replace only that library's saved profile and verify the new token. Resume only the pending files that are known not to have been saved; never resend a successful file or one whose result is unknown.
 SETUP;
     return str_replace('__OPDS_PROFILE__',$params,$setup);
 }

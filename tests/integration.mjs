@@ -784,6 +784,19 @@ try{
  assert.equal((await ui({action:'agent_revoke',library:family,token_id:agent.token.split('.')[1]})).status,303);
  assert.equal((await verify(agent.token)).status,401);
  assert.equal((await verify(another.token)).status,200);
+ const expiring=setupConfig(await ui({action:'agent_setup',library:family}));
+ const expiryState=readState(libState);
+ const expiringId=expiring.token.split('.')[1];
+ expiryState.records[family].tokens[expiringId].expires=1;
+ fs.writeFileSync(libState,JSON.stringify(expiryState));
+ assert.equal((await verify(expiring.token)).status,401);
+ assert.equal((await upload(expiring.token,'Expired test',[['not-saved.txt','expired']])).status,401);
+ assert(!fs.existsSync(path.join(data,'books',librarian,'Expired test')));
+ const renewed=setupConfig(await ui({action:'agent_setup',library:family}));
+ assert.equal(renewed.library_id,expiring.library_id);
+ assert.notEqual(renewed.token,expiring.token);
+ assert.equal((await verify(renewed.token)).status,200);
+
 
  // A pre-upgrade fixed-folder token retains its restriction and cannot list folders.
  const oldScopedState=readState(libState), oldScoped=crypto.randomBytes(32).toString('hex'), oldId=crypto.randomBytes(12).toString('hex');
@@ -926,6 +939,8 @@ try{
      const copied=JSON.parse(text.match(/```json\s*([^\n]+)/)[1]);
      assert.equal(copied.endpoint,base+'api.php');
      assert(copied.folders.includes('Legacy upgrade'));
+     assert(text.includes('HTTP 401')&&text.includes('「连接Agent」→「复制完整 Agent 配置」'));
+     assert(text.includes('never resend a successful file'));
      assert(!copied.folders.includes('Share shelf'));
      assert(text.includes('~/.personal-opds-upload/profiles.json')&&text.includes('Authorization: Bearer <token>'));
      const check=await verify(copied.token);

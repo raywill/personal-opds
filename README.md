@@ -96,7 +96,7 @@ In the web dashboard, the library root lists its folders above the books stored 
 
 In the target library, open **Connect Agent**, click **Copy complete Agent setup**, and paste it into your agent. The text includes the Skill, API endpoint, upload-only token, and current folder names. The agent chooses a suitable folder and the server creates it if missing. No settings are required.
 
-New connections are tied to a single library, last 90 days, and can be revoked separately. They can list folder names for upload routing, but cannot read books, change settings, or access another library. Existing tokens retain their original scope and expiry.
+New connections are tied to a single library, last 90 days, and can be revoked separately. They can list folder names for upload routing, but cannot read books, change settings, or access another library. Existing tokens retain their original scope and expiry. If a token expires or is rejected, copy the complete setup again from the same library and paste it into your agent to replace that connection.
 
 The Skill uses `GET ?action=verify` to verify the token and refresh the folder names, and multipart POST to upload. If it omits `directory`, the file goes to the library root. Invalid paths are rejected.
 
