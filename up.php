@@ -59,16 +59,35 @@ if (!$user || !hash_equals($user['password'],$_SESSION['password']??'') ||
     unset($_SESSION['account'],$_SESSION['password'],$_SESSION['activity'],$_SESSION['issued']);
 } else { $_SESSION['activity']=$now; setAccountScope($viewer); }
 $error=''; $notice=''; $permissions=[]; $webLibraries=[]; $allLibraries=[]; $library=null; $dir=''; $activate=''; $activateFor=''; $preview=false; $renameDraft=null;
-$siteAdmin=($user['site_admin']??null)===true; $accountInviteLink=''; $accountInviteName='';
+$siteAdmin=($user['site_admin']??null)===true; $accountInviteLink=''; $accountInviteName=''; $accountNotice='';
 $action=is_string($_POST['action']??null)?$_POST['action']:'';
+$invitationTarget=''; $invitation=''; $incomingInvite=null; $incomingLibrary=null;
+$isInvitation=isset($_GET['target'])||isset($_GET['invitation'])||
+    ($action==='login'&&(isset($_POST['target'])||isset($_POST['invitation'])));
+$createdInvitation=$_SESSION['created_invitation']??[];
+unset($_SESSION['created_invitation']);
 try {
     if (!in_array($method,['GET','HEAD','POST'],true)) reject('Method not allowed.',405);
     $activate=field('activate',$_GET); $activateFor=field('account',$_GET);
     $dir=field('dir',$_GET);
-    if ($user && $activate==='') {
+    if ($isInvitation && $activate==='') {
+        $source=$method==='POST'?$_POST:$_GET;
+        $invitationTarget=field('target',$source); $invitation=field('invitation',$source);
+        if (!libraryIdValid($invitationTarget)||!preg_match('/\A[a-f0-9]{32}\z/D',$invitation))
+            reject('Library invitation is unavailable.',410);
+        if ($user) {
+            $incomingLibrary=libraryInfo($invitationTarget);
+            $candidate=$incomingLibrary['invites'][$viewer]??null;
+            if (!$candidate||empty($incomingLibrary['owner_active'])||!empty($incomingLibrary['archived'])||$candidate['expires']<=time()||
+                !hash_equals(invitationId($invitationTarget,$viewer,$candidate),$invitation))
+                reject('Library invitation is unavailable.',410);
+            $incomingInvite=$candidate;
+        }
+    }
+    if ($user && $activate==='' && !$isInvitation) {
         $allLibraries=availableLibraries($viewer);
         $webLibraries=array_filter($allLibraries,static fn($row)=>array_intersect(WEB_PERMISSIONS,$row['permissions']));
-        $globalAction=$method==='POST' && in_array($action,['logout','login','invite_accept','invite_decline','library_restore'],true);
+        $globalAction=$method==='POST' && in_array($action,['logout','login','invite_accept','invite_decline','library_restore','account_invite'],true);
         $selection=$globalAction?'':($method==='POST'?field('library',$_POST):field('library',$_GET));
         if (!$globalAction && $selection==='' && count($webLibraries)===1 && !isset($_GET['choose'])) $selection=(string)array_key_first($webLibraries);
         // The login redirect never carries a selection. Anonymous OPDS routing is independent.
@@ -99,6 +118,10 @@ try {
             if (!$verified) reject(tr('Incorrect username or password, or account not activated.'),401);
             session_regenerate_id(true);
             $_SESSION=['csrf'=>bin2hex(random_bytes(32)),'account'=>$name,'password'=>$verified['password'],'activity'=>$now,'issued'=>$now];
+            if ($isInvitation) {
+                header('Location: '.invitationLink($invitationTarget,$invitation),true,303);
+                exit;
+            }
             go();
         }
         if (!$user) reject(tr('Sign in again.'),401);
@@ -111,7 +134,7 @@ try {
         if (in_array($action,['invite_accept','invite_decline','library_restore'],true)) {
             $requested=field('target_library',$_POST);
             if ($action==='library_restore') librarySettings($requested,$viewer,$action);
-            else libraryAnswerInvite($requested,$viewer,$action==='invite_accept');
+            else libraryAnswerInvite($requested,$viewer,$action==='invite_accept',field('invitation_id',$_POST));
             $_SESSION['notice']=tr($action==='library_restore'?'Library restored.':($action==='invite_accept'?'Invitation accepted.':'Invitation declined.'));
             go();
         }
@@ -120,8 +143,25 @@ try {
             reserveRateAttempt('account-invite',15,150);
             $accountInviteName=trim(field('username',$_POST));
             $operation=field('operation',$_POST);
-            if ($operation!=='create'&&$operation!=='renew') reject('Unknown action.');
+            if ($operation==='disable') {
+                disableAccount($accountInviteName,$viewer,$signedIn['password']);
+                $_SESSION['account_notice']=sprintf(tr('%s was disabled. Their books were kept.'),$accountInviteName);
+                $return=field('library',$_POST);
+                $returnDir=field('dir',$_POST);
+                header('Location: '.BASE_URL.'up.php?'.http_build_query(
+                    (isset($webLibraries[$return])?['library'=>$return,'dir'=>$returnDir]:[])+['accounts'=>1],'','&',PHP_QUERY_RFC3986),true,303);
+                exit;
+            }
+            if (!in_array($operation,['create','renew','restore'],true)) reject('Unknown action.');
             $accountInviteLink=issueAccountActivation($accountInviteName,$operation,$viewer,$signedIn['password']);
+            // Preserve the active library when the modal was opened from one.
+            $return=field('library',$_POST);
+            if (isset($webLibraries[$return])) {
+                $library=$webLibraries[$return];
+                setLibraryScope($library);
+                $permissions=array_fill_keys($library['permissions'],true);
+                $dir=field('dir',$_POST);
+            }
         } else {
             $required=[
                 'upload'=>'web_upload','folder'=>'folder','share'=>'share','revoke'=>'share','rename'=>'organize',
@@ -183,7 +223,8 @@ try {
                 case 'member_cancel':
                     $role=in_array($action,['member_invite','member_edit'],true)?field('role',$_POST):null;
                     if (isset($_POST['roles']) || $role==='') reject('Choose one role.');
-                    libraryMemberChange($library['id'],$viewer,field('member',$_POST),$action,$role);
+                    $newInvite=libraryMemberChange($library['id'],$viewer,field('member',$_POST),$action,$role,field('invitation_id',$_POST));
+                    if ($newInvite!==null) $_SESSION['created_invitation']=['library'=>$library['id'],'id'=>$newInvite];
                     $_SESSION['notice']=tr(match($action) {
                         'member_invite'=>'Library invitation sent.', 'member_cancel'=>'Invitation cancelled.',
                         default=>'Library membership saved.',
@@ -219,6 +260,9 @@ try {
     if ($library) { try { resolveDestinationDirectory($dir); } catch (Throwable) { $dir=''; } }
 }
 $notice=$_SESSION['notice']??''; unset($_SESSION['notice']);
+if ($siteAdmin && isset($_GET['accounts'])) { $accountNotice=$_SESSION['account_notice']??''; unset($_SESSION['account_notice']); }
+$siteAccounts=$siteAdmin?stateRead('users'):[];
+ksort($siteAccounts,SORT_NATURAL);
 $pendingInvites=$user?libraryInvites($viewer):[];
 $archivedLibraries=$user?ownedArchivedLibraries($viewer):[];
 $csrf=$_SESSION['csrf'];
@@ -274,6 +318,7 @@ function icon(string $name): string {
         'home'=>'<path d="m3 10 9-7 9 7M6 9v11h12V9"/>',
         'down'=>'<path d="m6 9 6 6 6-6"/>',
         'plus'=>'<path d="M12 5v14M5 12h14"/>',
+        'refresh'=>'<path d="M20 10a8 8 0 1 0-1.8 7.2M20 4v6h-6"/>',
         'close'=>'<path d="m7 7 10 10M17 7 7 17"/>',
         'upload'=>'<path d="M12 16V3m-4 4 4-4 4 4M4 15v5h16v-5"/>',
         'download'=>'<path d="M12 3v13m-4-4 4 4 4-4M4 16v4h16v-4"/>',
@@ -284,11 +329,11 @@ function icon(string $name): string {
     ];
     return '<svg aria-hidden="true" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'.$paths[$name].'</svg>';
 }
-function folderNav(array $directories,string $dir,array $statuses): void {
+function folderNav(array $directories,string $dir,array $statuses,string $libraryName): void {
     echo '<nav class="folders" aria-label="'.tr_html('Library folders').'">';
     foreach (['',...$directories] as $item) {
         $badge=isset($statuses[$item])?'<span class="'.shareBadge($statuses[$item]).'">'.h(tr($statuses[$item])).'</span>':'';
-        echo '<a href="'.h(libraryHref($item)).'"'.($item===$dir?' aria-current="page"':'').'><span class="folder-name">'.icon($item===''?'home':'folder').h($item===''?tr('Library root'):$item).'</span>'.$badge.'</a>';
+        echo '<a href="'.h(libraryHref($item)).'"'.($item===$dir?' aria-current="page"':'').'><span class="folder-name">'.icon($item===''?'home':'folder').h($item===''?$libraryName:$item).'</span>'.$badge.'</a>';
     }
     echo '</nav>';
 }
@@ -352,6 +397,13 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 .role-options{border:0;padding:0;margin:1rem 0}.role-options>legend{font-weight:700}.role-group{margin-top:.9rem}.role-group h3{font-size:.85rem;color:#475569;margin:0 0 .35rem}
 .role-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.role-card{display:flex;align-items:flex-start;gap:.6rem;border:1px solid var(--line);padding:.7rem .75rem;border-radius:.75rem;cursor:pointer;margin:0;background:white}.role-card:hover{border-color:#94aae4}.role-card:has(input:checked){outline:1px solid #3863df;border-color:#3863df;background:#f1f5ff}.role-card input{margin:.22rem 0 0;accent-color:#3159d9;flex:none}.role-card strong,.role-card small{display:block}.role-card small{font-weight:400;color:#475569;margin-top:.22rem;line-height:1.4}
 .role-footer{position:sticky;bottom:-24px;background:white;border-top:1px solid var(--line);padding:.7rem 0;display:flex;justify-content:flex-end}.member-name-input input{width:100%}
+.invitation-toolbar,.invitation-actions{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.invitation-toolbar{margin-bottom:.4rem}.invitation-toolbar h3{margin:0}
+.invitation-entry{border-bottom:1px solid var(--line);padding:.65rem 0}.invitation-entry .member-line{border:0;padding:0}
+.invitation-entry .invitation-actions{justify-content:flex-start}.invitation-actions label{width:100%;margin:0}
+.invitation-new{border:1px solid #b7caff;border-radius:.8rem;background:#f5f8ff;padding:.7rem;margin:.65rem 0}
+.invitation-entry details{margin-top:.5rem}.invitation-entry details summary{width:max-content;max-width:100%;cursor:pointer}
+.invitation-entry details form{margin-top:.5rem}.copy-result:not(:empty){display:block;margin-top:.35rem;color:var(--soft)}
 .settings-section{border-top:1px solid var(--line);margin-top:1rem;padding-top:.8rem}.settings-section h3{margin:0 0 .55rem}.archive-section h3{color:#a52132}
 @media(max-width:600px){.manage-dialog{width:100%;padding:17px}.role-grid{grid-template-columns:1fr}.role-footer{bottom:-17px}.member-line{gap:.45rem}.member-toolbar{align-items:stretch}.member-line form button{padding:.35rem .45rem}}
 </style></head><body>
@@ -366,23 +418,24 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php if ($library): ?>
 <div class="account-library" aria-label="<?=tr_html('Your role in this library')?>"><span><?=h(libraryTitle($library,$viewer))?></span><span class="role-chip <?=$library['owner']===$viewer?'role-owner':''?>"><?=h($library['owner']===$viewer?tr('Owner'):libraryRoleLabel($library['members'][$viewer]??null))?></span></div>
 <?php endif; ?></div>
-<?php if ($siteAdmin): ?><button type="button" class="menu-item" data-dialog="accounts-dialog"><?=icon('plus')?><?=tr_html('Account administration')?></button><?php endif; ?>
-<?php if (isset($permissions['agent_upload'])): ?><button type="button" class="menu-item" data-dialog="tools-dialog"><?=icon('terminal')?><?=tr_html('CLI / API & upload Skill')?></button><?php endif; ?>
-<?php if (isset($permissions['members'])): ?><button type="button" class="menu-item" data-dialog="members-dialog"><?=icon('folder')?><?=tr_html('Members and invitations')?></button><?php endif; ?>
+<?php if (isset($permissions['agent_upload'])): ?><button type="button" class="menu-item" data-dialog="tools-dialog"><?=icon('terminal')?><?=tr_html('Connect upload tools')?></button><?php endif; ?>
 <?php if (isset($permissions['settings'])): ?><button type="button" class="menu-item" data-dialog="library-settings-dialog"><?=icon('more')?><?=tr_html('Library settings')?></button><?php endif; ?>
-<?php if ($pendingInvites || $archivedLibraries): ?><button type="button" class="menu-item" data-dialog="account-libraries-dialog"><?=icon('folder')?><?=tr_html('Invitations and archived libraries')?><?php if ($pendingInvites): ?> · <?=count($pendingInvites)?><?php endif; ?></button><?php endif; ?>
 <?php if (array_filter($allLibraries,static fn($row)=>in_array('opds',$row['permissions'],true))): ?>
-<button type="button" class="menu-item" data-dialog="reader-dialog"><?=icon('book')?><?=tr_html('OPDS catalog')?></button><?php endif; ?>
+<button type="button" class="menu-item" data-dialog="reader-dialog"><?=icon('book')?><?=tr_html('Connect e-reader')?></button><?php endif; ?>
+<?php if ($siteAdmin): ?><button type="button" class="menu-item" data-dialog="accounts-dialog"><?=icon('plus')?><?=tr_html('Site accounts')?></button><?php endif; ?>
+<?php if (isset($permissions['members'])): ?><button type="button" class="menu-item" data-dialog="members-dialog"><?=icon('folder')?><?=tr_html('Library members')?></button><?php endif; ?>
+<?php if ($pendingInvites || $archivedLibraries): ?><button type="button" class="menu-item" data-dialog="account-libraries-dialog"><?=icon('folder')?><?=tr_html('Invitations and archived libraries')?><?php if ($pendingInvites): ?> · <?=count($pendingInvites)?><?php endif; ?></button><?php endif; ?>
 <form action="up.php" method="post"><?php hidden($csrf,'logout');?><button class="menu-item sign-out"><?=icon('logout')?><?=tr_html('Sign out')?></button></form>
 </div></details>
 <?php endif; ?>
 </header>
 <?php if ($user): ?>
 <?php if ($siteAdmin): ?>
-<dialog id="accounts-dialog" class="sheet manage-dialog" aria-labelledby="accounts-title" <?=$action==='account_invite'?'data-manage-open':''?>>
-<div class="bar dialog-head"><h2 id="accounts-title"><?=tr_html('Account administration')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<dialog id="accounts-dialog" class="sheet manage-dialog" aria-labelledby="accounts-title" <?=($action==='account_invite'||isset($_GET['accounts']))?'data-manage-open':''?>>
+<div class="bar dialog-head"><h2 id="accounts-title"><?=tr_html('Site accounts')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
 <p class="muted"><?=tr_html('Create an account and send the one-time activation link privately. The recipient sets their own password.')?></p>
 <?php if ($action==='account_invite'&&$error!==''): ?><p class="error" role="alert"><?=h($error)?></p><?php endif; ?>
+<?php if ($accountNotice!==''): ?><p class="status" role="status"><?=h($accountNotice)?></p><?php endif; ?>
 <?php if ($accountInviteLink!==''): ?>
 <p class="status" role="status"><?=h(sprintf(tr('Activation link ready for %s. It expires in 24 hours.'),$accountInviteName))?></p>
 <label><?=tr_html('Activation URL')?><input class="share-link" id="account-activation-url" readonly value="<?=h($accountInviteLink)?>"></label>
@@ -394,26 +447,42 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <div class="actions"><button class="primary" name="operation" value="create"><?=tr_html('Create account and get link')?></button>
 <button name="operation" value="renew"><?=tr_html('Replace pending activation link')?></button></div>
 </form>
-<?php endif; ?></dialog>
+<?php endif; ?>
+<section class="settings-section" aria-labelledby="site-account-list-title">
+<h3 id="site-account-list-title"><?=tr_html('All accounts')?></h3>
+<?php foreach ($siteAccounts as $username=>$record): $username=(string)$username; $state=$record['state']??''; ?>
+<div class="member-line account-record"><span class="member-avatar" aria-hidden="true"><?=h(strtoupper($username[0]))?></span>
+<div><strong><?=h($username)?></strong><?php if (!empty($record['site_admin'])): ?><small><?=tr_html('Site administrator')?></small><?php endif; ?></div>
+<span class="role-chip <?=$state==='active'?'role-owner':''?>"><?=tr_html(match($state){'active'=>'Active','pending'=>'Awaiting activation','disabled'=>'Disabled',default=>'Unavailable'})?></span>
+<?php if ($username!==$viewer&&empty($record['site_admin'])&&in_array($state,['pending','active','disabled'],true)): ?>
+<?php $disabled=$state==='disabled'; ?>
+<form method="post" action="up.php" <?=$disabled?'':'data-confirm="'.h(sprintf(tr('Disable %s? Sign-in, uploads and their personal library links will stop working. Books will be kept.'),$username)).'"'?>>
+<?php hidden($csrf,'account_invite',$dir);?><input type="hidden" name="username" value="<?=h($username)?>">
+<button name="operation" value="<?=$disabled?'restore':'disable'?>" class="<?=$disabled?'':'danger'?>"><?=tr_html($disabled?'Restore account':'Disable account')?></button></form>
+<?php endif; ?></div>
+<?php endforeach; ?>
+</section></dialog>
 <?php endif; ?>
 <dialog id="account-libraries-dialog" class="sheet" aria-labelledby="account-libraries-title">
 <div class="bar dialog-head"><h2 id="account-libraries-title"><?=tr_html('Invitations and archived libraries')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
 <?php foreach ($pendingInvites as $id=>$row): $invite=$row['invites'][$viewer]; ?>
 <div class="member-row"><strong><?=h(libraryTitle(libraryInfo((string)$id),$viewer))?></strong><p class="muted"><?=h(libraryRoleLabel($invite['role']??null))?></p>
 <div class="actions"><?php foreach (['invite_accept'=>'Accept invitation','invite_decline'=>'Decline'] as $inviteAction=>$label): ?>
-<form method="post" action="up.php"><?php hidden($csrf,$inviteAction);?><input type="hidden" name="target_library" value="<?=h((string)$id)?>"><button class="<?=$inviteAction==='invite_accept'?'primary':''?>"><?=tr_html($label)?></button></form>
+<form method="post" action="up.php"><?php hidden($csrf,$inviteAction);?><input type="hidden" name="target_library" value="<?=h((string)$id)?>"><input type="hidden" name="invitation_id" value="<?=h(invitationId((string)$id,$viewer,$invite))?>"><button class="<?=$inviteAction==='invite_accept'?'primary':''?>"><?=tr_html($label)?></button></form>
 <?php endforeach; ?></div></div>
 <?php endforeach; ?>
 <?php foreach ($archivedLibraries as $id=>$row): ?>
 <div class="member-row bar"><strong><?=h(libraryTitle(libraryInfo((string)$id),$viewer))?></strong><form method="post" action="up.php"><?php hidden($csrf,'library_restore');?><input type="hidden" name="target_library" value="<?=h((string)$id)?>"><button><?=tr_html('Restore library')?></button></form></div>
 <?php endforeach; ?></dialog>
 <dialog id="reader-dialog" class="sheet" aria-labelledby="reader-title">
-<div class="bar dialog-head"><h2 id="reader-title"><?=tr_html('OPDS catalog')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<div class="bar dialog-head"><h2 id="reader-title"><?=tr_html('Connect e-reader')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<p class="muted"><?=tr_html('Add the OPDS address to your reader and sign in with your account.')?></p>
 <?php foreach ($allLibraries as $id=>$item): if (!in_array('opds',$item['permissions'],true)) continue; ?>
-<label><?=h(libraryTitle($item,$viewer))?><input class="share-link" readonly value="<?=h(BASE_URL.'index.php?'.http_build_query(['library'=>$id]))?>"></label>
+<div class="copy-row"><label><?=h(libraryTitle($item,$viewer))?><input class="share-link" readonly value="<?=h(BASE_URL.'index.php?'.http_build_query(['library'=>$id]))?>"></label>
+<button type="button" data-copy-url><?=icon('link')?><?=tr_html('Copy OPDS address')?></button><small role="status" class="copy-result" data-copied="<?=tr_html('Copied.')?>" data-manual="<?=tr_html('Copy failed. Select and copy the link manually.')?>"></small></div>
 <?php endforeach; ?></dialog>
 <?php endif; ?>
-<?php if ($library): ?>
+<?php if ($library): $libraryName=libraryTitle($library,$viewer); ?>
 <?php require __DIR__.'/library-controls.php'; ?>
 <?php endif; ?>
 <main>
@@ -424,9 +493,21 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php if ($activate!==''): ?><h1><?=tr_html('Set your password')?></h1><p class="muted"><?=h(sprintf(tr('Set a password for %s. Use the same password in your OPDS reader.'),$activateFor))?></p>
 <form method="post" action="up.php"><?php hidden($csrf,'activate');?><input type="hidden" name="activate" value="<?=h($activate)?>"><input type="hidden" name="account" value="<?=h($activateFor)?>">
 <label><?=tr_html('New password')?><input type="password" name="password" required autocomplete="new-password"></label><label><?=tr_html('Confirm password')?><input type="password" name="confirm" required autocomplete="new-password"></label><button class="primary"><?=tr_html('Set password')?></button></form>
-<?php else: ?><h1><?=tr_html('Your reading room')?></h1><p class="muted"><?=tr_html('Sign in to manage your books and share folders.')?></p>
-<form action="up.php" method="post"><?php hidden($csrf,'login');?><label><?=tr_html('Username')?><input name="username" required autocomplete="username" autocapitalize="none"></label><label><?=tr_html('Password')?><input type="password" name="password" required autocomplete="current-password"></label><button class="primary"><?=tr_html('Sign in')?></button></form>
+<?php else: ?><h1><?=tr_html($isInvitation?'Library invitation':'Your reading room')?></h1><p class="muted"><?=tr_html($isInvitation?'Sign in with the account that was invited.':'Sign in to manage your books and share folders.')?></p>
+<form action="up.php" method="post"><?php hidden($csrf,'login');?><?php if ($isInvitation && libraryIdValid($invitationTarget) && preg_match('/\A[a-f0-9]{32}\z/D',$invitation)): ?><input type="hidden" name="target" value="<?=h($invitationTarget)?>"><input type="hidden" name="invitation" value="<?=h($invitation)?>"><?php endif; ?><label><?=tr_html('Username')?><input name="username" required autocomplete="username" autocapitalize="none"></label><label><?=tr_html('Password')?><input type="password" name="password" required autocomplete="current-password"></label><button class="primary"><?=tr_html('Sign in')?></button></form>
 <?php endif;?></section>
+<?php elseif ($isInvitation): ?>
+<section class="panel auth">
+<p class="eyebrow"><?=tr_html('Library invitation')?></p>
+<?php if ($incomingInvite): ?>
+<h1><?=h(libraryTitle($incomingLibrary,$viewer))?></h1>
+<p class="muted"><?=h(sprintf(tr('Invited by %s · Role: %s'),$incomingInvite['from'],libraryRoleLabel($incomingInvite['role'])))?></p>
+<form method="post" action="up.php"><?php hidden($csrf,'invite_accept');?>
+<input type="hidden" name="target_library" value="<?=h($invitationTarget)?>"><input type="hidden" name="invitation_id" value="<?=h($invitation)?>">
+<button class="primary"><?=tr_html('Accept invitation')?></button></form>
+<?php endif; ?>
+<a class="button" href="up.php"><?=tr_html('Back to my libraries')?></a>
+</section>
 <?php elseif (!$library): ?>
 <section class="library-picker" aria-labelledby="choose-library-title">
 <p class="eyebrow"><?=h(LIBRARY_TITLE)?></p><h1 id="choose-library-title"><?=tr_html('Choose a library')?></h1>
@@ -456,7 +537,7 @@ $page=is_string($pageParam)&&preg_match('/\A[0-9]{1,6}\z/D',$pageParam)?max(1,mi
 $pageFiles=array_slice($files,($page-1)*40,40,true);
 natcasesort($directories);
 $directories=array_values($directories);
-$shelfName=$dir===''?tr('Library root'):$dir;
+$shelfName=$dir===''?$libraryName:$dir;
 $expiry=$selectedShare?gmdate('Y-m-d',$selectedShare['expires']):'';
 $previewBooks=[];
 if ($preview) {
@@ -470,13 +551,13 @@ if ($preview) {
 <div class="layout shelf">
 <aside class="sidebar">
  <div class="side-title"><h2><?=tr_html('Folders')?></h2><?php if (isset($permissions['folder'])): ?><button type="button" class="icon-button" data-dialog="folder-list" data-focus-folder aria-label="<?=tr_html('New folder')?>"><?=icon('plus')?></button><?php endif; ?></div>
- <?php folderNav($directories,$dir,$statuses); ?>
+ <?php folderNav($directories,$dir,$statuses,$libraryName); ?>
 </aside>
 <div class="shelf-body">
  <div class="shelf-head">
   <button class="folder-trigger" type="button" data-dialog="folder-list" aria-label="<?=tr_html('Choose folder')?>"><?=icon('folder')?><?=tr_html('Folders')?><?=icon('down')?></button>
   <div class="shelf-heading-row">
-   <div><?php if ($pendingInvites): ?><button type="button" class="button" data-dialog="account-libraries-dialog"><?=tr_html('Review library invitations')?> · <?=count($pendingInvites)?></button><?php endif; ?><p class="eyebrow"><?=h(libraryTitle($library,$viewer))?></p><h1 class="heading-title"><?=h($shelfName)?></h1></div>
+   <div><?php if ($pendingInvites): ?><button type="button" class="button" data-dialog="account-libraries-dialog"><?=tr_html('Review library invitations')?> · <?=count($pendingInvites)?></button><?php endif; ?><?php if ($dir!==''): ?><nav class="eyebrow" aria-label="<?=tr_html('Library location')?>"><a href="<?=h(libraryHref(''))?>"><?=h($libraryName)?></a> <span aria-hidden="true">/</span></nav><?php endif; ?><h1 class="heading-title"><?=h($shelfName)?></h1></div>
    <?php if (isset($permissions['web_upload'])): ?><button class="primary upload-launch" type="button" data-dialog="upload-dialog" aria-label="<?=tr_html('Upload books')?>"><?=icon('upload')?><?=tr_html('Upload')?></button><?php endif; ?>
   </div>
   <div class="shelf-meta">
@@ -526,7 +607,7 @@ if ($preview) {
 </div>
 <dialog id="folder-list" class="sheet" aria-labelledby="folder-dialog-title">
  <div class="bar dialog-head"><h2 id="folder-dialog-title"><?=tr_html('Folders')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
- <?php folderNav($directories,$dir,$statuses); ?>
+ <?php folderNav($directories,$dir,$statuses,$libraryName); ?>
  <?php if (isset($permissions['folder'])): ?><form class="folder-form actions" method="post" action="up.php"><?php hidden($csrf,'folder',$dir);?><input name="folder" aria-label="<?=tr_html('New folder name')?>" placeholder="<?=tr_html('New folder name')?>" required maxlength="240"><button class="primary"><?=tr_html('New folder')?></button></form><?php endif; ?>
 </dialog>
 <?php if ($dir!=='' && isset($permissions['share'])): ?>
@@ -553,7 +634,7 @@ if ($preview) {
  <p id="upload-folder-status" role="status" class="status shelf-notice"></p><?php endif; ?>
  <form id="upload" class="upload-form" data-current="<?=h($dir)?>" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown; check the library before retrying.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown; check the library before retrying.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" method="post" enctype="multipart/form-data" action="up.php">
  <?php hidden($csrf,'upload');?>
- <label><?=tr_html('Upload destination')?><select name="directory"><?php foreach (['',...$directories] as $dest): ?><option value="<?=h($dest)?>" <?=$dest===$dir?'selected':''?>><?=h($dest===''?tr('Library root'):$dest)?></option><?php endforeach;?></select></label>
+ <label><?=tr_html('Upload destination')?><select name="directory"><?php foreach (['',...$directories] as $dest): ?><option value="<?=h($dest)?>" <?=$dest===$dir?'selected':''?>><?=h($dest===''?$libraryName:$dest)?></option><?php endforeach;?></select></label>
  <?php if (isset($permissions['folder'])): ?><button type="button" id="upload-folder-toggle" aria-expanded="false" aria-controls="upload-folder"><?=tr_html('New folder')?></button><?php endif; ?>
  <label><?=tr_html('Choose EPUB or TXT files')?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
  <button class="primary" type="submit"><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
@@ -576,7 +657,7 @@ if ($preview) {
 <?php if ($directories && isset($permissions['organize'])): ?><dialog id="move-dialog" class="sheet" aria-labelledby="move-dialog-title"><form method="post" action="up.php" data-move="<?=$active?'1':'0'?>" data-shared-warning="<?=tr_html('Moving this book changes what subscribers can see. Continue?')?>"><?php hidden($csrf,'move',$dir);?>
 <div class="bar dialog-head"><h2 id="move-dialog-title"><?=tr_html('Move')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div><p id="moving-book"></p>
 <input type="hidden" name="file"><label><?=tr_html('Move destination')?><select name="destination">
-<?php foreach (['',...$directories] as $dest): if($dest===$dir)continue;?><option value="<?=h($dest)?>" data-shared="<?=in_array($statuses[$dest]??'',['Shared','Expiring soon'],true)?'1':'0'?>"><?=h($dest===''?tr('Library root'):$dest)?></option><?php endforeach;?>
+<?php foreach (['',...$directories] as $dest): if($dest===$dir)continue;?><option value="<?=h($dest)?>" data-shared="<?=in_array($statuses[$dest]??'',['Shared','Expiring soon'],true)?'1':'0'?>"><?=h($dest===''?$libraryName:$dest)?></option><?php endforeach;?>
 </select></label><button class="primary"><?=tr_html('Move')?></button></form></dialog><?php endif;?>
 <?php endif;?>
 </main>
@@ -610,6 +691,12 @@ document.addEventListener('click',e=>{
   if(target&&accountMenu&&accountMenu.contains(open))accountMenu.open=false;
   if(open.hasAttribute('data-focus-folder'))target?.querySelector('[name=folder]')?.focus();
  }
+ const copyUrl=e.target.closest('[data-copy-url]');
+ if(copyUrl){
+  const row=copyUrl.closest('.copy-row'), input=row.querySelector('input'), result=row.querySelector('.copy-result');
+  (async()=>{try{await navigator.clipboard.writeText(input.value);result.textContent=result.dataset.copied;}
+   catch{input.closest('label').hidden=false;input.focus();input.select();result.textContent=result.dataset.manual;}})();
+ }
  const close=e.target.closest('.dialog-close');
  if(close&&!(close.closest('dialog')===uploadDialog&&(busy||addingFolder)))close.closest('dialog')?.close();
  const rename=e.target.closest('[data-book-rename]');
@@ -640,6 +727,9 @@ if(renameDialog?.hasAttribute('data-show')){renameDialog.showModal();renameName.
 if(shareDialog?.hasAttribute('data-show'))shareDialog.showModal();
 const membersDialog=document.querySelector('#members-dialog');
 const roleEditor=document.querySelector('#edit-role-dialog');
+document.querySelector('#accounts-dialog')?.addEventListener('close',()=>{
+ const url=new URL(location.href);if(url.searchParams.has('accounts')){url.searchParams.delete('accounts');history.replaceState(null,'',url);}
+});
 membersDialog?.addEventListener('close',()=>{
  const current=new URL(location.href);
  if(current.searchParams.has('manage')){current.searchParams.delete('manage');history.replaceState(null,'',current);}
@@ -668,6 +758,23 @@ tabs.forEach((tab,index)=>{
   const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
   activateMemberTab(tabs[next],true);
  });
+});
+const refreshInvitations=document.querySelector('#refresh-invitations');
+refreshInvitations?.addEventListener('click',async()=>{
+ if(refreshInvitations.disabled)return;
+ const status=document.querySelector('#invitation-refresh-status');
+ refreshInvitations.disabled=true;status.textContent='';
+ try{
+  const response=await fetch(refreshInvitations.dataset.url,{cache:'no-store',credentials:'same-origin'});
+  if(!response.ok)throw new Error();
+  const html=new DOMParser().parseFromString(await response.text(),'text/html');
+  const ids=['member-current','invitation-rows','member-count','pending-count'];
+  const updates=ids.map(id=>[document.getElementById(id),html.getElementById(id)]);
+  if(updates.some(([oldNode,newNode])=>!oldNode||!newNode))throw new Error();
+  for(const [oldNode,newNode] of updates)oldNode.replaceChildren(...newNode.childNodes);
+  status.textContent=refreshInvitations.dataset.done;
+ }catch{status.textContent=refreshInvitations.dataset.error;}
+ finally{refreshInvitations.disabled=false;if(membersDialog.open&&document.activeElement===document.body)refreshInvitations.focus();}
 });
 const copyActivation=document.querySelector('#copy-activation');
 copyActivation?.addEventListener('click',async()=>{

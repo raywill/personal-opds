@@ -156,7 +156,7 @@ function newActivation(string $name): array
 function issueAccountActivation(string $name,string $mode,?string $actor=null,?string $passwordVersion=null): string
 {
     if (!accountName($name)) reject('Specify a lowercase username.');
-    if (!in_array($mode,['create','renew','invite','reset'],true)) reject('Unknown action.');
+    if (!in_array($mode,['create','renew','invite','reset','restore'],true)) reject('Unknown action.');
     $created=null;
     try {
         return stateUpdate('users',function (&$users) use ($name,$mode,$actor,$passwordVersion,&$created) {
@@ -164,11 +164,16 @@ function issueAccountActivation(string $name,string $mode,?string $actor=null,?s
                 $admin=$users[$actor]??[];
                 if (($admin['state']??null)!=='active'||($admin['site_admin']??null)!==true ||
                     !hash_equals($admin['password']??'', $passwordVersion??'')) reject('Site administrator access required.',403);
-                if (!in_array($mode,['create','renew'],true)) reject('Unknown action.');
+                if (!in_array($mode,['create','renew','restore'],true)) reject('Unknown action.');
             }
             $row=$users[$name]??null;
             $state=$row['state']??null;
             if ($mode==='reset' && $state!=='active') reject('Only active accounts can be reset.');
+            if ($mode==='restore') {
+                if ($state!=='disabled') reject('Only disabled accounts can be restored.',409);
+                if ($actor!==null && !empty($row['site_admin'])) reject('Only the server operator can change another site administrator.',403);
+                $row['state']='pending';
+            }
             if ($mode==='renew' && $state!=='pending') reject('Only pending accounts can get a new activation link.',409);
             if ($row!==null && ($mode==='create'||($mode==='invite'&&$state!=='pending')))
                 reject('Account already exists.',409);
@@ -180,13 +185,51 @@ function issueAccountActivation(string $name,string $mode,?string $actor=null,?s
                 $created=$books.'/'.$name;
             } else directoryUnder($books,$name);
             [$activation,$link]=newActivation($name);
-            $users[$name]=array_merge($row??['state'=>'pending'],['activation'=>$activation]);
+            $users[$name]=array_merge($row??['state'=>'pending','named_library_default'=>true],['activation'=>$activation]);
             return $link;
         });
     } catch (Throwable $error) {
         if ($created!==null) @rmdir($created);
         throw $error;
     }
+}
+
+function disableAccount(string $name,?string $actor=null,?string $passwordVersion=null): void
+{
+    if (!accountName($name)) reject('Specify a lowercase username.');
+    withLock('libraries',static function () use ($name,$actor,$passwordVersion) {
+        stateUpdate('users',static function (&$users) use ($name,$actor,$passwordVersion) {
+            if ($actor!==null) {
+                $admin=$users[$actor]??[];
+                if (($admin['state']??null)!=='active'||($admin['site_admin']??null)!==true||
+                    !hash_equals($admin['password']??'',$passwordVersion??'')) reject('Site administrator access required.',403);
+                if ($name===$actor) reject('You cannot disable your own account.',403);
+                if (!empty($users[$name]['site_admin'])) reject('Only the server operator can change another site administrator.',403);
+            }
+            if (!isset($users[$name])) reject('Account not found.',404);
+            if (($users[$name]['state']??null)==='disabled') reject('This account is already disabled.',409);
+            $own=personalLibraryId($name);
+            $rows=libraryRecords();
+            foreach ($rows as $id=>&$row) {
+                if (!libraryIdValid((string)$id)) continue;
+                foreach (array_keys($row['tokens']??[]) as $token) {
+                    if ($id===$own||$row['tokens'][$token]['user']===$name) $row['tokens'][$token]['revoked']??=time();
+                }
+                foreach (array_keys($row['invites']??[]) as $member) {
+                    if ($id===$own||(string)$member===$name||$row['invites'][$member]['from']===$name)
+                        invitationFinished($row,(string)$member,$row['invites'][$member]['expires']<=time()?'expired':'revoked');
+                }
+            }
+            unset($row);
+            stateUpdate('shares',static function (&$shares) use ($own) {
+                foreach ($shares as &$share) if (shareLibraryId($share)===$own) $share['revoked']??=time();
+            });
+            libraryAudit($rows,'account.disabled',$actor??'site-operator','',['member'=>$name]);
+            stateWrite('libraries',$rows);
+            $users[$name]['state']='disabled';
+            unset($users[$name]['activation'],$users[$name]['token'],$users[$name]['password']);
+        });
+    });
 }
 
 function activateAccount(string $name,string $secret,string $password): void

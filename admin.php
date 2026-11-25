@@ -106,7 +106,7 @@ try {
     }
     if (!accountName($user)) reject('Specify a lowercase username.');
     setAccountScope($user);
-    if ($command==='invite'||$command==='reset') {
+    if (in_array($command,['invite','reset','restore'],true)) {
         echo issueAccountActivation($user,$command).PHP_EOL;
     } elseif (in_array($command,['grant-site-admin','revoke-site-admin'],true)) {
         stateUpdate('users',static function (&$users) use ($user,$command) {
@@ -117,19 +117,7 @@ try {
         echo "Site administrator permission updated.
 ";
     } elseif ($command==='disable') {
-        withLock('libraries',static function () use ($user) {
-            $rows=libraryRecords();
-            $library=libraryInfo(personalLibraryId($user),$rows);
-            if (activeAccount($user) && $library && empty($library['archived']))
-                reject('Archive this account’s personal library before disabling it.');
-            stateUpdate('users',function (&$users) use ($user) {
-            if (!isset($users[$user])) reject('Account not found.');
-            $users[$user]['state']='disabled';
-                unset($users[$user]['activation'],$users[$user]['token'],$users[$user]['password']);
-            });
-            libraryAudit($rows,'account.disabled','site-operator','',['member'=>$user]);
-            stateWrite('libraries',$rows);
-        });
+        disableAccount($user);
         echo "Account disabled; library files were retained.\n";
     } elseif ($command==='quota') {
         $bytes=filter_var($argv[3]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
@@ -178,7 +166,7 @@ try {
             }
             echo "Copied; original library retained.\n";
         });
-    } else reject('Usage: php admin.php invite|reset|disable|quota|migrate|grant-site-admin|revoke-site-admin USER [options], library-quota LIBRARY_ID BYTES FILES, rbac-check, rbac-audit, or doctor [USERNAME]');
+    } else reject('Usage: php admin.php invite|reset|disable|restore|quota|migrate|grant-site-admin|revoke-site-admin USER [options], library-quota LIBRARY_ID BYTES FILES, rbac-check, rbac-audit, or doctor [USERNAME]');
 } catch (Throwable $e) {
     fwrite(STDERR,$e->getMessage().PHP_EOL);exit(1);
 }

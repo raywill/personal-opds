@@ -48,6 +48,8 @@ function libraryInfo(string $id, ?array $rows=null, ?array $users=null): ?array
     if (!isset($users[$owner])) return null;
     $row=$rows[$id]??['title'=>null,'members'=>[],'tokens'=>[]];
     $row['owner']=$owner;
+    $row['owner_active']=($users[$owner]['state']??null)==='active';
+    $row['named_default']=($users[$owner]['named_library_default']??false)===true;
     $row['path']=$owner;
     $row['legacy']=$owner;
     $row['quota_bytes']??=$users[$owner]['quota_bytes']??5*1024*1024*1024;
@@ -58,11 +60,12 @@ function libraryInfo(string $id, ?array $rows=null, ?array $users=null): ?array
 
 function libraryTitle(array $row,string $viewer): string
 {
-    return $row['title']??($row['owner']===$viewer?tr('My personal library'):$row['legacy']);
+    return $row['title']??(!empty($row['named_default'])?sprintf(tr('%s’s library'),$row['owner']):($row['owner']===$viewer?tr('My personal library'):$row['legacy']));
 }
 
 function libraryPermissions(array $row,string $username): array
 {
+    if (empty($row['owner_active'])) return [];
     if (!empty($row['archived'])) return $row['owner']===$username?['settings']:[];
     if ($row['owner']===$username) return LIBRARY_PERMISSIONS;
     $role=$row['members'][$username]??null;
@@ -115,10 +118,40 @@ function libraryAudit(array &$rows,string $event,string $actor,string $id,array 
     $rows['_audit']=array_slice($events,-2000);
 }
 
-function libraryMemberChange(string $id,string $actor,string $member,string $action,?string $role=null): void
+// Locators are not credentials. Every read/response is scoped to the signed-in invitee.
+function invitationId(string $library,string $member,array $invite): string
+{
+    return $invite['id']??substr(hash('sha256',implode(':',[$library,$member,$invite['from'],$invite['role'],$invite['expires']])),0,32);
+}
+
+function invitationLink(string $library,string $id): string
+{
+    return BASE_URL.'up.php?'.http_build_query(['target'=>$library,'invitation'=>$id],'','&',PHP_QUERY_RFC3986);
+}
+
+function invitationFinished(array &$row,string $member,string $status): void
+{
+    $invite=$row['invites'][$member];
+    unset($row['invites'][$member]);
+    $history=$row['invite_history']??[];
+    $history[]=$invite+['member'=>$member,'status'=>$status];
+    $row['invite_history']=array_slice($history,-100);
+}
+
+function libraryInvitationRows(array $row): array
+{
+    $now=time(); $out=[];
+    foreach ($row['invites']??[] as $member=>$invite) {
+        $member=(string)$member;
+        $out[]=$invite+['id'=>invitationId($row['id'],$member,$invite),'member'=>$member,'status'=>$invite['expires']>$now?'pending':'expired'];
+    }
+    return [...array_reverse($out),...array_reverse($row['invite_history']??[])];
+}
+
+function libraryMemberChange(string $id,string $actor,string $member,string $action,?string $role=null,string $expected=''): ?string
 {
     if (!accountName($member)||($role!==null&&!isset(LIBRARY_ROLES[$role]))) reject('Invalid username or role.');
-    libraryUpdate(function (&$rows) use ($id,$actor,$member,$action,$role) {
+    return libraryUpdate(function (&$rows) use ($id,$actor,$member,$action,$role,$expected) {
         $row=libraryInfo($id,$rows);
         if (!$row || !activeAccount($actor) || !in_array('members',libraryPermissions($row,$actor),true)) reject('Library access denied.',403);
         if ($member===$row['owner'] || $member===$actor) reject('You cannot change this member.',403);
@@ -130,17 +163,20 @@ function libraryMemberChange(string $id,string $actor,string $member,string $act
         if ($action==='member_invite') {
             if ($previous!==null) reject('This account is already a member.',409);
             if (($invite['expires']??0)>time()) reject('This account already has a pending invitation.',409);
-            $row['invites'][$member]=['role'=>$role,'from'=>$actor,'expires'=>time()+MEMBERSHIP_TTL];
+            if ($invite) invitationFinished($row,$member,'expired');
+            $invitation=bin2hex(random_bytes(16));
+            $row['invites'][$member]=['id'=>$invitation,'role'=>$role,'from'=>$actor,'expires'=>time()+MEMBERSHIP_TTL];
             $rows[$id]=libraryPersisted($row);
             libraryAudit($rows,'member.invited',$actor,$id,['member'=>$member,'role'=>$role]);
-            return;
+            return $invitation;
         }
         if ($action==='member_cancel') {
-            if (!$invite) reject('Library invitation is unavailable.',410);
-            unset($row['invites'][$member]);
+            if (!$invite||$invite['expires']<=time()||($expected!==''&&!hash_equals(invitationId($id,$member,$invite),$expected)))
+                reject('Library invitation is unavailable.',410);
+            invitationFinished($row,$member,'revoked');
             $rows[$id]=libraryPersisted($row);
             libraryAudit($rows,'member.invitation_cancelled',$actor,$id,['member'=>$member]);
-            return;
+            return null;
         }
         if ($previous===null) reject('Member not found.',404);
         if ($action==='member_edit') $row['members'][$member]=$role;
@@ -153,10 +189,11 @@ function libraryMemberChange(string $id,string $actor,string $member,string $act
         unset($token);
         $rows[$id]=libraryPersisted($row);
         libraryAudit($rows,'member.changed',$actor,$id,['member'=>$member,'before'=>$previous,'after'=>$role]);
+        return null;
     });
 }
 
-function libraryPersisted(array $row): array { return array_intersect_key($row,array_flip(['title','members','tokens','invites','archived','quota_bytes','quota_files'])); }
+function libraryPersisted(array $row): array { return array_intersect_key($row,array_flip(['title','members','tokens','invites','invite_history','archived','quota_bytes','quota_files'])); }
 
 function issueAgentToken(array $library,string $user,string $directory,int $days=DEFAULT_AGENT_TOKEN_DAYS,string $name='',bool $whole=false,bool $mkdir=false): array
 {
@@ -268,19 +305,20 @@ function libraryInvites(string $viewer): array
     return array_filter(libraryRecords(),static fn($row,$id)=>libraryIdValid((string)$id)&&empty($row['archived'])&&($row['invites'][$viewer]['expires']??0)>time()&&isset($row['invites'][$viewer]['role']),ARRAY_FILTER_USE_BOTH);
 }
 
-function libraryAnswerInvite(string $id,string $viewer,bool $accept): void
+function libraryAnswerInvite(string $id,string $viewer,bool $accept,string $expected=''): void
 {
-    libraryUpdate(function (&$rows) use ($id,$viewer,$accept) {
-        if (!activeAccount($viewer) || !($row=libraryInfo($id,$rows)) || !empty($row['archived']) ||
+    libraryUpdate(function (&$rows) use ($id,$viewer,$accept,$expected) {
+        if (!activeAccount($viewer) || !($row=libraryInfo($id,$rows)) || empty($row['owner_active']) || !empty($row['archived']) ||
             ($row['invites'][$viewer]['expires']??0)<=time()) reject('Library invitation is unavailable.',410);
         $invite=$row['invites'][$viewer];
+        if ($expected!==''&&!hash_equals(invitationId($id,$viewer,$invite),$expected)) reject('Library invitation is unavailable.',410);
         if ($accept) {
             $from=$invite['from'];
             if (!is_string($invite['role']??null)||!isset(LIBRARY_ROLES[$invite['role']])||isset($row['members'][$viewer])||!activeAccount($from) || !in_array('members',libraryPermissions($row,$from),true) ||
                 ($invite['role']==='admin'&&$row['owner']!==$from)) reject('Library invitation is unavailable.',410);
             $row['members'][$viewer]=$invite['role'];
         }
-        unset($row['invites'][$viewer]);
+        invitationFinished($row,$viewer,$accept?'accepted':'declined');
         $rows[$id]=libraryPersisted($row);
         libraryAudit($rows,$accept?'member.accepted':'member.declined',$viewer,$id);
     });
@@ -309,7 +347,10 @@ function librarySettings(string $id,string $actor,string $action,string $title='
                 stateUpdate('users',static function (&$users) use ($row) { unset($users[$row['legacy']]['token']); });
             }
             $row['archived']=time();
-            $row['tokens']=[]; $row['invites']=[];
+            $row['tokens']=[];
+            foreach (array_keys($row['invites']??[]) as $member) {
+                invitationFinished($row,(string)$member,$row['invites'][$member]['expires']<=time()?'expired':'revoked');
+            }
         } else reject('Unknown action.');
         $rows[$id]=libraryPersisted($row);
         libraryAudit($rows,$action,$actor,$id);
