@@ -1378,6 +1378,30 @@ try{
      assert(focusedBox.y>=drawerBox.y&&focusedBox.y+focusedBox.height<=drawerBox.y+drawerBox.height);
      assert((await drawer.evaluate(el=>el.scrollTop))>300);
      assert.equal(await web.locator('#viewport').evaluate(el=>el.scrollTop),beforeDrawer);
+
+     // The selected heading is near the end of the XHTML: it cannot reach
+     // the reading line. The requested destination must win before and after
+     // a deliberately slow reload of that same EPUB spine item.
+     let releaseChapter,forwarded;
+     const waitChapter=new Promise(resolve=>{releaseChapter=resolve;});
+     const chapterForwarded=new Promise(resolve=>{forwarded=resolve;});
+     const chapterQuery=url=>url.pathname.endsWith('/preview.php')&&url.searchParams.get('part')==='1';
+     const slowChapter=async route=>{await waitChapter;try{await route.continue();}finally{forwarded();}};
+     await web.route(chapterQuery,slowChapter);
+     try{
+       await drawer.getByRole('button',{name:'Subsection 32',exact:true}).click();
+       await drawer.waitFor({state:'hidden'});
+       await contents.click();
+       assert.equal(await drawer.locator('[aria-current]').innerText(),'Subsection 32','reopening during navigation must show the chosen section');
+       assert(await web.locator('#book[aria-busy="true"]').count());
+       releaseChapter();
+       await web.locator('#book[aria-busy="false"]').waitFor();
+       assert.equal(await drawer.locator('[aria-current]').innerText(),'Subsection 32','chapter load must keep the exact selection near the end');
+     }finally{
+       releaseChapter();
+       await Promise.race([chapterForwarded,delay(3000)]);
+       await web.unroute(chapterQuery,slowChapter);
+     }
      await web.keyboard.press('Escape');
      await drawer.waitFor({state:'hidden'});
      await web.getByRole('link',{name:'Back to library'}).click();

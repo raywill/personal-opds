@@ -258,10 +258,11 @@
  }
  if(txt){startTextReader();return;}
  let part=0,data=null,busy=false,requestNo=0,failed=null,saveTimer=0;
+ let pendingLocation=null,selectedLocation=null;
  const prevPart=()=>part>0?part-1:undefined;
  const nextPart=()=>data&&part+1<data.count?part+1:undefined;
  function position(){
-     if(data&&!busy&&!failed)write(posKey,{part,ratio:scrollRatio()});
+     if(data&&!busy&&!failed)write(posKey,{part,ratio:scrollRatio(),fragment:currentSelection()?.fragment});
  }
  preferences(scrollRatio,ratio=>{vp.scrollTop=ratio*limit();position();});
  function displayProgress(){
@@ -277,10 +278,22 @@
      if(!anchor)return false;
      anchor.scrollIntoView({block:'start'});return true;
  }
+ // Keep an explicit destination until the reader moves away from its
+ // landing position. Near the end of a chapter the browser may not be able
+ // to scroll the chosen heading all the way to the reading line.
+ function currentSelection(){
+     if(selectedLocation&&Math.abs(vp.scrollTop-selectedLocation.top)>12)selectedLocation=null;
+     return selectedLocation;
+ }
+ function selectAnchor(to,fragment){
+     if(!jumpAnchor(fragment))return false;
+     selectedLocation={to,fragment,top:vp.scrollTop};
+     return true;
+ }
  async function load(target,ratio=0,fragment=''){
      const seq=++requestNo;
      clearTimeout(saveTimer);
-     busy=true; failed=null;
+     busy=true; failed=null;pendingLocation={to:target,fragment};
      book.setAttribute('aria-busy','true');
      more.hidden=true;
      $('reader-message').hidden=false;status.textContent=cfg.loading;$('retry').hidden=true;
@@ -295,14 +308,16 @@
          data=result;
          $('reader-message').hidden=true;status.textContent='';
          busy=false;displayProgress();
-         if(!jumpAnchor(fragment))vp.scrollTop=clamp(ratio)*limit();
+         pendingLocation=null;selectedLocation=null;
+         if(!selectAnchor(target,fragment))vp.scrollTop=clamp(ratio)*limit();
          displayProgress();position();
          if(toc.open)highlightCurrentChapter();
      }catch(error){
          if(seq!==requestNo)return;
-         failed=()=>load(target,ratio,fragment);
+         pendingLocation=null;failed=()=>load(target,ratio,fragment);
          status.textContent=error.message||cfg.failed;$('retry').hidden=false;
          busy=false;displayProgress();
+         if(toc.open)highlightCurrentChapter();
      }finally{if(seq===requestNo)book.setAttribute('aria-busy','false');}
  }
  function step(dir){
@@ -315,6 +330,7 @@
  $('retry').addEventListener('click',()=>failed?.());
  vp.addEventListener('scroll',()=>{
      if(busy)return;
+     currentSelection();
      displayProgress();clearTimeout(saveTimer);saveTimer=setTimeout(position,180);
  },{passive:true});
  window.addEventListener('pagehide',position);
@@ -326,7 +342,7 @@
      if(link){
          event.preventDefault();
          const to=Number(link.dataset.part);
-         if(to===part&&!busy)jumpAnchor(link.dataset.fragment);
+         if(to===part&&!busy){if(selectAnchor(to,link.dataset.fragment))position();}
          else load(to,0,link.dataset.fragment);
          return;
      }
@@ -351,9 +367,12 @@
      return {item,to,fragment};
  }
  function highlightCurrentChapter(){
-     const same=tocRows.filter(row=>row.to===part);
-     let active=same.find(row=>!row.fragment)??same[0];
-     if(same.length>1){
+     const destination=pendingLocation??currentSelection();
+     const chapter=destination?.to??part;
+     const same=tocRows.filter(row=>row.to===chapter);
+     const exact=destination&&same.find(row=>row.fragment===destination.fragment);
+     let active=exact??same.find(row=>!row.fragment)??same[0];
+     if(!exact&&!pendingLocation&&same.length>1){
          const anchors=new Map();
          for(const node of book.querySelectorAll('[data-book-anchor]')){
              if(!anchors.has(node.dataset.bookAnchor))anchors.set(node.dataset.bookAnchor,node);
@@ -373,7 +392,7 @@
      // Some EPUBs omit a spine document from their TOC. Show the nearest
      // preceding entry in that case, without marking it as the current one.
      let prior=null;
-     if(!active)for(const row of tocRows)if(row.to<part&&(!prior||row.to>=prior.to))prior=row;
+     if(!active)for(const row of tocRows)if(row.to<chapter&&(!prior||row.to>=prior.to))prior=row;
      const item=(active??prior??tocRows[0])?.item;
      if(item){
          const drawer=toc.getBoundingClientRect(), row=item.getBoundingClientRect();
@@ -394,5 +413,5 @@
          highlightCurrentChapter();
      }catch(error){message.textContent=error.message||cfg.failed;}
  });
- load(validPart(saved.part)?saved.part:0,clamp(saved.ratio));
+ load(validPart(saved.part)?saved.part:0,clamp(saved.ratio),typeof saved.fragment==='string'?saved.fragment:'');
 })();
