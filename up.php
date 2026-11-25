@@ -23,6 +23,11 @@ function field(string $key,array $source): string {
     if (!is_string($v)||strlen($v)>2048) reject('Invalid input.');
     return $v;
 }
+function passwordField(string $key): string {
+    $v=$_POST[$key]??'';
+    if (!is_string($v)) reject('Invalid input.');
+    return $v;
+}
 function go(string $dir=''): never {
     header('Location: '.BASE_URL.'up.php'.($dir===''?'':'?'.http_build_query(['dir'=>$dir],'','&',PHP_QUERY_RFC3986)),true,303);
     exit;
@@ -60,15 +65,15 @@ try {
         if ($action==='activate') {
             $activate=field('activate',$_POST); $activateFor=field('account',$_POST);
             reserveRateAttempt('activate',12,180);
-            $password=field('password',$_POST);
-            if ($password!==field('confirm',$_POST)) reject(tr('Passwords do not match.'));
+            $password=passwordField('password');
+            if ($password!==passwordField('confirm')) reject(tr('Passwords do not match.'));
             activateAccount($activateFor,$activate,$password);
             $_SESSION=[]; session_regenerate_id(true);
             $_SESSION['notice']=tr('Password set. Sign in with your new password.');
             go();
         }
         if ($action==='login') {
-            $name=trim(field('username',$_POST)); $password=field('password',$_POST);
+            $name=trim(field('username',$_POST)); $password=passwordField('password');
             reserveRateAttempt('login',LOGIN_IP_LIMIT,LOGIN_GLOBAL_LIMIT);
             $verified=loginAccount($name,$password);
             if (!$verified) reject(tr('Incorrect username or password, or account not activated.'),401);
@@ -182,9 +187,9 @@ main{max-width:1280px;margin:auto;padding:28px 20px 60px}.layout{display:grid;gr
 <?php if ($error!==''): ?><p role="alert" class="error"><?=h($error)?></p><?php endif;?>
 <?php if ($activate!=='' || !$user): ?><section class="panel auth">
 <p class="eyebrow"><?=tr_html('Private library')?></p>
-<?php if ($activate!==''): ?><h1><?=tr_html('Set your password')?></h1><p class="muted">Activate <?=h($activateFor)?>. Use the same password in your OPDS reader.</p>
+<?php if ($activate!==''): ?><h1><?=tr_html('Set your password')?></h1><p class="muted"><?=h(sprintf(tr('Set a password for %s. Use the same password in your OPDS reader.'),$activateFor))?></p>
 <form method="post" action="up.php"><?php hidden($csrf,'activate');?><input type="hidden" name="activate" value="<?=h($activate)?>"><input type="hidden" name="account" value="<?=h($activateFor)?>">
-<label><?=tr_html('New password')?><input type="password" name="password" required minlength="12" autocomplete="new-password"></label><label><?=tr_html('Confirm password')?><input type="password" name="confirm" required autocomplete="new-password"></label><button class="primary"><?=tr_html('Set password')?></button></form>
+<label><?=tr_html('New password')?><input type="password" name="password" required autocomplete="new-password"></label><label><?=tr_html('Confirm password')?><input type="password" name="confirm" required autocomplete="new-password"></label><button class="primary"><?=tr_html('Set password')?></button></form>
 <?php else: ?><h1><?=tr_html('Your reading room')?></h1><p class="muted"><?=tr_html('Sign in to organize your books and share a shelf.')?></p>
 <form action="up.php" method="post"><?php hidden($csrf,'login');?><label><?=tr_html('Username')?><input name="username" required autocomplete="username" autocapitalize="none"></label><label><?=tr_html('Password')?><input type="password" name="password" required autocomplete="current-password"></label><button class="primary"><?=tr_html('Sign in')?></button></form>
 <?php endif;?></section>

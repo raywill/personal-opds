@@ -134,6 +134,9 @@ try{
  assert(!fs.existsSync(data));assert(!fs.readdirSync(app).some(p=>p.startsWith('install-check-')));
  r=await setupPost(3,'next',{username:'root'});assert.equal(r.status,400);assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'Alice'});assert.equal(r.status,400);assert.equal(r.json.step,3);
+ r=await setupPost(3,'next',{username:'7'});assert.equal(r.status,200);assert.equal(r.json.step,4);
+ assert((await request()).text.includes(path.join(data,'books','7')));
+ r=await setupPost(4,'back',{username:'7'});assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'alice'});assert.equal(r.status,200,r.text);assert.equal(r.json.step,4);
  const reviewStep=await request();
  assert(reviewStep.text.includes('<dt>OPDS address:</dt><dd><code>'+base+'index.php</code>'));
@@ -177,6 +180,12 @@ try{
  assert.equal((await activate('alice',aliceLink)).status,403);
  assert.equal((await activate('alice',replacementFirstLink)).status,303);
  assert.equal((await activate('alice',replacementFirstLink)).status,403);
+ // Simulate an existing deployment with an unversioned bcrypt hash.
+ const recordsPath=path.join(data,'conf','users.json');
+ const oldState=JSON.parse(fs.readFileSync(recordsPath,'utf8'));
+ oldState.records.alice.password=execFileSync(php,['-r','echo password_hash($argv[1], PASSWORD_BCRYPT);',password],{encoding:'utf8'});
+ fs.writeFileSync(recordsPath,JSON.stringify(oldState));
+ assert.equal((await opds('alice')).status,200);
  assert.throws(()=>cli('invite','root'),/reserved/);
  fs.mkdirSync(path.join(data,'books','Orphan'));
  assert.throws(()=>cli('invite','orphan'),/refusing to claim/);
@@ -330,6 +339,25 @@ try{
  assert(cli('migrate','alice',old).includes('Preview only'));assert(!fs.existsSync(path.join(data,'books','alice','old.txt')));
  assert(cli('migrate','alice',old,'--apply').includes('original library retained'));assert(fs.existsSync(path.join(old,'old.txt')));
  pass('individual quotas, password reset and non-destructive migration');
+
+ const shortUser='7', shortLink=cli('invite',shortUser);
+ const passwordPage=await request(shortLink,{headers:{'accept-language':'zh-CN'}});
+ assert.equal(passwordPage.status,200);assert(passwordPage.text.includes('设置密码'));
+ assert(!passwordPage.text.includes('minlength'));
+ r=await activate(shortUser,shortLink,'');
+ assert.equal(r.status,400);assert(r.text.includes('Password cannot be empty.'));
+ assert.equal((await activate(shortUser,shortLink,'0')).status,303);
+ assert.equal((await ui({action:'login',username:shortUser,password:'0'})).status,303);
+ assert.equal((await request('index.php',{headers:auth(shortUser,'0')})).status,200);
+ assert.equal((await request('index.php',{headers:auth(shortUser,'')})).status,401);
+ const longPrefix='p'.repeat(2500);
+ const longPassword=longPrefix+':  密码 ';
+ assert.equal((await activate(shortUser,cli('reset',shortUser),longPassword)).status,303);
+ assert.equal((await ui({action:'login',username:shortUser,password:longPassword})).status,303);
+ assert.equal((await request('index.php',{headers:auth(shortUser,longPassword)})).status,200);
+ assert.equal((await request('index.php',{headers:auth(shortUser,longPrefix+':  密码')})).status,401);
+ assert.equal((await request('index.php',{headers:auth(shortUser,'0')})).status,401);
+ pass('single-character username and password, empty rejection, long exact matching, and old password hashes');
 
  if(process.env.CHROME_BIN && process.env.PLAYWRIGHT_MODULE){
    const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);

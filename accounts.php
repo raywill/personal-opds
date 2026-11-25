@@ -25,7 +25,23 @@ function accountDirectoryOccupied(string $books,string $name): bool
 }
 
 /* END ACCOUNT DIRECTORY RULES */
-function accountPassword(string $value): bool { return strlen($value)>=12 && strlen($value)<=72 && !str_contains($value,"\0"); }
+const ACCOUNT_PASSWORD_FORMAT='sha256-v1:';
+
+function accountPasswordMaterial(string $value): string
+{
+    // A fixed-length, NUL-free input prevents bcrypt from truncating long passwords.
+    // This is not the stored hash; password_hash still applies a salted slow KDF.
+    return base64_encode(hash('sha256',"personal-opds password v1\0".$value,true));
+}
+
+function verifyAccountPassword(string $password,string $stored): bool
+{
+    if (str_starts_with($stored,ACCOUNT_PASSWORD_FORMAT))
+        return password_verify(accountPasswordMaterial($password),substr($stored,strlen(ACCOUNT_PASSWORD_FORMAT)));
+    // Existing accounts contain unversioned bcrypt hashes. Retain their original
+    // upper bound so a password plus an extra suffix cannot match a 72-byte hash.
+    return strlen($password)<=72 && !str_contains($password,"\0") && password_verify($password,$stored);
+}
 function validCategory(string $name): bool { return validDirectoryName($name) && trim($name)===$name; }
 
 function stateRead(string $key): array
@@ -93,8 +109,8 @@ function activeAccount(string $name): ?array
 function loginAccount(string $name,string $password): ?array
 {
     $user=activeAccount($name);
-    $valid=password_verify(accountPassword($password)?$password:'', $user['password']??'$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.');
-    return $valid && accountPassword($password) ? $user : null;
+    $valid=verifyAccountPassword($password,$user['password']??ACCOUNT_PASSWORD_FORMAT.'$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.');
+    return $valid && $password!=='' ? $user : null;
 }
 function directoryUnder(string $parent,string $name,bool $create=false): string
 {
@@ -127,13 +143,14 @@ function newActivation(string $name): array
 }
 function activateAccount(string $name,string $secret,string $password): void
 {
-    if (!accountName($name) || !preg_match('/\A[a-f0-9]{64}\z/D',$secret) || !accountPassword($password)) reject('Invalid activation or password. Use 12–72 bytes.');
+    if (!accountName($name) || !preg_match('/\A[a-f0-9]{64}\z/D',$secret)) reject('Activation link is invalid or expired.',403);
+    if ($password==='') reject(tr('Password cannot be empty.'));
     stateUpdate('users',function (&$users) use ($name,$secret,$password) {
         $row=$users[$name]??[];
         if (!in_array($row['state']??null,['pending','active'],true) || ($row['activation']['expires']??0)<=time() ||
             !hash_equals($row['activation']['digest']??'',hash('sha256',$secret))) reject('Activation link is invalid or expired.',403);
         directoryUnder(accountBooks(),$name);
-        $row['password']=password_hash($password,PASSWORD_DEFAULT);
+        $row['password']=ACCOUNT_PASSWORD_FORMAT.password_hash(accountPasswordMaterial($password),PASSWORD_DEFAULT);
         $row['state']='active'; unset($row['activation']); $users[$name]=$row;
     });
 }

@@ -38,7 +38,7 @@ php admin.php quota alice 5368709120 5000
 php admin.php disable alice
 ```
 
-Send the activation/reset URL privately. Reissuing a link invalidates the previous one; the reset itself invalidates old browser sessions when the password is changed. Disabling an account revokes its access and leaves its files on disk. Usernames are immutable lowercase ASCII letters/digits with optional underscore/hyphen, up to 32 characters. Users cannot register themselves. The default per-account quota is 5 GiB and 5,000 books; enforce external disk and temporary upload quotas as well.
+Send the activation/reset URL privately. Passwords cannot be empty but have no length or composition rules; use a long, unique password for an internet-facing library. Reissuing a link invalidates the previous one; the reset itself invalidates old browser sessions when the password is changed. Disabling an account revokes its access and leaves its files on disk. Usernames are immutable lowercase ASCII letters/digits with optional underscore/hyphen, up to 32 characters. Users cannot register themselves. The default per-account quota is 5 GiB and 5,000 books; enforce external disk and temporary upload quotas as well.
 
 Private storage layout:
 

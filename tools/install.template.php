@@ -222,7 +222,7 @@ function inspectStorage(array $layout): void {
     }
 }
 function inspectUsername(array $layout,string $name): void {
-    if (!accountName($name)) stopInstall(tr('Use 1–32 lowercase letters, digits, hyphens or underscores; start with a letter or digit.'));
+    if (!accountName($name)) stopInstall(tr('Use up to 32 lowercase letters, digits, hyphens or underscores. Start with a letter or digit.'));
     if (accountNameReserved($name)) stopInstall(tr('This username is reserved.'));
     // An existing account database is never opened or reused by fresh setup.
     inspectConfiguration($layout['conf']);
@@ -503,7 +503,7 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <?php elseif ($step===3): ?>
 <label for="username"><?=tr_html('First username')?></label>
 <input id="username" name="username" maxlength="32" autocapitalize="none" spellcheck="false" aria-describedby="username_help" value="<?=esc($fields['username'])?>" required>
-<small id="username_help"><?=tr_html('Use 1–32 lowercase letters, digits, hyphens or underscores; start with a letter or digit.')?></small>
+<small id="username_help"><?=tr_html('Use up to 32 lowercase letters, digits, hyphens or underscores. Start with a letter or digit.')?></small>
 <div class="hint"><strong><?=tr_html('Personal library directory')?></strong><br><code id="personal_path" data-prefix="<?=esc(rtrim($fields['data_dir'],'/').'/books/')?>"><?=esc($accountPath?:'/')?></code></div>
 <script nonce="<?=esc($nonce)?>">const u=document.getElementById('username'),p=document.getElementById('personal_path');function showPath(){p.textContent=p.dataset.prefix+(/^[a-z0-9][a-z0-9_-]{0,31}$/.test(u.value)?u.value:'<username>')+'/';}u.addEventListener('input',showPath);showPath();</script>
 <?php else: ?>
