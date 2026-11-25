@@ -135,10 +135,12 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
   <?=tr_html('Contents')?>
   <?php endif; ?>
  </button>
- <dialog id="toc" class="contents-drawer" aria-labelledby="toc-title">
-  <button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button>
-  <h2 id="toc-title"><?=tr_html($page['format']==='txt'?'Go to position':'Contents')?></h2>
-  <p id="progress" class="contents-progress"></p>
+ <dialog id="toc" class="contents-drawer<?=$page['format']==='epub'?' chapter-drawer':''?>" aria-labelledby="toc-title">
+  <div class="drawer-heading">
+   <button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button>
+   <h2 id="toc-title"><?=tr_html($page['format']==='txt'?'Go to position':'Contents')?></h2>
+   <p id="progress" class="contents-progress"></p>
+  </div>
   <?php if ($page['format']==='txt'): ?>
   <div class="text-position">
    <label for="position-range"><?=tr_html('Reading position')?></label>
@@ -147,7 +149,7 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
    <button id="jump" type="button"><?=tr_html('Jump to position')?></button>
    <button id="jump-start" type="button"><?=tr_html('Start of book')?></button>
   </div>
-  <?php else: ?><div id="chapters"></div><?php endif; ?>
+  <?php else: ?><div id="chapters" tabindex="0" role="region" aria-labelledby="toc-title"></div><?php endif; ?>
  </dialog>
  <dialog id="preferences" aria-labelledby="prefs-title">
   <button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button>

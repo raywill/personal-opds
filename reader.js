@@ -100,6 +100,7 @@
      if(event.target===toc&&event.animationName==='reader-drawer-out')finishTocClose();
  });
  toc.addEventListener('close',()=>{
+     if(toc.open)return;
      clearTimeout(closingToc);closingToc=0;delete toc.dataset.closing;
      contents.setAttribute('aria-expanded','false');
  });
@@ -359,7 +360,28 @@
      }
  });
  const chapters=$('chapters');
- let tocCache=null,tocRequest=null,tocRows=[];
+ let tocCache=null,tocRequest=null,tocRows=[],visibleRow=null,autoCenter=false,centerFrame=0,openTimer=0;
+ function centerChapter(){
+     if(!toc.open||closingToc||!autoCenter||!visibleRow)return;
+     const viewport=chapters.getBoundingClientRect(), row=visibleRow.getBoundingClientRect();
+     chapters.scrollTop+=row.top-viewport.top-(chapters.clientHeight-row.height)/2;
+ }
+ function scheduleChapterCenter(){
+     cancelAnimationFrame(centerFrame);
+     centerFrame=requestAnimationFrame(()=>{centerFrame=requestAnimationFrame(centerChapter);});
+ }
+ // On touch browsers the modal can finish establishing its scroll position
+ // after showModal(). Set the inner scroller again once the drawer is painted.
+ toc.addEventListener('animationend',event=>{
+     if(event.target===toc&&event.animationName==='reader-drawer-in')scheduleChapterCenter();
+ });
+ toc.addEventListener('close',()=>{
+     if(toc.open)return;
+     cancelAnimationFrame(centerFrame);clearTimeout(openTimer);autoCenter=false;
+ });
+ function stopChapterCenter(){autoCenter=false;}
+ for(const type of ['wheel','touchmove','pointerdown','keydown'])
+     chapters.addEventListener(type,stopChapterCenter,{passive:true});
  function addChapter(label,to,fragment=''){
      const item=document.createElement('button');item.type='button';item.textContent=label;
      item.addEventListener('click',()=>{if(closingToc)return;closeToc();load(to,0,fragment);});
@@ -393,15 +415,16 @@
      // preceding entry in that case, without marking it as the current one.
      let prior=null;
      if(!active)for(const row of tocRows)if(row.to<chapter&&(!prior||row.to>=prior.to))prior=row;
-     const item=(active??prior??tocRows[0])?.item;
-     if(item){
-         const drawer=toc.getBoundingClientRect(), row=item.getBoundingClientRect();
-         toc.scrollTop+=row.top-drawer.top-(toc.clientHeight-row.height)/2;
-     }
+     visibleRow=(active??prior??tocRows[0])?.item;
+     centerChapter();
+     scheduleChapterCenter();
  }
  contents.addEventListener('click',async()=>{
      if(toc.open)return;
+     autoCenter=true;
      showToc();
+     clearTimeout(openTimer);
+     openTimer=setTimeout(centerChapter,260);
      if(tocRows.length){highlightCurrentChapter();return;}
      const message=document.createElement('p');message.textContent=cfg.loading;chapters.replaceChildren(message);
      try{

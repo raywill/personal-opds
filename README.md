@@ -165,7 +165,7 @@ php tools/build.php
 PHP_BINARY=php node tests/integration.mjs
 ```
 
-The Node 20+ integration test uses OpenSSL CLI, a temporary private data directory, and a trusted local HTTPS proxy. Environment variables `PLAYWRIGHT_MODULE` and `CHROME_BIN` additionally enable desktop/mobile browser tests. Optionally set `SCREENSHOT_DIR` or `RBAC_SCREENSHOT_DIR` to a writable directory for UI screenshots. Set `OPDS_LEGACY_SOURCE` to an unpacked copy of the previous release to test creating a share on the actual old code, then upgrading and using the exact same URL. Test with a physical e-reader before rolling the new URL out to other people. Never deploy the test router.
+The Node 20+ integration test uses OpenSSL CLI, a temporary private data directory, and a trusted local HTTPS proxy. Environment variables `PLAYWRIGHT_MODULE` and `CHROME_BIN` additionally enable desktop/mobile browser tests. Set `OPDS_TEST_WEBKIT=1` with Playwright WebKit installed to also test the chapter drawer with an iPhone-sized touch profile. Optionally set `SCREENSHOT_DIR` or `RBAC_SCREENSHOT_DIR` to a writable directory for UI screenshots. Set `OPDS_LEGACY_SOURCE` to an unpacked copy of the previous release to test creating a share on the actual old code, then upgrading and using the exact same URL. Test with a physical e-reader before rolling the new URL out to other people. Never deploy the test router.
 
 Apache License 2.0.
 

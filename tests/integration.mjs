@@ -1374,9 +1374,11 @@ try{
      await drawer.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
      assert.equal(await focused.getAttribute('aria-current'),'location');
      assert.equal(await drawer.locator('[aria-current]').count(),1);
-     const drawerBox=await drawer.boundingBox(), focusedBox=await focused.boundingBox();
+     const scroller=drawer.locator('#chapters');
+     const drawerBox=await scroller.boundingBox(), focusedBox=await focused.boundingBox();
      assert(focusedBox.y>=drawerBox.y&&focusedBox.y+focusedBox.height<=drawerBox.y+drawerBox.height);
-     assert((await drawer.evaluate(el=>el.scrollTop))>300);
+     assert((await scroller.evaluate(el=>el.scrollTop))>300);
+     assert.equal(await drawer.evaluate(el=>el.scrollTop),0);
      assert.equal(await web.locator('#viewport').evaluate(el=>el.scrollTop),beforeDrawer);
 
      // The selected heading is near the end of the XHTML: it cannot reach
@@ -1443,6 +1445,42 @@ try{
      assert.deepEqual(errors,[]);
      pass('desktop/mobile EPUB drawer, current subsection centered on reopen, continuous TXT, percentage jump and resume, and header fades without layout movement');
    } finally { await browser.close(); }
+ }
+ if(process.env.PLAYWRIGHT_MODULE && process.env.OPDS_TEST_WEBKIT==='1'){
+   const {webkit,devices}=await import(process.env.PLAYWRIGHT_MODULE);
+   const browser=await webkit.launch();
+   try{
+     const ctx=await browser.newContext({...devices['iPhone 13'],ignoreHTTPSErrors:true});
+     for(const cookie of cookies.values()){
+       const [name,...v]=cookie.split('=');await ctx.addCookies([{name,value:v.join('='),url:base,secure:true}]);
+     }
+     const web=await ctx.newPage();
+     await web.goto(base+previewURL('readable.epub'));
+     await web.getByText('Opening text',{exact:true}).waitFor();
+     const fab=web.getByRole('button',{name:'Contents',exact:true}), drawer=web.getByRole('dialog',{name:'Contents'});
+     await fab.tap();
+     await drawer.getByRole('button',{name:'Second chapter',exact:true}).tap();
+     await drawer.waitFor({state:'hidden'});
+     const heading=web.locator('[data-book-anchor="sub-28"]');
+     await heading.evaluate(el=>el.scrollIntoView({block:'start'}));
+     const reading=await web.locator('#viewport').evaluate(el=>el.scrollTop);
+     for(let attempt=0;attempt<2;attempt++){
+       await fab.tap();
+       await web.waitForFunction(()=>{
+         const scroller=document.querySelector('#chapters'), active=scroller.querySelector('[aria-current]');
+         if(!active||active.textContent!=='Subsection 28'||scroller.scrollTop<300)return false;
+         if(document.querySelector('#toc').getAnimations().some(a=>a.playState==='running'))return false;
+         const view=scroller.getBoundingClientRect(), item=active.getBoundingClientRect();
+         return item.top>=view.top&&item.bottom<=view.bottom;
+       });
+       assert.equal(await web.locator('#viewport').evaluate(el=>el.scrollTop),reading);
+       assert.equal(await drawer.evaluate(el=>el.scrollTop),0);
+       await drawer.locator('#chapters').evaluate(el=>el.scrollTop=0);
+       await drawer.getByRole('button',{name:'Close',exact:true}).tap();
+       await drawer.waitFor({state:'hidden'});
+     }
+     pass('iPhone-sized WebKit touch: a distant current EPUB section is visible on both opens after animation');
+   }finally{await browser.close();}
  }
  {
    cookies.clear();
