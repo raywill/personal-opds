@@ -753,30 +753,53 @@ try{
    assert.equal(res.status,200,res.json?.message);
    return JSON.parse(res.json.setup.match(/```json\n(.*?)\n```/s)[1]);
  }
- assert.equal((await ui({action:'agent_setup',library:family,scope:'library'})).status,403);
- const agent=setupConfig(await ui({action:'agent_setup',library:family,destination:'Legacy upgrade'}));
- const another=setupConfig(await ui({action:'agent_setup',library:family,destination:'Legacy upgrade',name:'second job',days:'30'}));
+ const agent=setupConfig(await ui({action:'agent_setup',library:family}));
+ // Older request fields cannot change the new token's lifetime or scope.
+ const another=setupConfig(await ui({action:'agent_setup',library:family,destination:'Legacy upgrade',name:'ignored',days:'1',scope:'folder'}));
  assert.notEqual(agent.token,another.token);
- assert.equal(agent.library_id,family);assert.equal(agent.directory,'Legacy upgrade');
+ assert.equal(agent.library_id,family);
+ assert(agent.folders.includes('Legacy upgrade')&&agent.folders.includes('Editor folder'));
+ assert(!agent.folders.includes('Share shelf'));
+ const newState=readState(libState);
+ const anotherRecord=newState.records[family].tokens[another.token.split('.')[1]];
+ assert.equal(anotherRecord.expires-anotherRecord.created,90*86400);
+ assert.equal(anotherRecord.name,'');
  assert(!fs.readFileSync(libState,'utf8').includes(agent.token));
  const bearer=token=>({authorization:'Bearer '+token});
  const verify=token=>request('api.php?action=verify',{headers:bearer(token)});
- assert.equal((await verify(agent.token)).json.directory,'Legacy upgrade');
- assert(!fs.existsSync(path.join(data,'books',librarian,'Legacy upgrade','agent-only.txt')));
- assert.equal((await upload(agent.token,undefined,[['agent-only.txt','agent upload worked']])).status,200);
- assert.equal((await upload(agent.token,undefined,[['agent-only.txt','agent upload worked']])).status,409);
+ const verified=await verify(agent.token);
+ assert.equal(verified.json.directory,null);
+ assert.equal(verified.json.can_create_directory,true);
+ assert.deepEqual(verified.json.folders,agent.folders);
+ assert.equal((await upload(agent.token,'Legacy upgrade',[['agent-only.txt','agent upload worked']])).status,200);
+ assert.equal((await upload(agent.token,'Legacy upgrade',[['agent-only.txt','agent upload worked']])).status,409);
+ assert.equal((await upload(agent.token,'Agent 新建',[['new.txt','automatically created']])).status,200);
+ assert((await verify(agent.token)).json.folders.includes('Agent 新建'));
+ assert.equal((await upload(agent.token,undefined,[['agent-root.txt','root fallback']])).status,200);
+ assert(fs.existsSync(path.join(data,'books',librarian,'agent-root.txt')));
+ assert(!fs.existsSync(path.join(data,'books','bob','Agent 新建')));
+ assert.equal((await upload(agent.token,'../alice',[['wrong.txt','must not escape']])).status,400);
  assert.equal((await ui({action:'folder',library:family,folder:'Another folder'})).status,403);
- assert.equal((await upload(agent.token,'other',[['wrong.txt','must not be created']])).status,403);
  assert.equal((await request(url({library:family,download:'Legacy upgrade/same.txt'}),{headers:bearer(agent.token)})).status,401);
  assert.equal((await ui({action:'agent_revoke',library:family,token_id:agent.token.split('.')[1]})).status,303);
  assert.equal((await verify(agent.token)).status,401);
  assert.equal((await verify(another.token)).status,200);
 
+ // A pre-upgrade fixed-folder token retains its restriction and cannot list folders.
+ const oldScopedState=readState(libState), oldScoped=crypto.randomBytes(32).toString('hex'), oldId=crypto.randomBytes(12).toString('hex');
+ oldScopedState.records[family].tokens[oldId]={...anotherRecord,agent_connection:false,whole:false,mkdir:false,dir:'Legacy upgrade',
+   identity:fs.readFileSync(path.join(data,'books',librarian,'Legacy upgrade','.opds-category'),'utf8'),
+   digest:crypto.createHash('sha256').update(oldScoped).digest('hex')};
+ fs.writeFileSync(libState,JSON.stringify(oldScopedState));
+ const legacyScopedToken='opds1.'+oldId+'.'+oldScoped;
+ const legacyCheck=await verify(legacyScopedToken);
+ assert.equal(legacyCheck.status,200);
+ assert.equal(legacyCheck.json.directory,'Legacy upgrade');
+ assert.equal(legacyCheck.json.folders,undefined);
+ assert.equal((await upload(legacyScopedToken,'Agent 新建',[['wrong.txt','not allowed']])).status,403);
+
  restoreSession(ownerSession);
- const broad=setupConfig(await ui({action:'agent_setup',library:family,scope:'library'}));
- const auto=setupConfig(await ui({action:'agent_setup',library:family,scope:'library',mkdir:'1'}));
- assert.equal((await verify(broad.token)).json.can_create_directory,false);
- assert.equal((await upload(broad.token,'new by agent',[['no.txt','not allowed']])).status,400);
+ const auto=setupConfig(await ui({action:'agent_setup',library:family}));
  assert.equal((await upload(auto.token,'new by agent',[['yes.txt','created only in family']])).status,200);
  assert(!fs.existsSync(path.join(data,'books','alice','new by agent')));
  assert.equal((await ui({action:'member_remove',library:family,member:'bob'})).status,303);
@@ -893,7 +916,8 @@ try{
      assert.equal(await page.getByRole('button',{name:'新建书库',exact:true}).count(),0);
      await page.getByRole('button',{name:'连接Agent'}).click();
      const compound=page.locator('#agent-setup');
-     await compound.locator('select[name=destination]').selectOption('Legacy upgrade');
+     assert.equal(await compound.locator('select,input:not([type=hidden]),details').count(),0);
+     assert.equal(await compound.getByRole('button').count(),1);
      if(process.env.RBAC_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.RBAC_SCREENSHOT_DIR,'02-一键安装Skill.png')});
      await compound.getByRole('button',{name:'复制完整 Agent 配置'}).click();
      await page.getByText('已复制，粘贴给 Agent 即可。').waitFor();
@@ -901,11 +925,14 @@ try{
      assert.match(text,/opds1\.[a-f0-9]{24}\.[a-f0-9]{64}/);
      const copied=JSON.parse(text.match(/```json\s*([^\n]+)/)[1]);
      assert.equal(copied.endpoint,base+'api.php');
-     assert.equal(copied.directory,'Legacy upgrade');
+     assert(copied.folders.includes('Legacy upgrade'));
+     assert(!copied.folders.includes('Share shelf'));
      assert(text.includes('~/.personal-opds-upload/profiles.json')&&text.includes('Authorization: Bearer <token>'));
      const check=await verify(copied.token);
      assert.equal(check.status,200);
-     for(const key of ['library_id','directory','can_create_directory','expires_at'])assert.equal(check.json[key],copied[key]);
+     for(const key of ['library_id','expires_at'])assert.equal(check.json[key],copied[key]);
+     assert.deepEqual(check.json.folders,copied.folders);
+     assert.equal(check.json.can_create_directory,true);
      await page.locator('#tools-dialog').getByLabel('关闭').click();
      await page.waitForLoadState();
      await page.getByLabel('账号菜单').click();

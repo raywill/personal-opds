@@ -94,11 +94,11 @@ In the web dashboard, the library root lists its folders above the books stored 
 
 ## AI uploads
 
-In the target library, open the top-right account menu → **Connect Agent**. Select a destination and click **Copy complete Agent setup** once. Paste the copied text into an agent that can install skills and run HTTPS requests. It includes the endpoint, library, destination, actual upload-only token, and a verification step that does not upload files. If clipboard access is blocked, the same text is shown for manual copy. There is no separate download or token setup step.
+In the target library, open **Connect Agent**, click **Copy complete Agent setup**, and paste it into your agent. The text includes the Skill, API endpoint, upload-only token, and current folder names. The agent chooses a suitable folder and the server creates it if missing. No settings are required.
 
-Each credential can be revoked separately. The default binds it to the selected folder for 90 days; token options allow a label and 1–365 days. Owners and admins can additionally issue an entire-library token for themselves, and explicitly opt in to creating missing folders. The app stores token digests only. These credentials do not authenticate reads, web pages or account management.
+New connections are tied to a single library, last 90 days, and can be revoked separately. They can list folder names for upload routing, but cannot read books, change settings, or access another library. Existing tokens retain their original scope and expiry.
 
-`GET ?action=verify` returns `library_id`, `directory`, `can_create_directory` and `expires_at`. For a fixed token, omit `directory` on upload; it targets the configured folder (empty string means root). An entire-library token may send one existing first-level folder via multipart `directory`; omitted means root. A missing folder is created only when allowed. Invalid paths do not fall back to root. Old tokens still work only in their original personal library and keep their previous directory selection/creation ability until revoked.
+The Skill uses `GET ?action=verify` to verify the token and refresh the folder names, and multipart POST to upload. If it omits `directory`, the file goes to the library root. Invalid paths are rejected.
 
 Limits: 20 files per request, 100 MiB per file, 200 MiB combined, and the target library quota. **An existing filename in the same folder is an error even when bytes are identical.** The original is never overwritten. Single-file conflicts return HTTP 409. For a batch with partial failures, inspect every item in `results` (an individual conflict has status 409); successful files remain in place. On an interrupted connection, check whether a file landed before retrying; a retry can now return a conflict.
 

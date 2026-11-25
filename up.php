@@ -202,11 +202,8 @@ try {
                     $_SESSION['notice']=$action==='move'?tr('Book moved.'):tr('Book deleted.'); go($dir);
                 case 'agent_setup':
                     reserveRateAttempt('agent-setup',30,300);
-                    $dest=field('destination',$_POST);
-                    $days=field('days',$_POST);
-                    if ($days!==''&&!preg_match('/^\d{1,3}$/D',$days)) reject('Invalid token name or validity period.');
-                    $grant=issueAgentToken($library,$viewer,$dest,$days===''?DEFAULT_AGENT_TOKEN_DAYS:(int)$days,field('name',$_POST),field('scope',$_POST)==='library',field('mkdir',$_POST)==='1');
-                    jsonResponse(['success'=>true,'setup'=>agentSetup($grant,$library,$dest)]);
+                    $grant=issueAgentToken($library['id'],$viewer);
+                    jsonResponse(['success'=>true,'setup'=>agentSetup($grant,currentLibrary())]);
                 case 'legacy_token_revoke':
                     uploadCommit(static function () use ($viewer,$library) {
                         if ($library['legacy']!==$viewer) reject('Library access denied.',403);

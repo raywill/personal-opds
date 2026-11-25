@@ -13,7 +13,7 @@ const LIBRARY_ROLES = [
     'admin'=>['view','download','opds','web_upload','agent_upload','folder','organize','delete','share','members','tokens'],
 ];
 const WEB_PERMISSIONS = ['view','web_upload','folder','members','tokens','settings','agent_upload'];
-const DEFAULT_AGENT_TOKEN_DAYS = 90;
+const AGENT_TOKEN_TTL = 90 * 86400;
 const MEMBERSHIP_TTL = 7 * 86400;
 
 function personalLibraryId(string $username): string { return 'p-'.$username; }
@@ -184,7 +184,7 @@ function libraryMemberChange(string $id,string $actor,string $member,string $act
         else reject('Unknown action.');
         $nowPermissions=libraryPermissions($row,$member);
         foreach ($row['tokens'] as &$token) if ($token['user']===$member &&
-            (!in_array('agent_upload',$nowPermissions,true)||(!empty($token['whole'])&&!in_array('tokens',$nowPermissions,true))))
+            (!in_array('agent_upload',$nowPermissions,true)||(agentTokenNeedsAdmin($token)&&!in_array('tokens',$nowPermissions,true))))
             $token['revoked']??=time();
         unset($token);
         $rows[$id]=libraryPersisted($row);
@@ -195,34 +195,40 @@ function libraryMemberChange(string $id,string $actor,string $member,string $act
 
 function libraryPersisted(array $row): array { return array_intersect_key($row,array_flip(['title','members','tokens','invites','invite_history','archived','quota_bytes','quota_files'])); }
 
-function issueAgentToken(array $library,string $user,string $directory,int $days=DEFAULT_AGENT_TOKEN_DAYS,string $name='',bool $whole=false,bool $mkdir=false): array
+// Keep the old admin-only constraint for pre-upgrade whole-library tokens.
+function agentTokenNeedsAdmin(array $token): bool
 {
-    if ($directory!=='' && !validCategory($directory)) reject(tr('Invalid destination directory.'));
-    $name=trim($name);
-    if ($days<1 || $days>365 || strlen($name)>80 || !preg_match('//u',$name) || preg_match('/[\x00-\x1f\x7f]/',$name))
-        reject('Invalid token name or validity period.');
-    if ($whole) $directory='';
-    return libraryUpdate(function (&$rows) use ($library,$user,$directory,$days,$name,$whole,$mkdir) {
-        $id=$library['id'];
+    return !empty($token['whole'])&&empty($token['agent_connection']);
+}
+
+function agentFolderNames(): array
+{
+    $names=array_map('strval',array_keys(libraryDirectories()));
+    $names=array_values(array_filter($names,'validCategory'));
+    sort($names,SORT_NATURAL|SORT_FLAG_CASE);
+    return $names;
+}
+
+function issueAgentToken(string $id,string $user): array
+{
+    return libraryUpdate(function (&$rows) use ($id,$user) {
         $row=libraryInfo($id,$rows);
         if (!$row || !activeAccount($user) || !in_array('agent_upload',libraryPermissions($row,$user),true))
             reject('Library access denied.',403);
-        if ($whole&&!in_array('tokens',libraryPermissions($row,$user),true)) reject('Library access denied.',403);
-        if ($mkdir&&!$whole) reject('Folder creation requires a whole-library token.');
-        $root=directoryUnder(accountBooks(),$row['path']);
-        $dest=$directory===''?$root:directoryUnder($root,$directory);
-        $identity=$directory===''?null:categoryIdentity($dest,true);
-        if ($directory!=='' && $identity===null) reject('Cannot identify the upload folder.',409);
-        $tokenId=bin2hex(random_bytes(12));
-        $secret=bin2hex(random_bytes(32));
+        setLibraryScope($row);
+        $folders=agentFolderNames();
         foreach ($row['tokens'] as $k=>$t) if ($t['expires']<=time() || !empty($t['revoked'])) unset($row['tokens'][$k]);
         if (count($row['tokens'])>=200 || count(array_filter($row['tokens'],static fn($t)=>$t['user']===$user))>=20)
             reject('Token limit reached. Revoke an unused token first.',507);
-        $expires=time()+$days*86400;
-        $row['tokens'][$tokenId]=['user'=>$user,'dir'=>$directory,'identity'=>$identity,'name'=>$name,'whole'=>$whole,'mkdir'=>$mkdir,'digest'=>hash('sha256',$secret),'expires'=>$expires,'created'=>time()];
+        $tokenId=bin2hex(random_bytes(12));
+        $secret=bin2hex(random_bytes(32));
+        $now=time();
+        $expires=$now+AGENT_TOKEN_TTL;
+        $row['tokens'][$tokenId]=['user'=>$user,'dir'=>'','identity'=>null,'name'=>'','whole'=>true,'mkdir'=>true,
+            'agent_connection'=>true,'digest'=>hash('sha256',$secret),'expires'=>$expires,'created'=>$now];
         $rows[$id]=libraryPersisted($row);
-        libraryAudit($rows,'token.created',$user,$id,['token'=>$tokenId,'directory'=>$directory]);
-        return ['token'=>'opds1.'.$tokenId.'.'.$secret,'expires'=>$expires,'whole'=>$whole,'mkdir'=>$mkdir];
+        libraryAudit($rows,'token.created',$user,$id,['token'=>$tokenId,'directory'=>'']);
+        return ['token'=>'opds1.'.$tokenId.'.'.$secret,'expires'=>$expires,'folders'=>$folders];
     });
 }
 
@@ -258,8 +264,8 @@ function agentScope(string $token): ?array
                 if ($identity===null || $identity!==$entry['identity']) return null;
             }
             $whole=!empty($entry['whole']);
-            if ($whole&&!in_array('tokens',libraryPermissions($row,$entry['user']),true)) return null;
-            return ['user'=>$entry['user'],'library'=>$row,'fixed'=>!$whole,'mkdir'=>!empty($entry['mkdir']),'dir'=>$entry['dir'],'expires'=>$entry['expires']];
+            if (agentTokenNeedsAdmin($entry)&&!in_array('tokens',libraryPermissions($row,$entry['user']),true)) return null;
+            return ['user'=>$entry['user'],'library'=>$row,'fixed'=>!$whole,'mkdir'=>!empty($entry['mkdir']),'dir'=>$entry['dir'],'expires'=>$entry['expires'],'folder_names'=>!empty($entry['agent_connection'])];
         }
     } elseif (preg_match('/\A[a-f0-9]{64}\z/D',$token) && ($user=tokenAccount($token))!==null) {
         $row=libraryInfo(personalLibraryId($user));

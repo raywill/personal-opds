@@ -18,19 +18,9 @@ $owner=$library['owner']===$viewer;
 <?php if (isset($permissions['agent_upload'])): ?>
 <dialog id="tools-dialog" class="sheet" aria-labelledby="tools-title">
 <div class="bar dialog-head"><h2 id="tools-title"><?=tr_html('Connect Agent')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
-<p class="muted"><?=tr_html('Choose a destination, then paste the complete setup into your agent. It includes the Skill, connection address, and an upload-only token.')?></p>
+<p class="muted"><?=tr_html('Copy and paste into your Agent. It chooses or creates folders in this library. The upload-only token lasts 90 days.')?></p>
 <form method="post" action="up.php" id="agent-setup">
 <?php hidden($csrf,'agent_setup',$dir); ?>
-<label><?=tr_html('Upload destination')?><select name="destination">
-<?php foreach (['',...$directories] as $destination): ?><option value="<?=h($destination)?>" <?=$destination===$dir?'selected':''?>><?=h($destination===''?$libraryName:$destination)?></option><?php endforeach; ?>
-</select></label>
-<details class="tool-divider"><summary><?=tr_html('Token options')?></summary>
-<label><?=tr_html('Token label')?><input name="name" maxlength="80"></label>
-<label><?=tr_html('Validity in days')?><input name="days" type="number" value="90" min="1" max="365" required></label>
-<?php if (isset($permissions['tokens'])): ?>
-<label><?=tr_html('Upload scope')?><select name="scope"><option value="folder"><?=tr_html('Selected folder only')?></option><option value="library"><?=tr_html('Entire library')?></option></select></label>
-<label><input type="checkbox" name="mkdir" value="1"> <?=tr_html('Allow folder creation with an entire-library token')?></label>
-<?php endif; ?></details>
 <button class="primary" data-copied="<?=tr_html('Copied. Paste it into your agent.')?>" data-fallback="<?=tr_html('Copy failed. Select and copy the instructions below.')?>" data-failed="<?=tr_html('Could not prepare the installation instructions. Try again.')?>"><?=tr_html('Copy complete Agent setup')?></button>
 </form>
 <p id="agent-setup-status" role="status"></p>
