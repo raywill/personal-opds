@@ -1277,6 +1277,17 @@ try{
  assert.equal((await request(txtApi+'&part='+utf.json.next+'&encoding=utf-8')).json.offset,utf.json.next);
  const gb=await request(getConfig(await request(previewURL('gbk.txt'))).url+'&part=0');
  assert.equal(gb.json.encoding,'gb18030');assert.equal(new TextDecoder('gb18030').decode(Buffer.from(gb.json.bytes,'base64')),'中文\n');
+ const seekGB=await request(getConfig(await request(previewURL('gbk.txt'))).url+'&part=1&direction=seek');
+ assert.equal(seekGB.json.offset,2);
+ assert.equal(new TextDecoder('gb18030').decode(Buffer.from(seekGB.json.bytes,'base64')),'文\n');
+ const seekUTF=await request(txtApi+'&part=1&encoding=utf-8&direction=seek');
+ assert.equal(seekUTF.json.offset,3);
+ assert(Buffer.from(seekUTF.json.bytes,'base64').toString().startsWith('到上次'));
+ const previousUTF=await request(txtApi+'&part='+utf.json.next+'&encoding=utf-8&direction=before');
+ assert.equal(previousUTF.json.next,utf.json.next);
+ assert.equal(previousUTF.json.bytes,utf.json.bytes);
+ const endUTF=await request(txtApi+'&part='+utf.json.total+'&encoding=utf-8&direction=seek');
+ assert.equal(endUTF.json.next,utf.json.total);
  pass('online reader authorization on every request, bounded first chapter/segment, protected EPUB images and TOC, UTF-8/GBK');
 
  if(process.env.PLAYWRIGHT_MODULE && process.env.CHROME_BIN){
@@ -1294,6 +1305,24 @@ try{
      await web.getByText('Opening text',{exact:true}).waitFor();
      assert.equal(fetched.filter(u=>u.includes('&part=')).length,1);
      assert(!fetched.some(u=>u.includes('example.invalid')||u.includes('&toc=')));
+     const checkImmersion=async (x,y)=>{
+       const vp=web.locator('#viewport');
+       const height=await vp.evaluate(async el=>{
+         el.scrollTop=Math.min(el.scrollTop,Math.max(0,el.scrollHeight-el.clientHeight-250));
+         await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+         return el.clientHeight;
+       });
+       await web.mouse.move(x,y);
+       await web.mouse.wheel(0,170);
+       await web.waitForFunction(()=>document.body.hasAttribute('data-header-hidden'));
+       await web.waitForFunction(()=>getComputedStyle(document.querySelector('.reader-bar')).opacity==='0');
+       assert.equal(await vp.evaluate(el=>el.clientHeight),height);
+       assert(await web.locator('.contents-fab').isVisible());
+       await web.mouse.click(x,y);
+       await web.waitForFunction(()=>!document.body.hasAttribute('data-header-hidden'));
+       await web.waitForFunction(()=>getComputedStyle(document.querySelector('.reader-bar')).opacity==='1');
+       assert.equal(await vp.evaluate(el=>el.clientHeight),height);
+     };
      const drawer=web.getByRole('dialog',{name:'Contents'});
      const contents=web.getByRole('button',{name:'Contents',exact:true});
      assert.equal(await web.locator('.reader-footer').count(),0);
@@ -1313,6 +1342,7 @@ try{
      await web.locator('#viewport').evaluate(v=>v.scrollTop=2200);await web.waitForTimeout(240);
      await web.reload();await web.getByText('The second chapter',{exact:true}).waitFor();
      assert((await web.locator('#viewport').evaluate(v=>v.scrollTop))>1500);
+     await checkImmersion(600,380);
      await web.getByRole('button',{name:'Reading controls'}).click();
      await web.getByRole('button',{name:'Reading settings'}).click();
      await web.getByLabel('Theme').selectOption('warm');
@@ -1335,13 +1365,40 @@ try{
      await web.getByRole('link',{name:'readable',exact:true}).waitFor();
      await web.setViewportSize({width:390,height:844});
      await web.getByRole('link',{name:'long',exact:true}).click();
-     await web.locator('.plain-text').waitFor();
-     assert(await web.locator('.reader-footer').isVisible());
-     assert.equal(await web.locator('.contents-fab').count(),0);
-     assert((await web.locator('.plain-text').textContent()).includes('回到上次阅读的位置'));
+     const blocks=web.locator('.text-segment'), viewport=web.locator('#viewport');
+     await blocks.first().waitFor();
+     assert.equal(await web.locator('.reader-footer').count(),0);
+     assert((await blocks.first().textContent()).includes('回到上次阅读的位置'));
      assert.equal(await web.evaluate(()=>document.documentElement.scrollWidth),390);
+     assert.equal(await blocks.count(),1);
+     const position=web.getByRole('button',{name:'Go to position',exact:true});
+     const positionDialog=web.getByRole('dialog',{name:'Go to position'});
+     await viewport.evaluate(el=>el.scrollTop=el.scrollHeight-el.clientHeight*2);
+     await blocks.nth(1).waitFor();
+     const joined=await web.locator('.plain-text').textContent();
+     await checkImmersion(200,420);
+     assert.equal(joined,text.slice(0,joined.length),'chunk boundaries must not alter visible text');
+     await position.click();
+     await positionDialog.getByRole('slider',{name:'Reading position'}).fill('60');
+     await positionDialog.getByText('60%',{exact:true}).waitFor();
+     const sought=web.waitForResponse(response=>response.url().includes('direction=seek'));
+     await positionDialog.getByRole('button',{name:'Jump to position'}).click();
+     assert.equal((await (await sought).json()).offset>=Math.floor(Buffer.byteLength(text)*.60),true);
+     await positionDialog.waitFor({state:'hidden'});
+     await position.click();
+     assert.equal(await positionDialog.getByRole('slider',{name:'Reading position'}).inputValue(),'60');
+     await web.keyboard.press('Escape');
+     await positionDialog.waitFor({state:'hidden'});
+     await web.reload();
+     await blocks.first().waitFor();
+     await position.click();
+     assert.equal(await positionDialog.getByRole('slider',{name:'Reading position'}).inputValue(),'60');
+     await positionDialog.getByRole('button',{name:'Start of book'}).click();
+     await positionDialog.waitFor({state:'hidden'});
+     await position.click();
+     assert.equal(await positionDialog.getByRole('slider',{name:'Reading position'}).inputValue(),'0');
      assert.deepEqual(errors,[]);
-     pass('desktop/mobile EPUB drawer left edge, backdrop and Escape, navigation and resume; TXT unchanged');
+     pass('desktop/mobile EPUB drawer, continuous TXT, percentage jump and resume, and header fades without layout movement');
    } finally { await browser.close(); }
  }
  {

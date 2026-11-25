@@ -52,7 +52,7 @@ try {
         if (!hash_equals($version,readerParam('version'))) reject('This book changed. Reopen it from the library.',409);
         if ($format==='txt') {
             if (!isset($_GET['part'])||isset($_GET['asset'])||isset($_GET['toc'])) reject('Book not found.',404);
-            readerJson(readerTextChunk($path,readerNumber('part'),readerParam('encoding')));
+            readerJson(readerTextChunk($path,readerNumber('part'),readerParam('encoding'),readerParam('direction')));
         }
         $zip=new ZipArchive();
         if ($zip->open($path,ZipArchive::RDONLY)!==true) reject('Cannot read this EPUB.',422);
@@ -85,8 +85,7 @@ try {
         'format'=>$format,'url'=>$url.'&version='.$version,
         'profile'=>hash_hmac('sha256',$viewer,SHARE_KEY),'book'=>$version,
         'loading'=>tr('Opening book…'),'failed'=>tr('Could not load this part. Try again.'),
-        'section'=>tr('Next section'),'chapter'=>tr('Next chapter'),
-        'part'=>tr('Chapter %d of %d'),'start'=>tr('Start of book'),
+        'chapter'=>tr('Next chapter'),'part'=>tr('Chapter %d of %d'),
     ];
 } catch (Throwable $e) {
     $status=$e instanceof RequestError?$e->getCode():($e instanceof AccountStorageError?503:500);
@@ -106,7 +105,7 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
 <link rel="stylesheet" href="reader.css?v=<?=filemtime(__DIR__.'/reader.css')?>">
 <?php if (!$error): ?><script src="reader.js?v=<?=filemtime(__DIR__.'/reader.js')?>" defer></script><?php endif; ?>
 </head>
-<body>
+<body<?=$error?'':' class="immersive-reader"'?>>
 <header class="reader-bar">
  <a class="reader-back" href="<?=re($back)?>"><span aria-hidden="true">‹</span> <?=tr_html('Back to library')?></a>
  <h1 title="<?=re($title)?>"><?=re($title)?></h1>
@@ -117,7 +116,6 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
 <?php else: ?>
 <div id="reader" data-format="<?=re($page['format'])?>" data-config="<?=re(json_encode($page,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE))?>">
  <div class="reader-toolbar" id="toolbar" hidden>
-  <?php if ($page['format']==='txt'): ?><button id="contents" type="button"><?=tr_html('Contents')?></button><?php endif; ?>
   <button id="settings" type="button"><?=tr_html('Reading settings')?></button>
  </div>
  <div class="reader-message" id="reader-message">
@@ -125,26 +123,31 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
    <button id="retry" type="button" hidden><?=tr_html('Retry')?></button>
  </div>
  <div id="viewport" tabindex="0" aria-label="<?=tr_html('Book text')?>">
-  <article id="book" aria-busy="true"></article>
-  <button class="continue" id="continue" type="button" hidden><?=tr_html('Next section')?></button>
+  <article id="book" aria-busy="true"<?=$page['format']==='txt'?' class="plain-text"':''?>></article>
+  <?php if ($page['format']==='epub'): ?><button class="continue" id="continue" type="button" hidden><?=tr_html('Next chapter')?></button><?php endif; ?>
  </div>
- <?php if ($page['format']==='txt'): ?>
- <footer class="reader-footer">
-  <button id="previous" type="button" aria-label="<?=tr_html('Previous page')?>" disabled>‹</button>
-  <span id="progress"></span>
-  <button id="next" type="button" aria-label="<?=tr_html('Next page')?>" disabled>›</button>
- </footer>
- <?php else: ?>
- <button id="contents" class="contents-fab" type="button" aria-controls="toc" aria-expanded="false" aria-haspopup="dialog">
+ <button id="contents" class="contents-fab" type="button" aria-controls="toc" aria-expanded="false" aria-haspopup="dialog"<?=$page['format']==='txt'?' disabled':''?>>
+  <?php if ($page['format']==='txt'): ?>
+  <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.65"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+  <?=tr_html('Go to position')?>
+  <?php else: ?>
   <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"><path d="M9 6h10M9 12h10M9 18h10M5 6h.01M5 12h.01M5 18h.01"/></svg>
   <?=tr_html('Contents')?>
+  <?php endif; ?>
  </button>
- <?php endif; ?>
- <dialog id="toc"<?=$page['format']==='epub'?' class="contents-drawer"':''?> aria-labelledby="toc-title">
+ <dialog id="toc" class="contents-drawer" aria-labelledby="toc-title">
   <button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button>
-  <h2 id="toc-title"><?=tr_html('Contents')?></h2>
-  <?php if ($page['format']==='epub'): ?><p id="progress" class="contents-progress"></p><?php endif; ?>
-  <div id="chapters"></div>
+  <h2 id="toc-title"><?=tr_html($page['format']==='txt'?'Go to position':'Contents')?></h2>
+  <p id="progress" class="contents-progress"></p>
+  <?php if ($page['format']==='txt'): ?>
+  <div class="text-position">
+   <label for="position-range"><?=tr_html('Reading position')?></label>
+   <input id="position-range" type="range" min="0" max="100" value="0">
+   <output id="position-value" for="position-range"></output>
+   <button id="jump" type="button"><?=tr_html('Jump to position')?></button>
+   <button id="jump-start" type="button"><?=tr_html('Start of book')?></button>
+  </div>
+  <?php else: ?><div id="chapters"></div><?php endif; ?>
  </dialog>
  <dialog id="preferences" aria-labelledby="prefs-title">
   <button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button>
@@ -152,7 +155,7 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
   <label><?=tr_html('Font size')?><input id="size" type="range" min="15" max="34" value="20"></label>
   <label><?=tr_html('Line spacing')?><select id="spacing"><option value="1.5"><?=tr_html('Compact')?></option><option value="1.75" selected><?=tr_html('Comfortable')?></option><option value="2.05"><?=tr_html('Spacious')?></option></select></label>
   <label><?=tr_html('Theme')?><select id="theme"><option value="light"><?=tr_html('Light')?></option><option value="warm"><?=tr_html('Warm')?></option><option value="dark"><?=tr_html('Dark')?></option></select></label>
-  <label><?=tr_html('Reading mode')?><select id="mode"><option value="scroll"><?=tr_html('Scroll')?></option><option value="page"><?=tr_html('By screen')?></option></select></label>
+  <?php if ($page['format']==='epub'): ?><label><?=tr_html('Reading mode')?><select id="mode"><option value="scroll"><?=tr_html('Scroll')?></option><option value="page"><?=tr_html('By screen')?></option></select></label><?php endif; ?>
   <?php if ($page['format']==='txt'): ?><label><?=tr_html('Text encoding')?><select id="encoding"><option value=""><?=tr_html('Automatic')?></option><option value="utf-8">UTF-8</option><option value="gb18030">GB18030 / GBK</option></select></label><?php endif; ?>
  </dialog>
 </div>

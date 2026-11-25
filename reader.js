@@ -3,7 +3,7 @@
  const $ = id => document.getElementById(id);
  const app=$('reader'), cfg=JSON.parse(app.dataset.config);
  const vp=$('viewport'), book=$('book'), status=$('status'), more=$('continue');
- const progress=$('progress'), previous=$('previous'), next=$('next');
+ const progress=$('progress');
  const toc=$('toc'), contents=$('contents');
  const prefix='personal-opds:reader:v1:'+location.pathname+':'+cfg.profile+':';
  const prefsKey=prefix+'settings', posKey=prefix+cfg.book;
@@ -11,60 +11,265 @@
  const write=(key,value)=>{try{localStorage.setItem(key,JSON.stringify(value));}catch{}};
  const prefs=read(prefsKey), saved=read(posKey);
  const txt=cfg.format==='txt';
- let encoding=['utf-8','gb18030'].includes(saved.encoding)?saved.encoding:'';
- let textChoice=['utf-8','gb18030'].includes(saved.textChoice)?saved.textChoice:'';
- let part=0, data=null, busy=false, requestNo=0, failed=null, closeTimer=0, saveTimer=0;
- const boundaries=new Map();
  const validPart=value=>Number.isSafeInteger(value)&&value>=0&&value<=100*1024*1024;
- if (txt&&Array.isArray(saved.boundaries)) for (const [start,end] of saved.boundaries.slice(-4096)) {
-     if(validPart(start)&&validPart(end)&&end>start)boundaries.set(end,start);
- }
  const clamp=value=>Math.min(1,Math.max(0,Number(value)||0));
  const limit=()=>Math.max(0,vp.scrollHeight-vp.clientHeight);
  const scrollRatio=()=>limit()>0?clamp(vp.scrollTop/limit()):0;
  const format=(template,a,b)=>template.replace('%d',a).replace('%d',b);
- function position() {
-     if(!data||busy||failed)return;
-     write(posKey,{part,ratio:scrollRatio(),encoding,textChoice,boundaries:txt?[...boundaries].map(([end,start])=>[start,end]):undefined});
- }
- function applyPrefs() {
-     document.documentElement.dataset.theme=$('theme').value;
-     app.dataset.mode=$('mode').value;
-     app.style.setProperty('--font',Number($('size').value)+'px');
-     app.style.setProperty('--leading',$('spacing').value);
- }
- for (const id of ['size','spacing','theme','mode']) {
-     const el=$(id);
-     if(prefs[id]!=null){
-         if(el instanceof HTMLSelectElement){if([...el.options].some(o=>o.value===prefs[id]))el.value=prefs[id];}
-         else if(Number.isFinite(+prefs[id]))el.value=prefs[id];
+ function preferences(capture,restore){
+     const apply=()=>{
+         document.documentElement.dataset.theme=$('theme').value;
+         app.dataset.mode=$('mode')?.value||'scroll';
+         app.style.setProperty('--font',Number($('size').value)+'px');
+         app.style.setProperty('--leading',$('spacing').value);
+     };
+     for(const id of ['size','spacing','theme','mode']){
+         const el=$(id);if(!el)continue;
+         if(prefs[id]!=null){
+             if(el instanceof HTMLSelectElement){if([...el.options].some(o=>o.value===prefs[id]))el.value=prefs[id];}
+             else if(Number.isFinite(+prefs[id]))el.value=prefs[id];
+         }
+         el.addEventListener('input',()=>{
+             const spot=capture();
+             prefs[id]=el.value;apply();restore(spot);write(prefsKey,prefs);
+         });
      }
-     el.addEventListener('input',()=>{
-         const ratio=scrollRatio();
-         prefs[id]=el.value;applyPrefs();
-         vp.scrollTop=ratio*limit();
-         write(prefsKey,prefs); position();
-     });
- }
- applyPrefs();
- if(txt)$('encoding').value=textChoice;
- const prevPart=()=>txt?boundaries.get(part):part>0?part-1:undefined;
- const nextPart=()=>!data?undefined:txt?(data.next<data.total?data.next:undefined):(part+1<data.count?part+1:undefined);
- function displayProgress(){
-     if(!data)return;
-     const offset=limit()>0?scrollRatio():(nextPart()===undefined?1:0);
-     const ratio=txt?(data.total?(part+(data.next-part)*offset)/data.total:1):(part+offset)/data.count;
-     const percent=new Intl.NumberFormat(document.documentElement.lang,{style:'percent'}).format(clamp(ratio));
-     progress.textContent=txt?percent:format(cfg.part,part+1,data.count)+' · '+percent;
-     if(previous)previous.disabled=busy||!!failed||(vp.scrollTop<1&&prevPart()===undefined);
-     if(next)next.disabled=busy||!!failed||(vp.scrollTop>=limit()-1&&nextPart()===undefined);
-     more.hidden=busy||!!failed||nextPart()===undefined||(txt&&app.dataset.mode==='page');
+     apply();
  }
  async function get(query){
      const response=await fetch(cfg.url+'&'+new URLSearchParams(query),{cache:'no-store',credentials:'same-origin'});
      let result;try{result=await response.json();}catch{throw new Error(cfg.failed);}
      if(!response.ok)throw new Error(result.error||cfg.failed);
      return result;
+ }
+ let closeTimer=0;
+ function toolbar(open){
+     clearTimeout(closeTimer);
+     $('toolbar').hidden=!open;$('controls').setAttribute('aria-expanded',String(open));
+     // Do not hide a toolbar while keyboard focus is within it.
+     if(open)closeTimer=setTimeout(()=>{if(!$('toolbar').contains(document.activeElement))toolbar(false);},5500);
+ }
+ $('controls').addEventListener('click',()=>toolbar($('toolbar').hidden));
+ function immersiveHeader(){
+     const header=document.querySelector('.reader-bar');
+     let last=vp.scrollTop,down=0,gestureUntil=0;
+     const show=()=>{delete document.body.dataset.headerHidden;down=0;};
+     const measure=()=>document.body.style.setProperty('--reader-bar-height',header.offsetHeight+'px');
+     if(window.ResizeObserver)new ResizeObserver(measure).observe(header);
+     else window.addEventListener('resize',measure);
+     measure();
+     const gesture=()=>{gestureUntil=performance.now()+900;};
+     for(const type of ['wheel','touchmove','pointerdown'])vp.addEventListener(type,gesture,{passive:true});
+     document.addEventListener('keydown',event=>{
+         if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','PageUp','PageDown','Home','End',' '].includes(event.key))gesture();
+     });
+     header.addEventListener('focusin',show);
+     vp.addEventListener('scroll',()=>{
+         const y=vp.scrollTop, delta=y-last;last=y;
+         if(performance.now()>gestureUntil){down=0;return;}
+         if(y<8){show();return;}
+         if(delta<=0){down=0;return;}
+         down+=delta;
+         if(down>=45&&!header.querySelector(':focus-visible')){
+             document.body.dataset.headerHidden='';
+             toolbar(false);
+         }
+     },{passive:true});
+     vp.addEventListener('click',event=>{
+         if(!document.body.hasAttribute('data-header-hidden')||
+             event.target.closest('a,button,input,select,textarea,summary,[role=button]')||
+             getSelection()?.toString())return;
+         show();
+     });
+ }
+ immersiveHeader();
+ let closingToc=0;
+ function finishTocClose(){
+     clearTimeout(closingToc);closingToc=0;
+     delete toc.dataset.closing;
+     contents.setAttribute('aria-expanded','false');
+     if(toc.open)toc.close();
+ }
+ function closeToc(){
+     if(matchMedia('(prefers-reduced-motion: reduce)').matches){finishTocClose();return;}
+     if(!toc.open||closingToc)return;
+     toc.dataset.closing='';
+     closingToc=setTimeout(finishTocClose,240);
+ }
+ toc.addEventListener('animationend',event=>{
+     if(event.target===toc&&event.animationName==='reader-drawer-out')finishTocClose();
+ });
+ toc.addEventListener('close',()=>{
+     clearTimeout(closingToc);closingToc=0;delete toc.dataset.closing;
+     contents.setAttribute('aria-expanded','false');
+ });
+ toc.addEventListener('cancel',event=>{event.preventDefault();closeToc();});
+ toc.addEventListener('click',event=>{
+     if(event.target!==toc)return;
+     const box=toc.getBoundingClientRect();
+     if(event.clientX<box.left||event.clientX>=box.right||event.clientY<box.top||event.clientY>=box.bottom)closeToc();
+ });
+ function showToc(){toc.showModal();contents.setAttribute('aria-expanded','true');}
+ toc.querySelector('.dialog-close').addEventListener('click',closeToc);
+ $('settings').addEventListener('click',()=>$('preferences').showModal());
+ $('preferences').querySelector('.dialog-close').addEventListener('click',()=>$('preferences').close());
+ function startTextReader(){
+     const range=$('position-range'), value=$('position-value');
+     const formatPercent=new Intl.NumberFormat(document.documentElement.lang,{style:'percent'});
+     let selection=['utf-8','gb18030'].includes(saved.textChoice)?saved.textChoice:'';
+     let encoding=['utf-8','gb18030'].includes(saved.encoding)?saved.encoding:selection;
+     let sections=[],total=0,epoch=0,pending=false,retry=null,starting=false,saveTimer=0;
+     $('encoding').value=selection;
+     const segmentY=s=>s.node.getBoundingClientRect().top-vp.getBoundingClientRect().top+vp.scrollTop;
+     function readLocation(){
+         let section=sections[0],y=vp.scrollTop;
+         if(!section)return null;
+         for(const candidate of sections){if(segmentY(candidate)>y+.5)break;section=candidate;}
+         const top=segmentY(section);
+         const following=sections[sections.indexOf(section)+1];
+         const bottom=following?segmentY(following):top+section.node.getBoundingClientRect().height;
+         return {offset:section.offset,ratio:clamp((y-top)/Math.max(1,bottom-top)),next:section.next};
+     }
+     function saveText(){
+         if(starting)return;
+         const spot=readLocation();
+         if(spot)write(posKey,{part:spot.offset,ratio:spot.ratio,encoding,textChoice:selection});
+     }
+     function fraction(){
+         const spot=readLocation();
+         if(!spot||!total)return 0;
+         if(sections.at(-1).next===total&&limit()>2&&vp.scrollTop>=limit()-2)return 1;
+         return clamp((spot.offset+spot.ratio*(spot.next-spot.offset))/total);
+     }
+     function sync(){
+         progress.textContent=formatPercent.format(fraction());
+         clearTimeout(saveTimer);saveTimer=setTimeout(saveText,180);
+     }
+     function textMessage(error){
+         $('reader-message').hidden=!error;
+         status.textContent=error||'';
+         $('retry').hidden=!retry;
+     }
+     function sectionOf(data){
+         const bytes=Uint8Array.from(atob(data.bytes),character=>character.charCodeAt(0));
+         const node=document.createElement('span');
+         node.className='text-segment';
+         node.textContent=new TextDecoder(data.encoding,{ignoreBOM:data.offset!==0}).decode(bytes);
+         return {node,offset:data.offset,next:data.next};
+     }
+     function restoreSpot(spot){
+         if(!spot)return;
+         const index=sections.findIndex(section=>section.offset===spot.offset);
+         if(index<0)return;
+         const section=sections[index],top=segmentY(section),after=sections[index+1];
+         const height=after?segmentY(after)-top:section.node.getBoundingClientRect().height;
+         vp.scrollTop=Math.max(0,top+height*clamp(spot.ratio));
+     }
+     function prune(direction){
+         // Keep the loaded window small on long books, without discarding
+         // any visible text. Trim only on the side opposite to scrolling.
+         while(sections.length>8){
+             if(direction==='before'){
+                 const last=sections.at(-1);
+                 if(segmentY(last)<vp.scrollTop+vp.clientHeight*2)break;
+                 sections.pop().node.remove();
+             }else{
+                 const next=sections[1];
+                 const before=segmentY(next);
+                 if(before>vp.scrollTop-vp.clientHeight)break;
+                 sections.shift().node.remove();
+                 vp.scrollTop=Math.max(0,vp.scrollTop+segmentY(next)-before);
+             }
+         }
+     }
+     async function extend(direction){
+         if(pending||retry||starting||!sections.length)return;
+         const seq=epoch;
+         const offset=direction==='before'?sections[0].offset:sections.at(-1).next;
+         if(direction==='before'?offset===0:offset>=total)return;
+         pending=true;
+         try {
+             const data=await get({part:offset,encoding,direction});
+             if(seq!==epoch)return;
+             const section=sectionOf(data);
+             if(section.offset>=section.next||(direction==='before'?section.next!==offset:section.offset!==offset))
+                 throw Error(cfg.failed);
+             if(direction==='before'){
+                 const first=sections[0], old=segmentY(first);
+                 sections.unshift(section);book.prepend(section.node);vp.scrollTop+=segmentY(first)-old;
+             }else{sections.push(section);book.append(section.node);}
+             prune(direction);sync();
+         }catch(error){
+             if(seq!==epoch)return;
+             retry=()=>{retry=null;textMessage('');extend(direction);};
+             textMessage(error.message||cfg.failed);
+         }finally{
+             if(seq===epoch){pending=false;if(!retry)requestAnimationFrame(fill);}
+         }
+     }
+     function fill(){
+         if(pending||retry||starting||!sections.length)return;
+         if(sections.at(-1).next<total&&limit()-vp.scrollTop<=vp.clientHeight*2)extend('');
+         else if(sections[0].offset>0&&vp.scrollTop<=vp.clientHeight*1.25)extend('before');
+     }
+     async function openText(offset,{seek=false,ratio=0,end=false}={}){
+         const seq=++epoch;
+         pending=false;starting=true;retry=null;
+         clearTimeout(saveTimer);
+         textMessage(cfg.loading);
+         book.setAttribute('aria-busy','true');
+         try {
+             const data=await get({part:offset,encoding,direction:seek?'seek':''});
+             if(seq!==epoch)return;
+             encoding=data.encoding;total=data.total;
+             sections=[sectionOf(data)];book.replaceChildren(sections[0].node);
+             textMessage('');
+             vp.scrollTop=0;
+             if(end)vp.scrollTop=limit();
+             else if(ratio>0)restoreSpot({offset:data.offset,ratio});
+             contents.disabled=false;
+             starting=false;sync();saveText();requestAnimationFrame(fill);
+         }catch(error){
+             if(seq!==epoch)return;
+             retry=()=>openText(offset,{seek,ratio,end});textMessage(error.message||cfg.failed);
+         }finally{if(seq===epoch)book.setAttribute('aria-busy','false');}
+     }
+     function labelValue(){value.textContent=formatPercent.format(Number(range.value)/100);}
+     function jump(fraction){
+         closeToc();
+         openText(Math.floor(fraction*total),{seek:true,end:fraction===1});
+     }
+     contents.addEventListener('click',()=>{
+         range.value=String(Math.round(fraction()*100));labelValue();showToc();
+     });
+     range.addEventListener('input',labelValue);
+     $('jump').addEventListener('click',()=>jump(Number(range.value)/100));
+     $('jump-start').addEventListener('click',()=>jump(0));
+     $('retry').addEventListener('click',()=>retry?.());
+     $('encoding').addEventListener('change',()=>{
+         selection=$('encoding').value;encoding=selection;$('preferences').close();openText(0);
+     });
+     preferences(()=>({spot:readLocation()}),state=>{restoreSpot(state.spot);sync();fill();});
+     vp.addEventListener('scroll',()=>{if(!starting){sync();fill();}},{passive:true});
+     window.addEventListener('resize',()=>{sync();fill();});
+     window.addEventListener('pagehide',saveText);
+     document.addEventListener('visibilitychange',()=>{if(document.hidden)saveText();});
+     openText(validPart(saved.part)?saved.part:0,{ratio:clamp(saved.ratio)});
+ }
+ if(txt){startTextReader();return;}
+ let part=0,data=null,busy=false,requestNo=0,failed=null,saveTimer=0;
+ const prevPart=()=>part>0?part-1:undefined;
+ const nextPart=()=>data&&part+1<data.count?part+1:undefined;
+ function position(){
+     if(data&&!busy&&!failed)write(posKey,{part,ratio:scrollRatio()});
+ }
+ preferences(scrollRatio,ratio=>{vp.scrollTop=ratio*limit();position();});
+ function displayProgress(){
+     if(!data)return;
+     const offset=limit()>0?scrollRatio():(nextPart()===undefined?1:0);
+     const percent=new Intl.NumberFormat(document.documentElement.lang,{style:'percent'}).format(clamp((part+offset)/data.count));
+     progress.textContent=format(cfg.part,part+1,data.count)+' · '+percent;
+     more.hidden=busy||!!failed||nextPart()===undefined;
  }
  function jumpAnchor(fragment){
      if(!fragment)return false;
@@ -77,28 +282,16 @@
      clearTimeout(saveTimer);
      busy=true; failed=null;
      book.setAttribute('aria-busy','true');
-     if(previous)previous.disabled=true;
-     if(next)next.disabled=true;
      more.hidden=true;
      $('reader-message').hidden=false;status.textContent=cfg.loading;$('retry').hidden=true;
      progress.textContent='';
      // Keep the old chapter on screen until the requested one returns.
      try {
-         const result=await get({part:target,...(txt?{encoding:encoding||textChoice}:{})});
+         const result=await get({part:target});
          if(seq!==requestNo)return;
-         if(txt){
-             const bytes=Uint8Array.from(atob(result.bytes),c=>c.charCodeAt(0));
-             const decoded=new TextDecoder(result.encoding,{fatal:false}).decode(bytes);
-             book.replaceChildren();
-             const pre=document.createElement('div');pre.className='plain-text';pre.textContent=decoded;book.append(pre);
-             encoding=result.encoding;
-             if(result.next>result.offset)boundaries.set(result.next,result.offset);
-             part=result.offset;
-         }else{
-             // Server output is rebuilt using a strict HTML and attribute allowlist.
-             book.innerHTML=result.html;
-             part=target;
-         }
+         // Server output is rebuilt using a strict HTML and attribute allowlist.
+         book.innerHTML=result.html;
+         part=target;
          data=result;
          $('reader-message').hidden=true;status.textContent='';
          busy=false;displayProgress();
@@ -117,7 +310,6 @@
      if(dir<0&&vp.scrollTop<=1){const p=prevPart();if(p!==undefined)load(p,1);return;}
      vp.scrollBy({top:dir*Math.max(96,vp.clientHeight-56),behavior:'instant'});
  }
- previous?.addEventListener('click',()=>step(-1));next?.addEventListener('click',()=>step(1));
  more.addEventListener('click',()=>{const n=nextPart();if(n!==undefined&&!busy)load(n);});
  $('retry').addEventListener('click',()=>failed?.());
  vp.addEventListener('scroll',()=>{
@@ -128,13 +320,6 @@
  document.addEventListener('visibilitychange',()=>{if(document.hidden)position();});
  vp.addEventListener('load',displayProgress,true);
  window.addEventListener('resize',displayProgress);
- function toolbar(open){
-     clearTimeout(closeTimer);
-     $('toolbar').hidden=!open;$('controls').setAttribute('aria-expanded',String(open));
-     // Do not hide a toolbar while keyboard focus is within it.
-     if(open)closeTimer=setTimeout(()=>{if(!$('toolbar').contains(document.activeElement))toolbar(false);},5500);
- }
- $('controls').addEventListener('click',()=>toolbar($('toolbar').hidden));
  vp.addEventListener('click',event=>{
      const link=event.target.closest('a[data-part]');
      if(link){
@@ -148,7 +333,6 @@
      if(app.dataset.mode==='page'&&(event.clientX<innerWidth*.22||event.clientX>innerWidth*.78)){
          step(event.clientX<innerWidth*.22?-1:1);return;
      }
-     toolbar($('toolbar').hidden);
  });
  document.addEventListener('keydown',event=>{
      if(event.altKey||event.ctrlKey||event.metaKey||event.defaultPrevented||document.querySelector('dialog[open]')||
@@ -157,33 +341,6 @@
          event.preventDefault();step(['ArrowRight','PageDown'].includes(event.key)?1:-1);
      }
  });
- let closingToc=0;
- function finishTocClose(){
-     clearTimeout(closingToc);closingToc=0;
-     delete toc.dataset.closing;
-     if(toc.open)toc.close();
- }
- function closeToc(){
-     if(txt||matchMedia('(prefers-reduced-motion: reduce)').matches){finishTocClose();return;}
-     if(!toc.open||closingToc)return;
-     toc.dataset.closing='';
-     closingToc=setTimeout(finishTocClose,240);
- }
- toc.addEventListener('animationend',event=>{
-     if(event.target===toc&&event.animationName==='reader-drawer-out')finishTocClose();
- });
- toc.addEventListener('close',()=>{
-     clearTimeout(closingToc);closingToc=0;delete toc.dataset.closing;
-     if(!txt)contents.setAttribute('aria-expanded','false');
- });
- if(!txt){
-     toc.addEventListener('cancel',event=>{event.preventDefault();closeToc();});
-     toc.addEventListener('click',event=>{
-         if(event.target!==toc)return;
-         const box=toc.getBoundingClientRect();
-         if(event.clientX<box.left||event.clientX>=box.right||event.clientY<box.top||event.clientY>=box.bottom)closeToc();
-     });
- }
  function addChapter(label,to,fragment=''){
      const item=document.createElement('button');item.type='button';item.textContent=label;
      if(to===part)item.setAttribute('aria-current','location');
@@ -192,9 +349,7 @@
  }
  let tocCache=null;
  contents.addEventListener('click',async()=>{
-     toc.showModal();$('chapters').replaceChildren();
-     if(!txt)contents.setAttribute('aria-expanded','true');
-     if(txt){addChapter(cfg.start,0);return;}
+     showToc();$('chapters').replaceChildren();
      const message=document.createElement('p');message.textContent=cfg.loading;$('chapters').append(message);
      try{
          tocCache??=(await get({toc:1})).toc;
@@ -203,12 +358,5 @@
          if(toc.open)$('chapters').querySelector('[aria-current]')?.scrollIntoView({block:'nearest'});
      }catch(error){message.textContent=error.message||cfg.failed;}
  });
- $('settings').addEventListener('click',()=>$('preferences').showModal());
- toc.querySelector('.dialog-close').addEventListener('click',closeToc);
- $('preferences').querySelector('.dialog-close').addEventListener('click',()=>$('preferences').close());
- if(txt)$('encoding').addEventListener('change',()=>{
-     textChoice=$('encoding').value;encoding='';boundaries.clear();$('preferences').close();load(0);
- });
- more.textContent=txt?cfg.section:cfg.chapter;
  load(validPart(saved.part)?saved.part:0,clamp(saved.ratio));
 })();

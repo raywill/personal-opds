@@ -34,9 +34,6 @@ button:disabled{opacity:.34;cursor:default}
 #status:empty{display:none}
 #status{margin:.65rem 0}
 .continue{display:block;margin:.3rem auto 1.4rem;color:var(--accent)}
-.reader-footer{display:flex;align-items:center;justify-content:center;gap:1rem;padding:.25rem 1rem max(.25rem,env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--chrome);color:var(--muted)}
-.reader-footer span{min-width:min(43vw,12rem);text-align:center;font-size:.8rem;font-variant-numeric:tabular-nums}
-.reader-footer button{min-width:46px;padding:0;font-size:1.25rem}
 dialog{width:min(calc(100% - 1.5rem),27rem);max-height:85dvh;border:1px solid var(--line);border-radius:1rem;background:var(--paper);color:var(--ink);padding:1rem 1.15rem;box-shadow:0 14px 40px #0003}
 dialog::backdrop{background:#15171780}
 dialog h2{font-size:1.05rem;margin:.2rem 2.75rem 1rem 0}
@@ -47,10 +44,11 @@ dialog input{accent-color:var(--accent);width:100%;margin:0}
 #chapters{display:grid;gap:.4rem;clear:both}
 #chapters button{text-align:start;overflow-wrap:anywhere}
 #chapters [aria-current]{color:var(--accent);font-weight:650}
-@media(max-width:480px){#book{padding:1.15rem 1rem}.reader-bar h1{font-size:.82rem}.reader-back{font-size:.83rem}.reader-footer{gap:.55rem}}
+@media(max-width:480px){#book{padding:1.15rem 1rem}.reader-bar h1{font-size:.82rem}.reader-back{font-size:.83rem}}
 
-#reader[data-format=epub] #viewport{padding-bottom:calc(4rem + env(safe-area-inset-bottom))}
-.contents-fab{position:absolute;z-index:1;left:max(12px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .8rem;border-radius:2rem;background:var(--chrome);color:var(--accent);box-shadow:0 2px 12px #15171720;font-size:.86rem;font-weight:650}
+#viewport{padding-bottom:calc(4rem + env(safe-area-inset-bottom))}
+#reader[data-format=txt] #viewport{overflow-anchor:none}
+.contents-fab{position:absolute;z-index:1;left:max(12px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));display:inline-flex;align-items:center;gap:.4rem;padding:.5rem .8rem;border-radius:2rem;background:var(--chrome);background:color-mix(in srgb,var(--chrome) 88%,transparent);backdrop-filter:blur(5px);color:var(--accent);box-shadow:0 2px 12px #15171720;font-size:.86rem;font-weight:650}
 .contents-drawer[open]{margin:0;inset:0 auto 0 0;height:100dvh;max-height:none;width:min(23rem,calc(100vw - 44px));max-width:none;border-radius:0 .9rem .9rem 0;padding:max(1rem,env(safe-area-inset-top)) 1rem max(1rem,env(safe-area-inset-bottom)) max(1rem,env(safe-area-inset-left));overscroll-behavior:contain;animation:reader-drawer-in .18s ease-out}
 .contents-drawer[open][data-closing]{animation:reader-drawer-out .18s ease-in both}
 .contents-drawer h2{margin:.55rem 3rem .25rem 0}
@@ -60,3 +58,16 @@ dialog input{accent-color:var(--accent);width:100%;margin:0}
 @keyframes reader-drawer-in{from{transform:translateX(-100%)}to{transform:translateX(0)}}
 @keyframes reader-drawer-out{from{transform:translateX(0)}to{transform:translateX(-100%)}}
 @media(prefers-reduced-motion:reduce){.contents-drawer[open]{animation:none}}
+
+.text-position{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.55rem .75rem;clear:both}
+.text-position label{grid-column:1 / -1;display:block;margin:.2rem 0;color:var(--muted);font-size:.9rem}
+.text-position output{min-width:3em;text-align:end;color:var(--accent);font-variant-numeric:tabular-nums}
+.text-position button{justify-self:start;margin-top:.5rem}
+
+.immersive-reader{--reader-bar-height:calc(53px + max(0px,env(safe-area-inset-top) - 5px))}
+.immersive-reader .reader-bar{position:absolute;z-index:4;inset:0 0 auto;transition:opacity .2s ease,transform .22s ease}
+.immersive-reader[data-header-hidden] .reader-bar{opacity:0;transform:translateY(-100%);pointer-events:none}
+.immersive-reader .reader-toolbar{top:calc(var(--reader-bar-height) + .5rem);z-index:3}
+.immersive-reader #viewport{padding-top:var(--reader-bar-height);scroll-padding-top:var(--reader-bar-height)}
+.immersive-reader .reader-message:not([hidden]){position:absolute;z-index:2;top:var(--reader-bar-height);inset-inline:0;background:var(--paper)}
+@media(prefers-reduced-motion:reduce){.immersive-reader .reader-bar{transition:none}}
