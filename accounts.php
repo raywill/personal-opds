@@ -4,7 +4,27 @@ declare(strict_types=1);
 const ACTIVATION_TTL = 86400;
 const SHARE_TTL = 120 * 86400;
 
+/* BEGIN ACCOUNT DIRECTORY RULES */
 function accountName(string $name): bool { return preg_match('/\A[a-z0-9][a-z0-9_-]{0,31}\z/D', $name) === 1; }
+
+function accountNameReserved(string $name): bool
+{
+    return preg_match('/\A(?:root|admin|administrator|postmaster|system|opds|books|conf|con|prn|aux|nul|com[1-9]|lpt[1-9])\z/D',$name) === 1;
+}
+
+function accountDirectoryOccupied(string $books,string $name): bool
+{
+    clearstatcache(true);
+    $target=$books.'/'.$name;
+    if (file_exists($target) || is_link($target)) return true;
+    if (!is_dir($books)) return false;
+    $entries=@scandir($books);
+    if ($entries===false) throw new RuntimeException(tr('Cannot list the private books directory.'));
+    foreach ($entries as $entry) if (strcasecmp($entry,$name)===0) return true;
+    return false;
+}
+
+/* END ACCOUNT DIRECTORY RULES */
 function accountPassword(string $value): bool { return strlen($value)>=12 && strlen($value)<=72 && !str_contains($value,"\0"); }
 function validCategory(string $name): bool { return validDirectoryName($name) && trim($name)===$name; }
 

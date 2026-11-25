@@ -18,5 +18,8 @@ if (substr_count($template,'__OPDS_PAYLOAD__')!==1) throw new RuntimeException('
 $i18n=file_get_contents($root.'/i18n.php');
 $i18n=substr($i18n,strpos($i18n,'const UI_TRANSLATIONS'));
 $template=str_replace('/*__OPDS_I18N__*/',$i18n,$template);
+if (!preg_match('~^/\* BEGIN ACCOUNT DIRECTORY RULES \*/\R(.*?)^/\* END ACCOUNT DIRECTORY RULES \*/~ms',file_get_contents($root.'/accounts.php'),$rules))
+    throw new RuntimeException('Missing account directory rules.');
+$template=str_replace('/*__OPDS_ACCOUNT_RULES__*/',$rules[1],$template);
 file_put_contents($root.'/install.php',str_replace('__OPDS_PAYLOAD__',$data,$template));
 echo "Built install.php\n";

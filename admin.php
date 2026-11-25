@@ -15,8 +15,14 @@ try {
             $row=$users[$user]??null;
             if ($command==='reset' && ($row['state']??null)!=='active') reject('Only active accounts can be reset.');
             if ($command==='invite' && $row!==null && ($row['state']??null)!=='pending') reject('Account already exists.');
-            if (!$row && (file_exists(accountBooks().'/'.$user)||is_link(accountBooks().'/'.$user))) reject('Existing library path; refusing to claim it.');
-            $dir=directoryUnder(accountBooks(),$user,true);
+            $books=accountBooks();
+            if ($row===null) {
+                if (accountNameReserved($user)) reject('This username is reserved.');
+                if (accountDirectoryOccupied($books,$user)) reject('Existing library path; refusing to claim it.');
+                if (!@mkdir($books.'/'.$user,0750)) reject('Cannot create the selected directory.',409);
+            } else {
+                directoryUnder($books,$user);
+            }
             [$activation,$link]=newActivation($user);
             $users[$user]=array_merge($row??['state'=>'pending'],['activation'=>$activation]);
             return $link;
