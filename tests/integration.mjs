@@ -99,7 +99,10 @@ try{
  r=await setupPost(3,'next',{username:'root'});assert.equal(r.status,400);assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'Alice'});assert.equal(r.status,400);assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'alice'});assert.equal(r.status,200,r.text);assert.equal(r.json.step,4);
- const reviewStep=await request();assert(!reviewStep.text.includes(base));assert(!reviewStep.text.includes('Site URL'));
+ const reviewStep=await request();
+ assert(reviewStep.text.includes('<dt>OPDS address:</dt><dd><code>'+base+'index.php</code>'));
+ assert(reviewStep.text.includes('<dt>Web dashboard:</dt><dd><code>'+base+'up.php</code>'));
+ assert(!reviewStep.text.includes('<code>'+base+'</code>'));
  r=await setupPost(4,'back');assert.equal(r.json.step,3);
  r=await setupPost(3,'back',{username:'alice'});assert.equal(r.json.step,2);
  const occupied=path.join(temp,'occupied');

@@ -463,6 +463,8 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <?php else: ?>
 <dl>
 <dt><?=tr_html('Site name')?></dt><dd><?=esc($fields['title'])?></dd>
+<dt><?=tr_html('OPDS address:')?></dt><dd><code><?=esc($siteUrl.'index.php')?></code></dd>
+<dt><?=tr_html('Web dashboard:')?></dt><dd><code><?=esc($siteUrl.'up.php')?></code></dd>
 <dt><?=tr_html('Private data root')?></dt><dd><code><?=esc($fields['data_dir'])?></code></dd>
 <dt><?=tr_html('First username')?></dt><dd><?=esc($fields['username'])?></dd>
 <dt><?=tr_html('Personal library directory')?></dt><dd><code><?=esc($accountPath.'/')?></code></dd>
