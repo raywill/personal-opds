@@ -84,6 +84,18 @@ A single web-accessible library opens directly after sign-in. With two or more, 
 
 A member has one role per library and may hold different roles in different libraries. In **Library members**, copy the invitation link after sending or from **Invitation history** while it is pending. Only the intended account can sign in and accept; opening or forwarding the link alone grants nothing. Invitations expire after seven days. Use the refresh icon in **Invitation history** to check the latest status without leaving the panel, and the **Members** tab to change a role or revoke access. Rename and archive are under the separate **Library settings** menu, visible to the owner. Administrators can revoke member Agent connections under **Connect Agent → Manage Agent connections**. The site operator does not gain in-app access to books by managing accounts or quotas. The library owner can rename, archive or restore the personal library. Ownership is fixed to the account. The account menu shows the current library and your role there. Archiving stops anonymous subscriptions and Agent tokens, which stay invalid after restore. Files and member roles are retained. Site operators can set per-library quotas with `php admin.php library-quota LIBRARY_ID BYTES MAX_FILES`, inspect recent administration events with `php admin.php rbac-audit`.
 
+### Optional: shorter URLs for e-readers
+
+If installed under `/opds/` on Nginx, add the following to the site's HTTPS `server { ... }` block, outside the `location` blocks and before any catch-all server-level rewrite:
+
+```nginx
+rewrite "^/opds/([a-z0-9][a-z0-9_-]{0,31})$" /opds/index.php?library=p-$1? last;
+```
+
+The rule works for every username: `https://your-host/opds/alice` opens the library `p-alice`. Nginx rewrites internally without a 301/302 and discards any incoming query string. The existing PHP handler must still serve `/opds/index.php`. OPDS sign-in and library permissions apply as usual. The original URLs and anonymous subscriptions keep working.
+
+Run `nginx -t && nginx -s reload`. Check the short URL with no credentials (expect `401`), then with your OPDS credentials (expect `200` and an OPDS response).
+
 ## Books and subscriptions
 
 Use the folder sidebar to select the library root, an existing folder, or create a folder. Folders are only one level deep and can have spaces and Unicode names. Upload EPUB or TXT, and download, move, or delete individual files. Web uploads report each file's progress and allow retrying failed files. Moves and deletions affect what subscribers can next see. Already downloaded copies cannot be recalled.
