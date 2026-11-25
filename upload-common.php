@@ -269,15 +269,15 @@ function requireMultipart(): void
     }
 }
 
-function processUpload(bool $singleFile, bool $bearer, array $scope=[]): array
+function processUpload(bool $singleFile, bool $bearer, array $scope=[], string $pageDirectory=''): array
 {
     requireMultipart();
     foreach (array_keys($_POST) as $field) {
-        if (!in_array($field, $bearer ? ['directory'] : ['directory', 'csrf', 'action', 'library'], true)) {
+        if (!in_array($field, $bearer ? ['directory'] : ['csrf', 'action'], true)) {
             reject(tr('The upload contains unsupported form fields.'));
         }
     }
-    $directory = $_POST['directory'] ?? '';
+    $directory = $bearer ? ($_POST['directory'] ?? '') : $pageDirectory;
     if (!is_string($directory)) {
         reject(tr('Invalid destination directory.'));
     }

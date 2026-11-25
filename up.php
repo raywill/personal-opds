@@ -89,7 +89,7 @@ try {
         $allLibraries=availableLibraries($viewer);
         $webLibraries=array_filter($allLibraries,static fn($row)=>array_intersect(WEB_PERMISSIONS,$row['permissions']));
         $globalAction=$method==='POST' && in_array($action,['logout','login','invite_accept','invite_decline','library_restore','account_invite'],true);
-        $selection=$globalAction?'':($method==='POST'?field('library',$_POST):field('library',$_GET));
+        $selection=$globalAction?'':($method==='POST'&&$action!=='upload'?field('library',$_POST):field('library',$_GET));
         if (!$globalAction && $selection==='' && count($webLibraries)===1 && !isset($_GET['choose'])) $selection=(string)array_key_first($webLibraries);
         // The login redirect never carries a selection. Anonymous OPDS routing is independent.
         if ($selection!=='' && !isset($webLibraries[$selection])) reject('Library access denied.',403);
@@ -100,7 +100,7 @@ try {
         }
     }
     if ($method==='POST') {
-        if ($action==='upload') { requireMultipart(); unset($_POST['dir']); }
+        if ($action==='upload') requireMultipart();
         if (!hash_equals($_SESSION['csrf'],field('csrf',$_POST))) reject(tr('Session changed; reload the page.'),403);
         if ($action==='activate') {
             $activate=field('activate',$_POST); $activateFor=field('account',$_POST);
@@ -177,7 +177,7 @@ try {
             ($GLOBALS['opdsUploadGuard'])();
             if ($action==='upload') {
                 session_write_close();
-                uploadJsonResponse(processUpload(singleFile:true,bearer:false));
+                uploadJsonResponse(processUpload(singleFile:true,bearer:false,pageDirectory:$dir));
             }
             $dir=field('dir',$_POST);
             resolveDestinationDirectory($dir);
@@ -351,7 +351,7 @@ h1,h2,h3,p{margin:0 0 10px}h2{font-size:1.06rem}.bar,.actions{display:flex;align
 button,.button{min-height:40px;font:inherit;font-size:.89rem;font-weight:680;background:white;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 11px;cursor:pointer;text-decoration:none;display:inline-flex;gap:7px;align-items:center;justify-content:center;line-height:1.5}button:hover,.button:hover{background:var(--bg)}.primary{background:var(--accent);color:white;border-color:var(--accent)}.primary:hover{background:#1744bd}.primary.upload-launch{min-height:42px;padding:8px 14px;font-size:.96rem}
 .icon-button{border-color:transparent;background:transparent;width:42px;min-height:42px;padding:0}.icon-button:hover{background:var(--blue-soft)}button.danger{color:var(--warn)}button:disabled{opacity:.6;cursor:wait}
 input,select,textarea{max-width:100%;font:inherit;border:1px solid #acbfd9;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin:12px 0;font-weight:650}.auth input{width:100%}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:116px}.dialog-close{margin-inline-start:auto}.rename-name{display:flex;align-items:center;gap:8px;margin-bottom:10px}.rename-name input{min-width:0;flex:1}.rename-name span{color:var(--soft);flex:none}
-dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1px solid var(--line);border-radius:16px;padding:18px;color:var(--ink);box-shadow:0 16px 64px #182c4a30}dialog::backdrop{background:#172b4470}dialog h2{font-size:1.23rem}dialog select{width:100%}.folder-form{margin-top:12px}.folder-form input{min-width:0;flex:1}.dialog-head{margin-bottom:10px}.upload-form input[type=file]{display:block;width:100%;margin-top:5px}.upload-form input::file-selector-button{border:0;padding:6px 10px;border-radius:6px;background:var(--blue-soft);color:var(--ink);font:inherit;margin-right:8px}.upload-form progress{accent-color:var(--accent)}progress{max-width:94px}.queue p{overflow-wrap:anywhere}.queue{margin-top:10px}.subscription-preview{margin-top:12px}.subscription-preview ul{max-height:180px;overflow:auto;padding-inline-start:20px}
+dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1px solid var(--line);border-radius:16px;padding:18px;color:var(--ink);box-shadow:0 16px 64px #182c4a30}dialog::backdrop{background:#172b4470}dialog h2{font-size:1.23rem}dialog select{width:100%}.folder-form{margin-top:12px}.folder-form input{min-width:0;flex:1}.dialog-head{margin-bottom:10px}.upload-target{color:var(--soft);background:var(--bg);padding:.65rem .8rem;border-radius:8px;overflow-wrap:anywhere}.upload-form input[type=file]{display:block;width:100%;margin-top:5px}.upload-form input::file-selector-button{border:0;padding:6px 10px;border-radius:6px;background:var(--blue-soft);color:var(--ink);font:inherit;margin-right:8px}.upload-form progress{accent-color:var(--accent)}progress{max-width:94px}.queue p{overflow-wrap:anywhere}.queue{margin-top:10px}.subscription-preview{margin-top:12px}.subscription-preview ul{max-height:180px;overflow:auto;padding-inline-start:20px}
 .share-summary{margin:7px 0 10px;color:var(--soft)}.share-summary time{white-space:nowrap}.share-secondary{border-top:1px solid var(--line);padding-top:9px;margin-top:12px}.share-secondary .button,.share-secondary button{border-color:transparent}.tool-divider{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
 @media(max-width:760px){.top{min-height:60px;padding:0 16px}.account-name{display:none}.account summary{padding:4px 9px}.account-popover{inset-inline-end:16px}.layout{display:block;min-height:calc(100vh - 60px)}.sidebar{display:none}.shelf-body{padding:17px 16px 40px}.page-message{margin:10px 16px 0}.auth{margin:32px 14px}.folder-trigger{display:inline-flex;align-items:center;gap:7px;margin-bottom:3px;border:0;padding:4px 10px}.shelf-head{padding-bottom:14px}.shelf-path{font-size:1.0625rem}.shelf-meta{margin-top:6px}.shelf-heading-row{gap:8px}.book{grid-template-columns:34px minmax(0,1fr) 34px 32px;gap:8px;min-height:66px;padding:9px 0}.book-icon{width:34px;height:42px}.book .icon-button{width:100%;min-height:40px}.sheet{margin:auto 0 0;width:100%;max-width:none;max-height:88%;border-radius:18px 18px 0 0;padding:14px 16px max(20px,env(safe-area-inset-bottom));}}
 .brand-area{display:flex;align-items:center;gap:12px;min-width:0}.switcher{overflow-wrap:anywhere;line-height:1.2}
@@ -619,12 +619,9 @@ if ($preview) {
 <?php endif;?>
 <?php if (isset($permissions['web_upload'])): ?><dialog id="upload-dialog" class="sheet" aria-labelledby="upload-dialog-title">
  <div class="bar dialog-head"><h2 id="upload-dialog-title"><?=tr_html('Upload books')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
- <?php if (isset($permissions['folder'])): ?><form id="upload-folder" class="folder-form actions" method="post" action="up.php" hidden><?php hidden($csrf,'folder',$dir);?><input name="folder" aria-label="<?=tr_html('New folder name')?>" placeholder="<?=tr_html('New folder name')?>" required maxlength="240"><button type="submit"><?=tr_html('Create')?></button></form>
- <p id="upload-folder-status" role="status" class="status shelf-notice"></p><?php endif; ?>
- <form id="upload" class="upload-form" data-current="<?=h($dir)?>" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown; check the library before retrying.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown; check the library before retrying.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" method="post" enctype="multipart/form-data" action="up.php">
- <?php hidden($csrf,'upload');?>
- <label><?=tr_html('Upload destination')?><select name="directory"><?php foreach (['',...$directories] as $dest): ?><option value="<?=h($dest)?>" <?=$dest===$dir?'selected':''?>><?=h($dest===''?$libraryName:$dest)?></option><?php endforeach;?></select></label>
- <?php if (isset($permissions['folder'])): ?><button type="button" id="upload-folder-toggle" aria-expanded="false" aria-controls="upload-folder"><?=tr_html('New folder')?></button><?php endif; ?>
+ <p id="upload-target" class="upload-target"><?=h(sprintf(tr('Upload to: %s'),$libraryName.($dir===''?'':' / '.$dir)))?></p>
+ <form id="upload" aria-describedby="upload-target" class="upload-form" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown; check the library before retrying.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown; check the library before retrying.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" method="post" enctype="multipart/form-data" action="<?=h(libraryHref($dir))?>">
+ <input type="hidden" name="csrf" value="<?=h($csrf)?>"><input type="hidden" name="action" value="upload">
  <label><?=tr_html('Choose EPUB or TXT files')?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
  <button class="primary" type="submit"><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
  </form><div class="queue" id="queue" aria-live="polite"></div>
@@ -665,11 +662,8 @@ const moveDialog=document.querySelector('#move-dialog');
 const renameDialog=document.querySelector('#rename-dialog');
 const renameName=renameDialog?.querySelector('#rename-name');
 const form=document.querySelector('#upload'), retry=document.querySelector('#retry');
-const destination=form?.elements.directory;
-const folderForm=document.querySelector('#upload-folder');
-const newFolder=document.querySelector('#upload-folder-toggle');
 const filesInput=document.querySelector('#files');
-let failed=[],busy=false,addingFolder=false,folderCreated=false,retryDestination='',uploaded=0;
+let failed=[],busy=false,uploaded=0;
 document.addEventListener('click',e=>{
  if(accountMenu?.open&&!accountMenu.contains(e.target))accountMenu.open=false;
  for(const menu of document.querySelectorAll('.book-menu[open]'))if(!menu.contains(e.target))menu.open=false;
@@ -687,7 +681,7 @@ document.addEventListener('click',e=>{
    catch{input.closest('label').hidden=false;input.focus();input.select();result.textContent=result.dataset.manual;}})();
  }
  const close=e.target.closest('.dialog-close');
- if(close&&!(close.closest('dialog')===uploadDialog&&(busy||addingFolder)))close.closest('dialog')?.close();
+ if(close&&!(close.closest('dialog')===uploadDialog&&busy))close.closest('dialog')?.close();
  const rename=e.target.closest('[data-book-rename]');
  if(rename&&renameDialog){
   renameDialog.querySelector('[name=file]').value=rename.dataset.bookRename;
@@ -803,46 +797,22 @@ toolsDialog?.addEventListener('close',()=>{
  if(agentSetupText?.value) location.reload();
 });
 toolsDialog?.addEventListener('close',()=>accountButton?.focus());
-uploadDialog?.addEventListener('cancel',e=>{if(busy||addingFolder)e.preventDefault();});
-uploadDialog?.addEventListener('close',()=>{if(folderCreated)location.reload();});
+uploadDialog?.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
 const copy=document.querySelector('#copy-share');
 copy?.addEventListener('click',async()=>{const url=document.querySelector('#share-url'); try{await navigator.clipboard.writeText(url.value);document.querySelector('#copy-status').textContent=copy.dataset.copied;}catch{url.select();document.querySelector('#copy-status').textContent=copy.dataset.copyFailed;}});
 function setUploadControls() {
- const blocked=busy||addingFolder;
- for(const control of [destination,filesInput,newFolder,retry,form.querySelector('[type=submit]'),uploadDialog.querySelector('.dialog-close')])if(control)control.disabled=blocked;
+ for(const control of [filesInput,retry,form.querySelector('[type=submit]'),uploadDialog.querySelector('.dialog-close')])if(control)control.disabled=busy;
 }
-newFolder?.addEventListener('click',()=>{
- folderForm.hidden=!folderForm.hidden;newFolder.setAttribute('aria-expanded',String(!folderForm.hidden));
- if(!folderForm.hidden)folderForm.elements.folder.focus();
-});
-folderForm?.addEventListener('submit',async e=>{
- e.preventDefault();if(busy||addingFolder)return;
- addingFolder=true;setUploadControls();
- const button=folderForm.querySelector('button');button.disabled=true;
- const status=document.querySelector('#upload-folder-status');
- try {
-  const res=await fetch('up.php',{method:'POST',headers:{Accept:'application/json'},body:new FormData(folderForm)});
-  const result=await res.json();
-  status.textContent=result.message;
-  if(res.ok&&result.success){
-   if(!Array.from(destination.options).some(o=>o.value===result.folder))destination.add(new Option(result.folder,result.folder));
-   destination.value=result.folder;folderCreated=true;failed=[];retry.hidden=true;
-   folderForm.reset();folderForm.hidden=true;newFolder.setAttribute('aria-expanded','false');
-  }
- }catch{status.textContent=form.dataset.interrupted;}
- finally{addingFolder=false;button.disabled=false;setUploadControls();}
-});
-destination?.addEventListener('change',()=>{if(destination.value!==retryDestination){failed=[];retry.hidden=true;}});
-async function transfer(files,dir,again=false) {
- if(busy||addingFolder||!files.length)return;
- busy=true;setUploadControls();retry.hidden=true;failed=[];retryDestination=dir;if(!again)uploaded=0;
+async function transfer(files,again=false) {
+ if(busy||!files.length)return;
+ busy=true;setUploadControls();retry.hidden=true;failed=[];if(!again)uploaded=0;
  const list=document.querySelector('#queue');list.replaceChildren();let changed=false;let lastMessage='';
  for(const file of files){
    const row=document.createElement('p'), bar=document.createElement('progress'), result=document.createElement('span');
    bar.max=100;bar.value=0;row.append(document.createTextNode(file.name+' '),bar,result);list.append(row);
-   const data=new FormData(form);data.delete('dir');data.delete('files[]');data.set('directory',dir);data.append('files[]',file);
+   const data=new FormData(form);data.delete('files[]');data.append('files[]',file);
    const [ok,msg]=await new Promise(resolve=>{
-     const x=new XMLHttpRequest();x.open('POST','up.php');x.timeout=180000;
+     const x=new XMLHttpRequest();x.open('POST',form.getAttribute('action'));x.timeout=180000;
      x.upload.onprogress=e=>{if(e.lengthComputable)bar.value=e.loaded/e.total*100;};
      x.onerror=()=>resolve([false,form.dataset.interrupted]);
      x.ontimeout=()=>resolve([false,form.dataset.timeout]);
@@ -850,7 +820,7 @@ async function transfer(files,dir,again=false) {
    });
    result.textContent=' '+msg; if(!ok)failed.push(file);else{bar.value=100;changed=true;uploaded++;lastMessage=msg;}
  }
- if(changed&&dir===form.dataset.current){
+ if(changed){
   try{
     const res=await fetch(location.href,{cache:'no-store'}), tree=new DOMParser().parseFromString(await res.text(),'text/html');
     const books=tree.querySelector('#books-panel'), count=tree.querySelector('#shelf-count');
@@ -863,14 +833,10 @@ async function transfer(files,dir,again=false) {
  busy=false;setUploadControls();retry.hidden=!failed.length;
  if(!failed.length){
   filesInput.value='';
-  if(dir!==form.dataset.current){
-   const target=new URL('up.php',location.href);target.searchParams.set('dir',dir);if(form.elements.library)target.searchParams.set('library',form.elements.library.value);location.assign(target);
-  }else{
-   document.querySelector('#upload-notice').textContent=uploaded===1&&lastMessage?lastMessage:form.dataset.saved.replace('%s',String(uploaded));
-   uploadDialog.close();
-  }
+  document.querySelector('#upload-notice').textContent=uploaded===1&&lastMessage?lastMessage:form.dataset.saved.replace('%s',String(uploaded));
+  uploadDialog.close();
  }
 }
-form?.addEventListener('submit',e=>{e.preventDefault();transfer(Array.from(filesInput.files),destination.value);});
-retry?.addEventListener('click',()=>transfer(failed.slice(),retryDestination,true));
+form?.addEventListener('submit',e=>{e.preventDefault();transfer(Array.from(filesInput.files));});
+retry?.addEventListener('click',()=>transfer(failed.slice(),true));
 </script></body></html>
