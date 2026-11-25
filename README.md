@@ -64,6 +64,8 @@ Use the folder sidebar to select the library root, an existing folder, or create
 
 Use the folder's **Subscription share** panel to preview, create, copy, replace, or revoke its subscription. The folder sidebar shows its share status. There is only one active link per folder. Links take the form `index.php?s=72835164-K7M2`: eight random nonzero digits, a separator, and a case-insensitive mixed letter/digit code. Paste the full URL into the reader with no username or password. Anyone holding it can read or forward it. The shared catalog and all its download links are scoped to that one folder; new books appear on refresh. The link expires 120 days after issuance and is not extended by use. Replacement or revocation stops future requests with the old link; a download that started earlier may finish. Treat this short, rate-limited link as a convenience for personal sharing, not as a strong substitute for authenticated private access.
 
+In the web dashboard, use the folder sidebar (the **Choose folder** button on a phone) to move between directories. Click a book title or **Download** to save it, and **…** for move/delete. **Upload books** opens a panel where you can choose or create the destination. For a shared folder, click its status next to the book count to copy or revoke the subscription link.
+
 ## AI uploads
 
 Open **CLI / API & upload Skill** in the top-right of the dashboard, then generate a private per-account token and save it securely. A new token immediately replaces the old one for future requests. Download the generated `SKILL.md` and set the token in the agent's protected environment as `OPDS_TOKEN`. The token is never embedded in the skill. The API token does not authenticate reads or the web UI.

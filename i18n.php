@@ -1,6 +1,16 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'New folder' => '新建目录',
+  'Choose folder' => '切换目录',
+  'Manage subscription sharing' => '管理目录订阅',
+  'Book actions' => '书籍操作',
+  'Download %s' => '下载 %s',
+  'More actions for %s' => '%s 的更多操作',
+  'Anyone with this link can read only this folder. Links expire after 120 days.' => '持有链接的人只能阅读这个目录。订阅链接 120 天后到期。',
+  'Upload destination' => '上传到',
+  'Choose EPUB or TXT files' => '选择 EPUB 或 TXT 文件',
+  'Uploaded %s books.' => '已上传 %s 本书。',
   'Library folders' => '书库目录',
   'Expires %s UTC' => '到期时间：%s（UTC）',
   'Read-only preview · Books in this subscription: %s' => '只读预览 · 此订阅可查看 %s 本书',

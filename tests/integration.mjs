@@ -381,18 +381,37 @@ try{
      const errors=[];page.on('pageerror',e=>errors.push(e.message));
      await page.goto(base+'up.php');await page.getByLabel('Username').fill('alice');await page.getByLabel('Password',{exact:true}).fill(password);
      await page.getByRole('button',{name:'Sign in'}).click();await page.getByRole('heading',{name:'Library root'}).waitFor();
+     await page.getByRole('button',{name:'Upload books',exact:true}).click();
+     assert.equal(await page.getByLabel('Upload destination').inputValue(),'');
      await page.locator('#files').setInputFiles({name:'web-ui.txt',mimeType:'text/plain',buffer:Buffer.from('Browser UI upload')});
-     await page.getByRole('button',{name:'Upload',exact:true}).click();await page.getByText('Saved: web-ui.txt').waitFor();
-     await page.locator('#books-panel').getByText('web-ui.txt').waitFor();
-     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'library-desktop.png'),fullPage:true});
-     await page.setViewportSize({width:390,height:844});await page.getByRole('link',{name:/Share shelf/}).first().click();
+     await page.getByRole('button',{name:'Upload',exact:true}).click();await page.locator('#upload-notice').getByText('Saved: web-ui.txt').waitFor();
+     await page.locator('#books-panel').getByRole('link',{name:'web-ui',exact:true}).waitFor();
+     const download=page.waitForEvent('download');
+     await page.getByRole('link',{name:'Download web-ui.txt'}).click();
+     assert.equal((await download).suggestedFilename(),'web-ui.txt');
+     await page.setViewportSize({width:390,height:844});
+     await page.getByRole('button',{name:'Choose folder'}).click();
+     await page.getByRole('dialog').getByRole('link',{name:/^Share shelf(?: Unavailable)?$/}).click();
+     await page.getByRole('button',{name:'Manage subscription sharing'}).click();
      await page.getByRole('button',{name:'Create share'}).click();
-     await page.getByRole('button',{name:'Revoke',exact:true}).waitFor();
+     await page.getByRole('button',{name:'Manage subscription sharing'}).getByText('Shared',{exact:true}).waitFor();
      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-     if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'library-mobile.png'),fullPage:true});
+     await page.getByRole('button',{name:'Manage subscription sharing'}).click();
+     await page.getByRole('button',{name:'Revoke',exact:true}).waitFor();
      page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Revoke',exact:true}).click();
-     await page.getByRole('status').getByText('Share revoked.').waitFor();assert.deepEqual(errors,[]);
-     pass('desktop and mobile browser UI: sign in, upload, live library refresh, share and revoke');
+     await page.getByRole('status').getByText('Share revoked.').waitFor();
+     await page.getByRole('button',{name:'Manage subscription sharing'}).getByText('Revoked',{exact:true}).waitFor();
+     await page.getByRole('button',{name:'Upload books',exact:true}).click();
+     await page.getByRole('dialog').getByRole('button',{name:'New folder'}).click();
+     await page.getByRole('dialog').getByLabel('New folder name').fill('Browser-created folder');
+     await page.getByRole('dialog').getByRole('button',{name:'Create',exact:true}).click();
+     await page.waitForFunction(()=>document.querySelector('#upload select').value==='Browser-created folder');
+     await page.locator('#files').setInputFiles({name:'new-shelf.txt',mimeType:'text/plain',buffer:Buffer.from('Uploaded to a new folder')});
+     await page.getByRole('dialog').getByRole('button',{name:'Upload',exact:true}).click();
+     await page.getByRole('heading',{name:'Browser-created folder'}).waitFor();
+     await page.getByRole('link',{name:'new-shelf',exact:true}).waitFor();
+     assert.deepEqual(errors,[]);
+     pass('desktop and mobile dashboard: book-first navigation, download, upload to new folder, share and revoke');
      await page.close();
      const zh=await browser.newPage({locale:'zh-CN',ignoreHTTPSErrors:true});
      await zh.goto(base+'up.php');
@@ -400,15 +419,14 @@ try{
      await zh.getByLabel('用户名').fill('alice');await zh.getByLabel('密码',{exact:true}).fill(password);
      await zh.getByRole('button',{name:'登录',exact:true}).click();
      await zh.getByRole('heading',{name:'书库根目录'}).waitFor();
-     await zh.getByText('上传到：书库根目录').waitFor();
+     await zh.getByRole('button',{name:'上传书籍',exact:true}).waitFor();
      const tools=zh.locator('header.top details.tools');
      assert.equal(await tools.locator('summary').innerText(),'CLI / API 与上传 Skill');
      await tools.locator('summary').click();
      await tools.getByRole('link',{name:'下载 SKILL.md'}).waitFor();
      await zh.keyboard.press('Escape');assert.equal(await tools.getAttribute('open'),null);
 
-     await zh.getByRole('link',{name:/Share shelf/}).first().click();
-     await zh.getByRole('heading',{name:'目录订阅'}).waitFor();
+     await zh.locator('.sidebar a[href="up.php?dir=Share%20shelf"]').click();
      await zh.setViewportSize({width:390,height:844});
      await tools.locator('summary').click();
      await tools.getByRole('link',{name:'下载 SKILL.md'}).waitFor();
@@ -419,21 +437,61 @@ try{
      assert.equal((await tools.locator('input.share-link').inputValue()).length,64);
      await zh.keyboard.press('Escape');
 
+     await zh.getByRole('button',{name:'管理目录订阅'}).click();
      await zh.getByRole('button',{name:'创建分享',exact:true}).click();
-     await zh.getByText(/到期时间：.*（UTC）/).waitFor();
+     await zh.getByRole('button',{name:'管理目录订阅'}).getByText(/到期时间：.*（UTC）/).waitFor();
+     await zh.getByRole('button',{name:'管理目录订阅'}).click();
      await zh.getByRole('link',{name:'预览',exact:true}).click();
      await zh.getByText(/只读预览 · 此订阅可查看 [0-9]+ 本书/).waitFor();
+     await zh.locator('#share-dialog').getByRole('button',{name:'关闭',exact:true}).click();
+     await zh.locator('.book-menu summary').first().click();
      await zh.getByRole('button',{name:'移动',exact:true}).first().click();
      let warning='';
      zh.once('dialog',d=>{warning=d.message();return d.dismiss();});
      await zh.locator('#move-dialog .primary').click();
      assert.equal(warning,'移动这本书会改变订阅者可见的内容。继续吗？');
      await zh.getByRole('button',{name:'关闭',exact:true}).click();
+     await zh.getByRole('button',{name:'上传书籍',exact:true}).click();
      await zh.route('**/up.php',route=>route.fulfill({status:413,contentType:'text/plain',body:'proxy limit'}));
      await zh.locator('#files').setInputFiles({name:'zh-test.txt',mimeType:'text/plain',buffer:Buffer.from('Browser UI upload')});
      await zh.getByRole('button',{name:'上传',exact:true}).click();
      await zh.getByText('服务器拒绝了上传请求（HTTP 413）。',{exact:false}).waitFor();
      await zh.getByRole('button',{name:'重试失败项'}).waitFor();
+     if(process.env.SCREENSHOT_DIR){
+       const demo='reader';
+       assert.equal((await activate(demo,cli('invite',demo))).status,303);
+       assert.equal((await ui({action:'login',username:demo,password})).status,303);
+       const demoToken=await getToken();
+       const books=[
+         ['分布式系统：从一致性到工程实践.epub',epubBytes],['数据库内核阅读笔记.txt','阅读笔记'],
+         ['大规模系统设计的取舍.epub',epubBytes],['日志、事务与恢复.txt','读书摘记'],
+         ['架构师的思考框架.epub',epubBytes],['数据系统设计手记.txt','随手摘录'],
+       ];
+       assert.equal((await upload(demoToken,'架构与数据库',books)).status,200);
+       assert.equal((await upload(demoToken,'周末阅读',[['城市漫游.epub',epubBytes]])).status,200);
+       assert.equal((await upload(demoToken,'阅读笔记',[['本周阅读清单.txt','书目']])).status,200);
+       assert.equal((await ui({action:'share',dir:'架构与数据库'})).status,303);
+       const config=path.join(data,'conf','config.php');
+       fs.writeFileSync(config,fs.readFileSync(config,'utf8').replace("'title' => 'Test Site'","'title' => '青禾书库'"));
+       await zh.unrouteAll();
+       await zh.context().clearCookies();
+       await zh.setViewportSize({width:1260,height:840});
+       await zh.goto(base+'up.php');
+       await zh.getByLabel('用户名').fill(demo);await zh.getByLabel('密码',{exact:true}).fill(password);
+       await zh.getByRole('button',{name:'登录',exact:true}).click();
+       await zh.getByRole('link',{name:/架构与数据库/}).click();
+       for(const name of ['架构与数据库','周末阅读','阅读笔记'])await zh.locator('.sidebar').getByRole('link',{name:new RegExp(name)}).waitFor();
+       await zh.getByRole('button',{name:'管理目录订阅'}).getByText('已分享').waitFor();
+       const shot=(name)=>zh.screenshot({path:path.join(process.env.SCREENSHOT_DIR,name)});
+       await shot('opds-desktop.png');
+       await zh.setViewportSize({width:390,height:844});
+       const firstBook=await zh.locator('.book-name').first().boundingBox();
+       assert(firstBook.y+firstBook.height<844);
+       await shot('opds-mobile.png');
+       await zh.getByRole('button',{name:'管理目录订阅'}).click();
+       // Mask the bearer URL even though this isolated fixture has no real books or users.
+       await zh.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'opds-share.png'),mask:[zh.locator('#share-url')],maskColor:'#c8d8cc'});
+     }
      await zh.close();
      pass('Chinese installer and dashboard: localized labels, count, share preview, move confirmation and proxy upload error');
    }finally{await browser.close();}
