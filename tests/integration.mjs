@@ -386,10 +386,20 @@ try{
      await page.locator('#files').setInputFiles({name:'web-ui.txt',mimeType:'text/plain',buffer:Buffer.from('Browser UI upload')});
      await page.getByRole('button',{name:'Upload',exact:true}).click();await page.locator('#upload-notice').getByText('Saved: web-ui.txt').waitFor();
      await page.locator('#books-panel').getByRole('link',{name:'web-ui',exact:true}).waitFor();
+     const rootFolder=page.locator('#root-folders a[href="up.php?dir=Share%20shelf"]');
+     assert(await rootFolder.isVisible());
+     assert(await page.evaluate(()=>Boolean(document.querySelector('#root-folders').compareDocumentPosition(document.querySelector('#books-panel')) & Node.DOCUMENT_POSITION_FOLLOWING)));
+     await rootFolder.click();
+     await page.getByRole('heading',{name:'Share shelf',exact:true}).waitFor();
+     assert.equal(await page.locator('#root-folders').count(),0);
+     await page.locator('header a.brand').click();
+     await page.getByRole('heading',{name:'Library root',exact:true}).waitFor();
+
      const download=page.waitForEvent('download');
      await page.getByRole('link',{name:'Download web-ui.txt'}).click();
      assert.equal((await download).suggestedFilename(),'web-ui.txt');
      await page.setViewportSize({width:390,height:844});
+     assert(await rootFolder.isVisible());
      await page.getByRole('button',{name:'Choose folder'}).click();
      await page.getByRole('dialog').getByRole('link',{name:/^Share shelf(?: Unavailable)?$/}).click();
      await page.getByRole('button',{name:'Manage subscription sharing'}).click();
@@ -486,7 +496,7 @@ try{
        await zh.goto(base+'up.php');
        await zh.getByLabel('用户名').fill(demo);await zh.getByLabel('密码',{exact:true}).fill(password);
        await zh.getByRole('button',{name:'登录',exact:true}).click();
-       await zh.getByRole('link',{name:/架构与数据库/}).click();
+       await zh.locator('#root-folders').getByRole('link',{name:/架构与数据库/}).click();
        for(const name of ['架构与数据库','周末阅读','阅读笔记'])await zh.locator('.sidebar').getByRole('link',{name:new RegExp(name)}).waitFor();
        await zh.getByRole('button',{name:'管理目录订阅'}).getByText('分享中',{exact:true}).waitFor();
        const shot=(name)=>zh.screenshot({path:path.join(process.env.SCREENSHOT_DIR,name)});

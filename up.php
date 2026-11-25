@@ -226,7 +226,7 @@ main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-temp
 .eyebrow{font-size:.78rem;color:var(--soft);font-weight:680;margin:0 0 9px}.shelf-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;margin-top:10px;color:var(--soft);font-size:.8rem}.upload-launch{flex:none}
 .pill-trigger{display:inline-flex;align-items:center;gap:7px;white-space:normal;border:0;border-radius:100px;font-size:.8rem;padding:7px 11px;min-height:36px;background:#edf2f7;color:var(--soft)}.pill-trigger.live{color:var(--green);background:var(--mint)}.pill-trigger.live:hover{background:#d9eee3}.pill-trigger time{font-weight:inherit}
 .badge{display:inline-block;font-size:.76rem;background:var(--mint);color:var(--green);border-radius:100px;padding:4px 8px;white-space:nowrap}.pill-warn{background:#fff1d8;color:#793e00}.pill-off{background:#edf2f7;color:var(--soft)}
-.books-surface{border-top:1px solid var(--line);padding-top:9px}.book{position:relative;display:grid;grid-template-columns:38px minmax(0,1fr) 42px 42px;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);min-height:70px}
+.root-folders{margin:0 0 22px}.root-folders h2,.root-books-title{font-size:.88rem;color:var(--soft);font-weight:730;margin:0 0 7px}.root-folder-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}.root-folder-list a{display:flex;align-items:center;gap:9px;min-height:47px;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:660}.root-folder-list a:hover{background:var(--blue-soft)}.root-folder-list .folder-name{flex:1}.root-folder-list .folder-name .icon{color:var(--accent)}.root-folder-arrow{transform:rotate(-90deg);display:flex;color:var(--soft)}.root-books-title{padding-top:2px}.books-surface{border-top:1px solid var(--line);padding-top:9px}.book{position:relative;display:grid;grid-template-columns:38px minmax(0,1fr) 42px 42px;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);min-height:70px}
 .book-icon{display:grid;place-items:center;width:38px;height:46px;border-radius:7px;background:var(--blue-soft);color:#234cac;font-size:.7rem;font-weight:790;letter-spacing:.02em}.book-icon.txt{background:#eaf2ec;color:#285e4b}
 .book-name{color:var(--ink);text-decoration:none;font-size:.95rem;font-weight:720;line-height:1.35;overflow-wrap:anywhere}.book-name:hover{text-decoration:underline}.book-info small{display:block;font-size:.78rem;margin-top:2px}.book-menu{position:relative}
 .book-actions{display:grid;gap:4px;position:absolute;z-index:2;inset-inline-end:0;top:calc(100% + 4px);min-width:130px;padding:5px;background:white;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #13264024}.book-actions button{width:100%;text-align:start}.empty{padding:30px 10px;text-align:center}.empty p{margin:0}.pagination{padding:12px 0}
@@ -320,8 +320,18 @@ if ($preview) {
   </div>
  </div>
  <p role="status" class="status shelf-notice" id="upload-notice"></p>
+ <?php if ($dir==='' && $directories): ?>
+ <section id="root-folders" class="root-folders" aria-labelledby="root-folders-heading">
+  <h2 id="root-folders-heading"><?=tr_html('Folders')?></h2>
+  <ul class="root-folder-list">
+   <?php foreach ($directories as $item): ?>
+   <li><a href="<?=h(libraryHref($item))?>"><span class="folder-name"><?=icon('folder')?><span><?=h($item)?></span></span><?php if (isset($statuses[$item])): ?><span class="<?=shareBadge($statuses[$item])?>"><?=h(tr($statuses[$item]))?></span><?php endif; ?><span class="root-folder-arrow"><?=icon('down')?></span></a></li>
+   <?php endforeach; ?>
+  </ul>
+ </section>
+ <?php endif; ?>
  <section id="books-panel" class="books-surface" aria-labelledby="books-heading">
-  <h2 id="books-heading" class="sr-only"><?=tr_html('Books')?></h2>
+  <h2 id="books-heading" class="<?=$dir===''&&$directories?'root-books-title':'sr-only'?>"><?=tr_html('Books')?></h2>
   <?php if (!$files): ?><div class="empty"><p class="muted"><?=tr_html('No books here yet. Upload an EPUB or TXT to get started.')?></p></div><?php endif; ?>
   <?php foreach ($pageFiles as $name=>$size):
     $download=libraryHref($dir,['download'=>$name]);
