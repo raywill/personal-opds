@@ -14,13 +14,6 @@ function stopInstall(string $message): never { throw new InstallProblem($message
 function input(string $key): string {
     $v=$_POST[$key]??''; if (!is_string($v) || strlen($v)>8192) stopInstall(tr('Invalid form parameter.')); return $v;
 }
-function baseUrl(string $url): string {
-    $p=parse_url($url);
-    if (!$p || !filter_var($url,FILTER_VALIDATE_URL) || ($p['scheme']??'')!=='https'
-        || empty($p['host']) || isset($p['user']) || isset($p['pass']) || isset($p['query']) || isset($p['fragment'])
-        || preg_match('/[\x00-\x20\x7f]/',$url) || str_contains($url,'\\')) stopInstall(tr('BASE_URL must be the HTTPS URL of the web application directory, without a query string.'));
-    return rtrim($url,'/').'/';
-}
 function probe(string $url): array {
     $context=stream_context_create(['http'=>['timeout'=>8,'follow_location'=>0,'max_redirects'=>0,
         'ignore_errors'=>true,'header'=>"Cache-Control: no-cache\r\nConnection: close\r\n"],
@@ -194,21 +187,20 @@ function inspectUsername(array $layout,string $name): void {
 }
 function currentInstallUrl(): string {
     $host=(string)($_SERVER['HTTP_HOST']??'');
-    $script=(string)($_SERVER['SCRIPT_NAME']??'');
+    $script=explode('?',(string)($_SERVER['REQUEST_URI']??$_SERVER['SCRIPT_NAME']??''),2)[0];
     if (!preg_match('/\A(?:[a-z0-9.-]+|\[[0-9a-f:]+\])(?::[0-9]{1,5})?\z/iD',$host)
-        || !preg_match('~\A/(?:[a-zA-Z0-9._-]+/)*install\.php\z~D',$script))
-        return '';
-    return 'https://'.strtolower($host).substr($script,0,-strlen('install.php'));
+        || !preg_match('~\A/(?:[a-zA-Z0-9._-]+/)*install\.php\z~D',$script)
+        || preg_match('~/(?:\.|\.\.)/~',$script)) return '';
+    $url='https://'.strtolower($host).substr($script,0,-strlen('install.php'));
+    return filter_var($url,FILTER_VALIDATE_URL) ? $url : '';
 }
 function validateLibrary(array $fields): array {
     $title=trim($fields['title']);
     if ($title==='' || strlen($title)>200 || preg_match('//u',$title)!==1 || preg_match('/[\x00-\x1f\x7f]/',$title))
-        stopInstall(tr('Invalid library name.'));
-    $url=baseUrl(trim($fields['base_url']));
-    if ($url!==currentInstallUrl()) stopInstall(tr('Use the same HTTPS host, port and application path as this installer.'));
+        stopInstall(tr('Invalid site name.'));
     $layout=storageLayout(__DIR__,$fields['data_dir']);
     inspectStorage($layout);
-    return [$title,$url,$layout];
+    return [$title,$layout];
 }
 function verifyPublicUrl(string $url): void {
     $id=bin2hex(random_bytes(24)); $files=[];
@@ -247,7 +239,7 @@ function startWizard(): void {
     if (!@session_start(['use_strict_mode'=>1,'use_only_cookies'=>1,'cookie_secure'=>true,'cookie_httponly'=>true,'cookie_samesite'=>'Strict','cookie_path'=>'/','cookie_domain'=>'']))
         stopInstall(tr('Cannot start the installation session.'));
 }
-function installLibrary(array $fields,int &$step): string {
+function installLibrary(array $fields,string $url,int &$step): string {
     $step=1;
     checkEnvironment();
     $lock=@fopen(__DIR__,'r');
@@ -256,7 +248,7 @@ function installLibrary(array $fields,int &$step): string {
     try {
         if (setupLocked(__DIR__)) stopInstall(tr('Already installed; reinitialization is not allowed.'));
         $step=2;
-        [$title,$url,$layout]=validateLibrary($fields);
+        [$title,$layout]=validateLibrary($fields);
         makeDirectory($layout['root'],0700,$dirs);
         $storageLock=@fopen($layout['root'],'r');
         if (!$storageLock || !flock($storageLock,LOCK_EX|LOCK_NB)) stopInstall(tr('Cannot acquire the data directory lock. Try again shortly.'));
@@ -265,7 +257,7 @@ function installLibrary(array $fields,int &$step): string {
         if (realpath($layout['root'])!==$layout['root'] || !$current || !$lockedDir || $current['dev']!==$lockedDir['dev'] || $current['ino']!==$lockedDir['ino'])
             stopInstall(tr('The data directory changed during installation. Check it again.'));
         // Repeat the storage checks while holding both directory locks.
-        [$title,$url,$layout]=validateLibrary($fields);
+        [$title,$layout]=validateLibrary($fields);
         verifyPublicUrl($url);
         $books=$layout['books']; $conf=$layout['conf'];
         $step=3;
@@ -313,7 +305,8 @@ function installLibrary(array $fields,int &$step): string {
 $activationUrl=''; $error=''; $commands=[]; $done=false; $success=false; $csrf=''; $step=1;
 $jsonRequest=str_contains(strtolower((string)($_SERVER['HTTP_ACCEPT']??'')),'application/json');
 $documentRoot=realpath((string)($_SERVER['DOCUMENT_ROOT']??__DIR__))?:__DIR__;
-$defaults=['base_url'=>currentInstallUrl(),'data_dir'=>dirname($documentRoot).'/opds-data','title'=>'Personal OPDS','username'=>''];
+$siteUrl=currentInstallUrl();
+$defaults=['data_dir'=>dirname($documentRoot).'/opds-data','title'=>'Personal OPDS','username'=>''];
 $fields=$defaults;
 $locked=setupLocked(__DIR__);
 if ($locked) http_response_code(403);
@@ -322,35 +315,36 @@ else try {
         stopInstall(tr('HTTPS is required for setup. Configure the server HTTPS state at your trusted proxy.'));
     $method=$_SERVER['REQUEST_METHOD']??'GET';
     if (!in_array($method,['GET','POST'],true)) { header('Allow: GET, POST'); stopInstall(tr('Method not allowed.')); }
+    if ($siteUrl==='') stopInstall(tr('Open install.php directly at the HTTPS address you want readers to use.'));
     startWizard();
     $wizard=&$_SESSION['wizard'];
-    if (!is_array($wizard??null)) $wizard=['step'=>1,'csrf'=>bin2hex(random_bytes(32)),'fields'=>$defaults];
+    if (($wizard['site_url']??null)!==$siteUrl) $wizard=['site_url'=>$siteUrl,'step'=>1,'csrf'=>bin2hex(random_bytes(32)),'fields'=>$defaults];
     $step=$wizard['step']; $csrf=$wizard['csrf']; $fields=$wizard['fields'];
     if ($method==='POST') {
         if (!hash_equals($csrf,input('csrf'))) stopInstall(tr('Invalid request token. Refresh.'));
         if (input('step')!==(string)$step) stopInstall(tr('This installation page is out of date. Continue from the current step.'));
         $action=input('action');
         if ($action==='back' && $step>1) {
-            if ($step===2) foreach (['base_url','data_dir','title'] as $key) $fields[$key]=input($key);
+            if ($step===2) foreach (['data_dir','title'] as $key) $fields[$key]=input($key);
             if ($step===3) $fields['username']=input('username');
             --$step;
         } elseif ($action==='next' && $step<4) {
             if ($step===1) checkEnvironment();
             if ($step===2) {
-                foreach (['base_url','data_dir','title'] as $key) $fields[$key]=input($key);
-                [$fields['title'],$fields['base_url'],$layout]=validateLibrary($fields);
+                foreach (['data_dir','title'] as $key) $fields[$key]=input($key);
+                [$fields['title'],$layout]=validateLibrary($fields);
                 $fields['data_dir']=$layout['root'];
-                verifyPublicUrl($fields['base_url']);
+                verifyPublicUrl($siteUrl);
             }
             if ($step===3) {
                 $fields['username']=input('username');
-                try { [,,$layout]=validateLibrary($fields); }
+                try { [,$layout]=validateLibrary($fields); }
                 catch (Throwable $e) { $step=2; throw $e; }
                 inspectUsername($layout,$fields['username']);
             }
             ++$step;
         } elseif ($action==='install' && $step===4) {
-            $activationUrl=installLibrary($fields,$step);
+            $activationUrl=installLibrary($fields,$siteUrl,$step);
             $done=true;
         } else stopInstall(tr('Invalid request action.'));
         $success=true;
@@ -371,13 +365,13 @@ if ($jsonRequest) {
     header('Content-Type: application/json; charset=UTF-8');
     echo json_encode(['success'=>$success,'installed'=>$done,'message'=>$done?tr('Installation complete'):$error,
         'step'=>$step,'commands'=>$commands,'activation_url'=>$done?$activationUrl:null,
-        'catalog_url'=>$done?$fields['base_url'].'index.php':null,'upload_url'=>$done?$fields['base_url'].'up.php':null],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+        'catalog_url'=>$done?$siteUrl.'index.php':null,'upload_url'=>$done?$siteUrl.'up.php':null],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 $steps=['Environment','Library location','First account','Review and install'];
 $descriptions=[
     'Check the server before entering your library settings.',
-    'Choose where the web application lives and where private data is stored.',
+    'Name this site and choose where private data is stored.',
     'This username becomes the directory name. The account owner sets a password after installation.',
     'Review your settings. No existing book or account will be overwritten.',
 ];
@@ -455,8 +449,9 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <?php endif; ?>
 <p class="foot"><?=tr_html('Verify reverse proxy limits with a real upload after installation.')?></p>
 <?php elseif ($step===2): ?>
-<label for="base_url"><?=tr_html('HTTPS application URL')?></label><input type="url" id="base_url" name="base_url" value="<?=esc($fields['base_url'])?>" required>
-<label for="title"><?=tr_html('Library name')?></label><input id="title" name="title" maxlength="200" value="<?=esc($fields['title'])?>" required>
+<label for="title"><?=tr_html('Site name')?></label><input id="title" name="title" maxlength="200" value="<?=esc($fields['title'])?>" required>
+<small><?=tr_html('Shown on the website and in the OPDS catalog. It applies to all users.')?></small>
+<dl><dt><?=tr_html('Site URL')?></dt><dd><code><?=esc($siteUrl)?></code><small><?=tr_html('Detected from this installer address.')?></small></dd></dl>
 <label for="data_dir"><?=tr_html('Private data root')?></label><input id="data_dir" name="data_dir" aria-describedby="data_help" value="<?=esc($fields['data_dir'])?>" required>
 <small id="data_help"><?=tr_html('Use a dedicated directory outside the website root. Do not expose it through an alias.')?></small>
 <div class="hint"><code>conf/</code> <?=tr_html('stores configuration')?><br><code>books/&lt;username&gt;/</code> <?=tr_html('is each user’s private book directory')?></div>
@@ -468,8 +463,8 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <script nonce="<?=esc($nonce)?>">const u=document.getElementById('username'),p=document.getElementById('personal_path');function showPath(){p.textContent=p.dataset.prefix+(/^[a-z0-9][a-z0-9_-]{0,31}$/.test(u.value)?u.value:'<username>')+'/';}u.addEventListener('input',showPath);showPath();</script>
 <?php else: ?>
 <dl>
-<dt><?=tr_html('Library name')?></dt><dd><?=esc($fields['title'])?></dd>
-<dt><?=tr_html('HTTPS application URL')?></dt><dd><code><?=esc($fields['base_url'])?></code></dd>
+<dt><?=tr_html('Site name')?></dt><dd><?=esc($fields['title'])?></dd>
+<dt><?=tr_html('Site URL')?></dt><dd><code><?=esc($siteUrl)?></code></dd>
 <dt><?=tr_html('Private data root')?></dt><dd><code><?=esc($fields['data_dir'])?></code></dd>
 <dt><?=tr_html('First username')?></dt><dd><?=esc($fields['username'])?></dd>
 <dt><?=tr_html('Personal library directory')?></dt><dd><code><?=esc($accountPath.'/')?></code></dd>

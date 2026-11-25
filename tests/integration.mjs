@@ -45,7 +45,7 @@ async function request(endpoint='install.php',options={}){
 const form=fields=>({method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:Buffer.from(new URLSearchParams(fields).toString())});
 const csrf=r=>{const m=r.text.match(/name="csrf" value="([a-f0-9]+)"/);assert(m,r.text.slice(0,400));return m[1];};
 const data=path.join(temp,'opds-data');
-const settings={base_url:base,data_dir:data,title:'Test Library',username:'alice'};
+const settings={data_dir:data,title:'Test Site',username:'alice'};
 const auth=(user,password)=>({authorization:'Basic '+Buffer.from(user+':'+password).toString('base64')});
 const password='safe-test-password-123';
 function cli(...args){return execFileSync(php,[path.join(app,'admin.php'),...args],{encoding:'utf8'}).trim();}
@@ -80,7 +80,10 @@ try{
  fs.chmodSync(app,0o700);
  r=await setupPost(1,'next');assert.equal(r.status,200,r.text);assert.equal(r.json.step,2);
  r=await setupPost(2,'next',{...settings,data_dir:path.join(web,'data')});assert.equal(r.status,400);assert.equal(r.json.step,2);
- r=await setupPost(2,'next',{...settings,base_url:base+'wrong/'});assert.equal(r.status,400);assert.equal(r.json.step,2);
+ const locationStep=await request();assert(locationStep.text.includes(base));
+ assert(!locationStep.text.includes('name="base_url"'));assert(locationStep.text.includes('Site name'));
+ r=await setupPost(2,'next',{...settings,title:''});assert.equal(r.status,400);assert.equal(r.json.step,2);
+ assert(r.json.message.includes('Invalid site name'));
  r=await setupPost(2,'next',{...settings,data_dir:path.join(readOnly,'opds-data')});assert.equal(r.status,400);assert.equal(r.json.step,2);
  assert(r.json.message.includes(readOnly));assert(r.json.commands[0].includes('chmod u+rwx'));
  fs.chmodSync(readOnly,0o600);
@@ -91,7 +94,7 @@ try{
  r=await setupPost(2,'next',settings);assert.equal(r.status,400);assert.equal(r.json.step,2);assert(r.json.message.includes('HTTP 403'));
  denySetupProbe=false;
  assert(!fs.readdirSync(app).some(p=>p.startsWith('install-check-')));
- r=await setupPost(2,'next',settings);assert.equal(r.status,200,r.text);assert.equal(r.json.step,3);
+ r=await setupPost(2,'next',{...settings,base_url:'https://untrusted.example/anything/'});assert.equal(r.status,200,r.text);assert.equal(r.json.step,3);
  assert(!fs.existsSync(data));assert(!fs.readdirSync(app).some(p=>p.startsWith('install-check-')));
  r=await setupPost(3,'next',{username:'root'});assert.equal(r.status,400);assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'Alice'});assert.equal(r.status,400);assert.equal(r.json.step,3);
@@ -115,6 +118,9 @@ try{
  fs.rmdirSync(latePath);
  r=await setupPost(3,'next',{username:'alice'});assert.equal(r.json.step,4);
  r=await setupPost(4,'install',{username:'tampered'});assert.equal(r.status,200,r.text);assert(r.json.installed);const aliceLink=r.json.activation_url;
+ assert.equal(r.json.catalog_url,base+'index.php');assert.equal(r.json.upload_url,base+'up.php');
+ assert.equal(new URL(aliceLink).pathname,'/library/up.php');
+ assert(fs.readFileSync(path.join(data,'conf','config.php'),'utf8').includes('Test Site'));
  assert(fs.existsSync(path.join(data,'books','alice')));assert(!fs.existsSync(path.join(data,'books','tampered')));
  assert.equal((await request()).status,403);
  assert.equal(await fs.promises.stat(path.join(data,'conf','users.json')).then(s=>s.mode&0o777),0o600);
