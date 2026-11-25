@@ -379,7 +379,12 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 .invitation-new{border:1px solid #b7caff;border-radius:.8rem;background:#f5f8ff;padding:.7rem;margin:.65rem 0}
 .invitation-entry details{margin-top:.5rem}.invitation-entry details summary{width:max-content;max-width:100%;cursor:pointer}
 .invitation-entry details form{margin-top:.5rem}.copy-result:not(:empty){display:block;margin-top:.35rem;color:var(--soft)}
-.settings-section{border-top:1px solid var(--line);margin-top:1rem;padding-top:.8rem}.settings-section h3{margin:0 0 .55rem}.archive-section h3{color:#a52132}
+.settings-section{border-top:1px solid var(--line);margin-top:1rem;padding-top:.8rem}.settings-section h3{margin:0 0 .55rem}#library-settings-dialog{width:min(29rem,calc(100% - 2rem))}
+.settings-tabs{width:fit-content;margin-bottom:1rem;gap:.25rem}
+.settings-form label{margin:0 0 .4rem}.settings-form input{width:100%;font-weight:500}
+.settings-footer{display:flex;justify-content:flex-end;margin-top:1rem}
+.archive-card{border:1px solid var(--line);border-radius:12px;background:#f8fafc;padding:1rem}.archive-card h3{font-size:1rem;margin:0 0 .35rem}.archive-card p{margin-bottom:.8rem}
+@media(max-width:600px){#library-settings-dialog{width:100%}}
 @media(max-width:600px){.manage-dialog{width:100%;padding:17px}.role-grid{grid-template-columns:1fr}.role-footer{bottom:-17px}.member-line{gap:.45rem}.member-toolbar{align-items:stretch}.member-line form button{padding:.35rem .45rem}}
 </style></head><body>
 <header class="top">
@@ -725,24 +730,27 @@ roleEditor?.addEventListener('edit-member',({detail})=>{
  const source=Array.from(membersDialog.querySelectorAll('[data-member]')).find(button=>button.dataset.member===detail.member);
  if(source) source.closest('details').open=false;
 });
-const tabs=Array.from(membersDialog?.querySelectorAll('[role=tab]')??[]);
-function activateMemberTab(active,focus=false){
- for(const tab of tabs){
-  const selected=tab===active;
-  tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;
-  document.getElementById(tab.getAttribute('aria-controls')).hidden=!selected;
+const librarySettings=document.querySelector('#library-settings-dialog');
+for(const dialog of [membersDialog,librarySettings]){
+ const tabs=Array.from(dialog?.querySelectorAll('[role=tab]')??[]);
+ function activateTab(active,focus=false){
+  for(const tab of tabs){
+   const selected=tab===active;
+   tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;
+   document.getElementById(tab.getAttribute('aria-controls')).hidden=!selected;
+  }
+  if(focus)active.focus();
  }
- if(focus)active.focus();
-}
-tabs.forEach((tab,index)=>{
- tab.addEventListener('click',()=>activateMemberTab(tab));
- tab.addEventListener('keydown',event=>{
-  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
-  event.preventDefault();
-  const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
-  activateMemberTab(tabs[next],true);
+ tabs.forEach((tab,index)=>{
+  tab.addEventListener('click',()=>activateTab(tab));
+  tab.addEventListener('keydown',event=>{
+   if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+   event.preventDefault();
+   const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+   activateTab(tabs[next],true);
+  });
  });
-});
+}
 const refreshInvitations=document.querySelector('#refresh-invitations');
 refreshInvitations?.addEventListener('click',async()=>{
  if(refreshInvitations.disabled)return;
@@ -766,7 +774,7 @@ copyActivation?.addEventListener('click',async()=>{
  try{await navigator.clipboard.writeText(input.value);status.textContent=copyActivation.dataset.copied;}
  catch{input.focus();input.select();status.textContent=copyActivation.dataset.manual;}
 });
-for(const dialog of [membersDialog,document.querySelector('#invite-member-dialog'),roleEditor,document.querySelector('#accounts-dialog')])
+for(const dialog of [membersDialog,librarySettings,document.querySelector('#invite-member-dialog'),roleEditor,document.querySelector('#accounts-dialog')])
  if(dialog?.hasAttribute('data-manage-open'))dialog.showModal();
 const agentSetupForm=document.querySelector('#agent-setup');
 const agentSetupText=document.querySelector('#agent-setup-text');

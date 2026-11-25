@@ -39,16 +39,30 @@ $connections=array_filter($library['tokens'],static fn($item)=>
 <?php endif; ?>
 </dialog>
 <?php endif; ?>
-<?php if ($owner): ?>
-<dialog id="library-settings-dialog" class="sheet manage-dialog" aria-labelledby="settings-title">
+<?php if ($owner):
+$settingsError=$error!==''&&in_array($action,['library_rename','library_archive'],true);
+$archiveOpen=$settingsError&&$action==='library_archive';
+$draftTitle=$settingsError&&$action==='library_rename'&&is_string($_POST['title']??null)?$_POST['title']:$libraryName;
+?>
+<dialog id="library-settings-dialog" class="sheet manage-dialog" aria-labelledby="settings-title" <?=$settingsError?'data-manage-open':''?>>
 <div class="bar dialog-head"><h2 id="settings-title"><?=tr_html('Library settings')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
-<p class="muted"><?=h(libraryTitle($library,$viewer))?></p>
-<section class="settings-section"><h3><?=tr_html('General')?></h3>
-<form method="post" action="up.php"><?php hidden($csrf,'library_rename',$dir);?><label><?=tr_html('Library name')?><input name="title" value="<?=h(libraryTitle($library,$viewer))?>" required maxlength="120"></label><button><?=tr_html('Save name')?></button></form>
+<div class="member-tabs settings-tabs" role="tablist" aria-label="<?=tr_html('Library settings')?>">
+<button id="settings-tab-general" type="button" role="tab" aria-controls="settings-general" aria-selected="<?=$archiveOpen?'false':'true'?>" tabindex="<?=$archiveOpen?-1:0?>"><?=tr_html('General')?></button>
+<button id="settings-tab-archive" type="button" role="tab" aria-controls="settings-archive" aria-selected="<?=$archiveOpen?'true':'false'?>" tabindex="<?=$archiveOpen?0:-1?>"><?=tr_html('Archive')?></button>
+</div>
+<?php if ($settingsError): ?><p class="error" role="alert"><?=h($error)?></p><?php endif; ?>
+<section id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general" <?=$archiveOpen?'hidden':''?>>
+<form method="post" action="up.php" class="settings-form"><?php hidden($csrf,'library_rename',$dir);?>
+<label for="settings-library-name"><?=tr_html('Library name')?></label>
+<input id="settings-library-name" name="title" value="<?=h($draftTitle)?>" required maxlength="120">
+<div class="settings-footer"><button class="primary"><?=tr_html('Save name')?></button></div>
+</form>
 </section>
-
-<section class="settings-section archive-section"><h3><?=tr_html('Archive library')?></h3><p class="muted"><?=tr_html('Keeps books and members, but disables access and revokes links and tokens.')?></p>
+<section id="settings-archive" role="tabpanel" aria-labelledby="settings-tab-archive" <?=$archiveOpen?'':'hidden'?>>
+<div class="archive-card">
+<h3><?=tr_html('Archive library')?></h3><p class="muted"><?=tr_html('Keeps books and members, but disables access and revokes links and tokens.')?></p>
 <form method="post" action="up.php" data-confirm="<?=tr_html('Archive this library? Its upload tokens and anonymous shares will stop working, even after restore.')?>"><?php hidden($csrf,'library_archive',$dir);?><button class="danger"><?=tr_html('Archive library')?></button></form>
+</div>
 </section></dialog>
 <?php endif; ?>
 <?php if (isset($permissions['members'])):
