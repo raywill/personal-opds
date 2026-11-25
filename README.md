@@ -43,6 +43,8 @@ php admin.php quota alice 5368709120 5000
 php admin.php disable alice
 ```
 
+Web sign-ins last 30 days from login, even if the browser is closed, unless the user signs out, resets their password, or is disabled. OPDS reader credentials and anonymous subscription links are unchanged. Upgrading from the older short-lived sessions requires signing in once; new sessions use a private `conf/web-sessions` directory created by PHP.
+
 Send the activation/reset URL privately. Passwords cannot be empty but have no length or composition rules; use a long, unique password for an internet-facing library. Reissuing a link invalidates the previous one; the reset itself invalidates old browser sessions when the password is changed. In **Site accounts**, choose **Disable account** to stop their sign-ins and uploads, block access to their personal library, and revoke its subscription links. Files and member roles are retained. **Restore account** issues a one-time link so they can set a new password; old upload tokens and subscriptions stay revoked. Only the server operator can change another site administrator. CLI equivalents are `php admin.php disable USERNAME` and `php admin.php restore USERNAME`. To revoke access only to one library, choose **Library members → … → Remove from library**; the account and its own library are unaffected. Usernames are immutable lowercase ASCII letters/digits with optional underscore/hyphen, up to 32 characters. Users cannot register themselves. The default per-library quota is 5 GiB and 5,000 books; enforce external disk and temporary upload quotas as well.
 
 Private storage layout:

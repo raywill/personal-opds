@@ -32,20 +32,12 @@ $api=isset($_GET['part'])||isset($_GET['asset'])||isset($_GET['toc']);
 try {
     requireUploadHttps();
     if ($_SERVER['REQUEST_METHOD']!=='GET') reject('Method not allowed.',405);
-    ini_set('session.use_strict_mode','1');
-    session_name('OPDS_LIBRARY');
-    session_set_cookie_params(['path'=>COOKIE_PATH,'secure'=>true,'httponly'=>true,'samesite'=>'Strict']);
-    session_start();
-    $viewer=(string)($_SESSION['account']??'');
-    $user=activeAccount($viewer); $now=time();
-    if (!$user || !hash_equals($user['password'],$_SESSION['password']??'') ||
-        $now-($_SESSION['activity']??0)>SESSION_IDLE_TTL || $now-($_SESSION['issued']??0)>SESSION_ABSOLUTE_TTL) {
-        session_write_close();
-        reject('Sign in again.',401);
-    }
-    $_SESSION['activity']=$now;
+    if (!isset($_COOKIE[WEB_SESSION_NAME])) reject('Sign in again.',401);
+    startWebSession();
+    $user=webSessionAccount();
+    $viewer=$user?$_SESSION['account']:'';
     session_write_close();
-    setAccountScope($viewer);
+    if (!$user) reject('Sign in again.',401);
     $id=readerParam('library'); $dir=readerParam('dir'); $bookName=readerParam('book');
     $row=selectLibrary($id,$viewer,'view');
     $query=['library'=>$id,'dir'=>$dir];

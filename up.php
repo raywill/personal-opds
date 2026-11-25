@@ -12,11 +12,11 @@ header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 $nonce=base64_encode(random_bytes(18));
 header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$nonce'; script-src 'nonce-$nonce'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
-try { requireUploadHttps(); } catch (RequestError $e) { http_response_code($e->getCode()); exit($e->getMessage()); }
-ini_set('session.use_strict_mode','1');
-session_name('OPDS_LIBRARY');
-session_set_cookie_params(['path'=>COOKIE_PATH,'secure'=>true,'httponly'=>true,'samesite'=>'Strict']);
-session_start();
+try {
+    requireUploadHttps();
+    startWebSession();
+    $user=webSessionAccount();
+} catch (Throwable $e) { http_response_code($e instanceof RequestError?$e->getCode():503); exit(publicError($e)); }
 $_SESSION['csrf']??=bin2hex(random_bytes(32));
 function h(string $value): string { return htmlspecialchars($value,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }
 function field(string $key,array $source): string {
@@ -50,14 +50,7 @@ function managementDownload(string $dir,string $name): never {
     fclose($f); exit;
 }
 $method=$_SERVER['REQUEST_METHOD'];
-$viewer=(string)($_SESSION['account']??'');
-$user=activeAccount($viewer);
-$now=time();
-if (!$user || !hash_equals($user['password'],$_SESSION['password']??'') ||
-    $now-($_SESSION['activity']??0)>SESSION_IDLE_TTL || $now-($_SESSION['issued']??0)>SESSION_ABSOLUTE_TTL) {
-    $viewer=''; $user=null;
-    unset($_SESSION['account'],$_SESSION['password'],$_SESSION['activity'],$_SESSION['issued']);
-} else { $_SESSION['activity']=$now; setAccountScope($viewer); }
+$viewer=$user?$_SESSION['account']:'';
 $error=''; $notice=''; $permissions=[]; $webLibraries=[]; $allLibraries=[]; $library=null; $dir=''; $activate=''; $activateFor=''; $preview=false; $renameDraft=null;
 $siteAdmin=($user['site_admin']??null)===true; $accountInviteLink=''; $accountInviteName=''; $accountNotice='';
 $action=is_string($_POST['action']??null)?$_POST['action']:'';
@@ -117,8 +110,7 @@ try {
             reserveRateAttempt('login',LOGIN_IP_LIMIT,LOGIN_GLOBAL_LIMIT);
             $verified=loginAccount($name,$password);
             if (!$verified) reject(tr('Incorrect username or password, or account not activated.'),401);
-            session_regenerate_id(true);
-            $_SESSION=['csrf'=>bin2hex(random_bytes(32)),'account'=>$name,'password'=>$verified['password'],'activity'=>$now,'issued'=>$now];
+            signInWebSession($name,$verified['password']);
             if ($isInvitation) {
                 header('Location: '.invitationLink($invitationTarget,$invitation),true,303);
                 exit;
@@ -131,7 +123,7 @@ try {
             $record=activeAccount($viewer);
             if (!$record || !hash_equals($record['password'],$signedIn['password'])) reject(tr('Sign in again.'),401);
         };
-        if ($action==='logout') { $_SESSION=[]; session_regenerate_id(true); go(); }
+        if ($action==='logout') { signOutWebSession(); go(); }
         if (in_array($action,['invite_accept','invite_decline','library_restore'],true)) {
             $requested=field('target_library',$_POST);
             if ($action==='library_restore') librarySettings($requested,$viewer,$action);

@@ -14,6 +14,61 @@ function privateDirectory(): string
     return $root;
 }
 
+const WEB_SESSION_NAME = 'OPDS_LIBRARY';
+
+function webSessionCookie(): array
+{
+    return ['path'=>COOKIE_PATH,'secure'=>true,'httponly'=>true,'samesite'=>'Strict'];
+}
+function startWebSession(): void
+{
+    // Isolate these sessions from the host's short-lived PHP default directory
+    // and from the installation wizard. PHP's own GC handles this private path.
+    $path=privateDirectory().'/web-sessions';
+    if (!is_dir($path)&&!is_link($path)) @mkdir($path,0700);
+    clearstatcache(true,$path);
+    $mode=@fileperms($path);
+    if (is_link($path)||realpath($path)!==$path||!is_dir($path)||$mode===false||
+        ($mode&0777)!==0700||!is_readable($path)||!is_writable($path)||!is_executable($path))
+        throw new RuntimeException('The private web session directory must be accessible to PHP with mode 0700.');
+    session_name(WEB_SESSION_NAME);
+    session_set_cookie_params(webSessionCookie()+['lifetime'=>0,'domain'=>'']);
+    if (!session_start([
+        'save_handler'=>'files','save_path'=>$path,'serialize_handler'=>'php',
+        'use_strict_mode'=>1,'use_cookies'=>1,'use_only_cookies'=>1,'use_trans_sid'=>0,
+        'gc_maxlifetime'=>WEB_SESSION_TTL,'gc_probability'=>1,'gc_divisor'=>1000,
+    ])) throw new RuntimeException('Cannot open the private web session.');
+}
+function webSessionAccount(): ?array
+{
+    $viewer=$_SESSION['account']??null;
+    $hash=$_SESSION['password']??null;
+    $issued=$_SESSION['issued']??null;
+    $now=time();
+    if (is_string($viewer)&&is_string($hash)&&is_int($issued)&&$issued<=$now&&
+        $issued>$now-WEB_SESSION_TTL&&($account=activeAccount($viewer))&&hash_equals($account['password'],$hash)) {
+        setAccountScope($viewer);
+        return $account;
+    }
+    unset($_SESSION['account'],$_SESSION['password'],$_SESSION['issued']);
+    return null;
+}
+function signInWebSession(string $user,string $hash): void
+{
+    if (!session_regenerate_id(true)) throw new RuntimeException('Cannot rotate the web session ID.');
+    $now=time();
+    $_SESSION=['csrf'=>bin2hex(random_bytes(32)),'account'=>$user,'password'=>$hash,'issued'=>$now];
+    if (!setcookie(WEB_SESSION_NAME,session_id(),webSessionCookie()+['expires'=>$now+WEB_SESSION_TTL]))
+        throw new RuntimeException('Cannot set the web session cookie.');
+}
+function signOutWebSession(): void
+{
+    // Revoke the old ID on disk, not just in this browser.
+    $_SESSION=[];
+    if (!session_destroy()) throw new RuntimeException('Cannot revoke the web session.');
+    setcookie(WEB_SESSION_NAME,'',webSessionCookie()+['expires'=>1]);
+}
+
 function openPrivateState(string $path)
 {
     $root = privateDirectory();

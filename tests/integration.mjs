@@ -679,7 +679,12 @@ try{
  else { delete oldShares.records[keyId].library; fs.writeFileSync(shareFile,JSON.stringify(oldShares)); }
  const oldShareRow=oldShares.records[keyId];
  assert.equal((await request(url({s:legacyKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'kept in the original library');
- if (legacySource) for (const file of runtime) fs.copyFileSync(path.join(project,file),path.join(app,file));
+ if (legacySource) {
+   for (const file of runtime) fs.copyFileSync(path.join(project,file),path.join(app,file));
+   // Older versions used PHP's default session store; sign in once after upgrade.
+   cookies.clear();
+   assert.equal((await ui({action:'login',username:'alice',password})).status,303);
+ }
  const legacyFolder=path.join(data,'books','alice','Legacy upgrade');
  const identity=fs.readFileSync(path.join(legacyFolder,'.opds-category'),'utf8');
  assert.equal((await request(url({s:legacyKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'kept in the original library');
@@ -1249,6 +1254,43 @@ try{
      assert.deepEqual(errors,[]);
      pass('desktop/mobile reader entry, TOC navigation, reload resumes the chapter and scroll position, and themes persist');
    } finally { await browser.close(); }
+ }
+ {
+   cookies.clear();
+   const signedIn=await ui({action:'login',username:'alice',password});
+   assert.equal(signedIn.status,303);
+   const header=signedIn.headers['set-cookie'].find(value=>/^OPDS_LIBRARY=/.test(value)&&/Max-Age=25919[9][9]|Max-Age=2592000/.test(value));
+   assert(header,'login cookie must persist for 30 days');
+   assert.match(header,/path=\/library\/; secure; HttpOnly; SameSite=Strict/i);
+   const cookie=cookies.get('OPDS_LIBRARY');
+   const id=cookie.split('=')[1];
+   const storage=path.join(data,'conf','web-sessions');
+   const stateFile=path.join(storage,'sess_'+id);
+   assert.equal(fs.statSync(storage).mode&0o777,0o700);
+   assert.equal(fs.statSync(stateFile).mode&0o777,0o600);
+   const original=fs.readFileSync(stateFile,'utf8');
+   assert.match(original,/issued\|i:[0-9]+;/);
+   const issuedAt=days=>{
+     const timestamp=Math.floor(Date.now()/1000)-days*86400;
+     fs.writeFileSync(stateFile,original.replace(/issued\|i:[0-9]+;/,'issued|i:'+timestamp+';'));
+     fs.utimesSync(stateFile,timestamp,timestamp);
+   };
+   issuedAt(29);
+   const dashboard=await request(shelfURL);
+   assert(dashboard.text.includes('readable.epub'));
+   assert(!dashboard.headers['set-cookie']?.some(h=>/Max-Age=259/.test(h)),'activity must not extend the deadline');
+   assert.equal((await request(previewURL('long.txt'))).status,200);
+   issuedAt(30);
+   assert.equal((await request(previewURL('long.txt'))).status,401);
+   assert(!(await request(shelfURL)).text.includes('readable.epub'));
+   assert.equal((await ui({action:'login',username:'alice',password})).status,303);
+   const revoked=cookies.get('OPDS_LIBRARY');
+   const logout=await ui({action:'logout'});
+   assert.equal(logout.status,303);
+   assert(logout.headers['set-cookie'].some(value=>/OPDS_LIBRARY=.*Max-Age=0/i.test(value)));
+   assert(!fs.existsSync(path.join(storage,'sess_'+revoked.split('=')[1])));
+   assert.equal((await request(previewURL('long.txt'),{headers:{cookie:revoked}})).status,401);
+   pass('30-day persistent web login, no idle expiry or sliding renewal, identical reader expiry and immediate logout revocation');
  }
  }
  {
