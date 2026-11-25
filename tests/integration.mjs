@@ -70,6 +70,21 @@ const url=(f)=>'index.php?'+new URLSearchParams(f);
 const opds=(u,params={})=>request(url(params),{headers:auth(u,password)});
 const getToken=async()=>{const r=await ui({action:'token'}); assert.equal(r.status,200,r.text);return r.text.match(/readonly value="([a-f0-9]{64})"/)?.[1];};
 try{
+ // Exercise owner combinations even when this runner cannot chown files.
+ const template=fs.readFileSync(path.join(project,'tools','install.template.php'),'utf8');
+ const extract=(name,next)=>template.slice(template.indexOf('function '+name+'('),template.indexOf('function '+next+'('));
+ const example='/home/wwwroot/www.reactshare.cn/personal-opds';
+ const permissionNonOwner=JSON.parse(execFileSync(php,['-r',
+   extract('shellArg','phpProcessIds')+extract('permissionCommands','directoryAdvice')+
+   'echo json_encode([permissionCommands($argv[1],33,0,false,true),permissionCommands($argv[1],33,33,false,true),permissionCommands($argv[1],33,0,true,false),permissionCommands($argv[1],33,0,false,false)]);',example
+ ],{encoding:'utf8'}));
+ assert.deepEqual(permissionNonOwner,[
+   ["sudo chown -- '33' '"+example+"'","sudo chmod u+rwx -- '"+example+"'"],
+   ["sudo chmod u+rwx -- '"+example+"'"],
+   ["sudo setfacl -m 'u:33:--x' -- '"+example+"'"],
+   ["sudo setfacl -m 'u:33:rwx' -- '"+example+"'"]
+ ]);
+ pass('installer permission commands: dedicated directory without ACL, unchanged ownership for shared directories');
  let r=await request(); for(let n=0;n<50&&r.status===502;n++){await delay(25);r=await request();} const setup=csrf(r);
  const setupPost=(step,action,fields={})=>post('install.php',{csrf:setup,step,action,...fields},{accept:'application/json'});
  r=await setupPost(4,'install',settings);assert.equal(r.status,400);assert.equal(r.json.step,1);

@@ -65,14 +65,21 @@ function phpProcessIds(bool $installing = false): ?array {
     $stat=fstat($tmp); fclose($tmp);
     return $stat && isset($stat['uid'],$stat['gid']) ? ['uid'=>$stat['uid'],'gid'=>$stat['gid']] : null;
 }
+function permissionCommands(string $path,int $uid,int|false $owner,bool $traverseOnly,bool $dedicatedAppDirectory): array {
+    $quoted=shellArg($path);
+    $mode=$traverseOnly?'--x':'rwx';
+    if ($owner===$uid) return ['sudo chmod u+'.($traverseOnly?'x':'rwx').' -- '.$quoted];
+    if ($owner!==false && !$traverseOnly && $dedicatedAppDirectory)
+        return ['sudo chown -- '.shellArg((string)$uid).' '.$quoted,'sudo chmod u+rwx -- '.$quoted];
+    return ['sudo setfacl -m '.shellArg('u:'.$uid.':'.$mode).' -- '.$quoted];
+}
 function directoryAdvice(string $path,bool $traverseOnly=false): array {
     $ids=phpProcessIds();
     if (!$ids || $ids['uid']===0) return [];
-    $uid=(int)$ids['uid'];
-    $mode=$traverseOnly?'--x':'rwx';
-    if (@fileowner($path)===$uid)
-        return ['sudo chmod u+'.($traverseOnly?'x':'rwx').' -- '.shellArg($path)];
-    return ['sudo setfacl -m '.shellArg('u:'.$uid.':'.$mode).' -- '.shellArg($path)];
+    $documentRoot=realpath((string)($_SERVER['DOCUMENT_ROOT']??''));
+    // Never suggest taking ownership of a parent directory or a website's document root.
+    $dedicatedAppDirectory=$documentRoot!==false && $path===__DIR__ && $path!==$documentRoot;
+    return permissionCommands($path,(int)$ids['uid'],@fileowner($path),$traverseOnly,$dedicatedAppDirectory);
 }
 function permissionProblem(string $path,bool $traverseOnly=false): never {
     $ids=phpProcessIds();
@@ -428,7 +435,10 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <?php endif; ?>
 <?php if ($error!==''): ?>
 <div class="alert" role="alert"><strong><?=tr_html($locked?'Setup locked':'Cannot continue')?></strong><p class="message"><?=esc($error)?></p>
-<?php if ($commands): ?><p><?=tr_html('On the server, use this command, then retry:')?></p><pre><?=esc(implode("\n",$commands))?></pre>
+<?php if ($commands): ?>
+<p><?=tr_html(str_starts_with($commands[0],'sudo chown')?'If this directory is dedicated to this OPDS installation, run these commands, then retry:':'On the server, use this command, then retry:')?></p>
+<pre><?=esc(implode("\n",$commands))?></pre>
+<?php if (str_starts_with($commands[0],'sudo chown')): ?><small><?=tr_html('This changes only the listed directory, not its contents. If ownership must stay unchanged, ask the administrator to grant PHP access with ACLs instead.')?></small><?php endif; ?>
 <?php if (str_contains($commands[0],'setfacl')): ?><small><?=tr_html('If ACLs are unavailable, ask the server administrator to grant only the permissions shown above.')?></small><?php endif; ?>
 <?php elseif (str_contains($error,tr('the PHP service account'))): ?><small><?=tr_html('Find the worker user in PHP-FPM pool settings or your hosting panel, then grant the permissions shown above.')?></small><?php endif; ?>
 </div>
