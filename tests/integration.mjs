@@ -420,26 +420,33 @@ try{
      await zh.getByRole('button',{name:'登录',exact:true}).click();
      await zh.getByRole('heading',{name:'书库根目录'}).waitFor();
      await zh.getByRole('button',{name:'上传书籍',exact:true}).waitFor();
-     const tools=zh.locator('header.top details.tools');
-     assert.equal(await tools.locator('summary').innerText(),'CLI / API 与上传 Skill');
-     await tools.locator('summary').click();
-     await tools.getByRole('link',{name:'下载 SKILL.md'}).waitFor();
-     await zh.keyboard.press('Escape');assert.equal(await tools.getAttribute('open'),null);
-
+     const account=zh.locator('header.top details.account');
+     const avatar=account.getByLabel('账号菜单');
+     const cliMenu=account.getByRole('button',{name:'CLI / API 与上传 Skill'});
+     const tools=zh.locator('#tools-dialog');
+     assert.equal(await cliMenu.isVisible(),false);
+     await avatar.focus();await zh.keyboard.press('Enter');
+     await cliMenu.waitFor();
+     await account.getByRole('link',{name:'OPDS 目录'}).waitFor();
+     await account.getByRole('button',{name:'退出登录'}).waitFor();
+     await zh.keyboard.press('Escape');assert.equal(await account.getAttribute('open'),null);
      await zh.locator('.sidebar a[href="up.php?dir=Share%20shelf"]').click();
      await zh.setViewportSize({width:390,height:844});
-     await tools.locator('summary').click();
-     await tools.getByRole('link',{name:'下载 SKILL.md'}).waitFor();
-     const toolBounds=await tools.locator('.tools-popover').boundingBox();
+     await avatar.click();
+     const toolBounds=await account.locator('.account-popover').boundingBox();
      assert(toolBounds.x>=0 && toolBounds.x+toolBounds.width<=390);
+     await cliMenu.click();
+     assert.equal(await account.getAttribute('open'),null);
+     await tools.getByRole('link',{name:'下载 SKILL.md'}).waitFor();
      zh.once('dialog',d=>d.accept());
      await tools.getByRole('button',{name:'生成上传令牌'}).click();
      assert.equal((await tools.locator('input.share-link').inputValue()).length,64);
      await zh.keyboard.press('Escape');
+     assert.equal(await avatar.evaluate(el=>document.activeElement===el),true);
 
      await zh.getByRole('button',{name:'管理目录订阅'}).click();
      await zh.getByRole('button',{name:'创建分享',exact:true}).click();
-     await zh.getByRole('button',{name:'管理目录订阅'}).getByText(/到期时间：.*（UTC）/).waitFor();
+     await zh.getByRole('button',{name:'管理目录订阅'}).getByText(/到期 \d{4}-\d{2}-\d{2}/).waitFor();
      await zh.getByRole('button',{name:'管理目录订阅'}).click();
      await zh.getByRole('link',{name:'预览',exact:true}).click();
      await zh.getByText(/只读预览 · 此订阅可查看 [0-9]+ 本书/).waitFor();
@@ -463,16 +470,16 @@ try{
        assert.equal((await ui({action:'login',username:demo,password})).status,303);
        const demoToken=await getToken();
        const books=[
-         ['分布式系统：从一致性到工程实践.epub',epubBytes],['数据库内核阅读笔记.txt','阅读笔记'],
-         ['大规模系统设计的取舍.epub',epubBytes],['日志、事务与恢复.txt','读书摘记'],
-         ['架构师的思考框架.epub',epubBytes],['数据系统设计手记.txt','随手摘录'],
+         ['01 分布式数据库：从复制到共识.epub',epubBytes],['02 云数据库架构设计.epub',epubBytes],
+         ['03 日志与事件流.epub',epubBytes],['04 对象存储与数据湖.epub',epubBytes],
+         ['05 数据库读书会笔记.txt','阅读笔记'.repeat(1600)],['06 下次阅读清单.txt','读书摘记'.repeat(1600)],
        ];
        assert.equal((await upload(demoToken,'架构与数据库',books)).status,200);
        assert.equal((await upload(demoToken,'周末阅读',[['城市漫游.epub',epubBytes]])).status,200);
        assert.equal((await upload(demoToken,'阅读笔记',[['本周阅读清单.txt','书目']])).status,200);
        assert.equal((await ui({action:'share',dir:'架构与数据库'})).status,303);
        const config=path.join(data,'conf','config.php');
-       fs.writeFileSync(config,fs.readFileSync(config,'utf8').replace("'title' => 'Test Site'","'title' => '青禾书库'"));
+       fs.writeFileSync(config,fs.readFileSync(config,'utf8').replace("'title' => 'Test Site'","'title' => '个人书库'"));
        await zh.unrouteAll();
        await zh.context().clearCookies();
        await zh.setViewportSize({width:1260,height:840});
@@ -481,9 +488,12 @@ try{
        await zh.getByRole('button',{name:'登录',exact:true}).click();
        await zh.getByRole('link',{name:/架构与数据库/}).click();
        for(const name of ['架构与数据库','周末阅读','阅读笔记'])await zh.locator('.sidebar').getByRole('link',{name:new RegExp(name)}).waitFor();
-       await zh.getByRole('button',{name:'管理目录订阅'}).getByText('已分享').waitFor();
+       await zh.getByRole('button',{name:'管理目录订阅'}).getByText('分享中',{exact:true}).waitFor();
        const shot=(name)=>zh.screenshot({path:path.join(process.env.SCREENSHOT_DIR,name)});
        await shot('opds-desktop.png');
+       await avatar.click();
+       await shot('opds-account-menu.png');
+       await zh.locator('h1').click();
        await zh.setViewportSize({width:390,height:844});
        const firstBook=await zh.locator('.book-name').first().boundingBox();
        assert(firstBook.y+firstBook.height<844);

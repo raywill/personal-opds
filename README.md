@@ -68,7 +68,7 @@ In the web dashboard, use the folder sidebar (the **Choose folder** button on a 
 
 ## AI uploads
 
-Open **CLI / API & upload Skill** in the top-right of the dashboard, then generate a private per-account token and save it securely. A new token immediately replaces the old one for future requests. Download the generated `SKILL.md` and set the token in the agent's protected environment as `OPDS_TOKEN`. The token is never embedded in the skill. The API token does not authenticate reads or the web UI.
+Open the top-right account menu and choose **CLI / API & upload Skill**, then generate a private per-account token and save it securely. A new token immediately replaces the old one for future requests. Download the generated `SKILL.md` and set the token in the agent's protected environment as `OPDS_TOKEN`. The token is never embedded in the skill. The API token does not authenticate reads or the web UI.
 
 ```sh
 curl --fail-with-body --show-error -H "Authorization: Bearer $OPDS_TOKEN" \
