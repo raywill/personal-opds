@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'Cannot determine the public application path.' => '无法识别当前应用的访问路径，请检查 Web 服务器的 SCRIPT_NAME 设置。',
+  'Invalid public site address.' => '站点公开地址无效。',
   'Existing library path; refusing to claim it.' => '书库目录已存在，不能将它分配给新账号。',
   'Account already exists.' => '该账号已存在。',
   'Only active accounts can be reset.' => '仅能重置已激活的账号。',

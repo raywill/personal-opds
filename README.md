@@ -130,6 +130,18 @@ php admin.php migrate alice /absolute/path/to/old/books --apply
 
 The first command previews safe root and first-level EPUB/TXT files and conflicts. The second copies into one account without deleting or overwriting source files. It rejects destination name conflicts before copying. If a storage or validation error occurs midway, already copied files remain and original files are not removed. Review the report before retrying. Unsupported types, symlinks and nested folders are not migrated. Reset clients to the new username/password; the old upload token is not reused. Never copy the old credential file into the new data directory.
 
+## Move the application to another URL path
+
+You can move the application to another directory on the same HTTPS host without rerunning the installer or changing the private data path. Web login, OPDS links and new Agent and activation links use the current public PHP entry-point path; the HTTPS origin still comes from the private configuration, not from request headers. After moving, open the new web URL and sign in again. Update the URLs in existing readers and upload clients; old URLs will only work if the web server still serves or redirects the old path. Do not rely on redirects for authenticated uploads.
+
+For CLI commands that generate links, there is no web request to supply the new path. Set it for the command, for example:
+
+```sh
+OPDS_BASE_URL=https://example.com/opds/ php admin.php invite USERNAME
+```
+
+The web server should pass the public PHP path in `SCRIPT_NAME` (for example, `/opds/up.php`). Do not configure it using client request headers.
+
 ## Development
 
 ```sh

@@ -17,6 +17,34 @@ function bootstrapFailure(string $message): never
     exit;
 }
 
+// The configured address supplies a trusted HTTPS origin, not a binding to
+// the installation folder. HTTP_HOST and forwarding headers are not trusted.
+function publicAppBase(string $configured): string
+{
+    $cli=PHP_SAPI==='cli';
+    $override=$cli?getenv('OPDS_BASE_URL'):false;
+    $address=$override!==false&&$override!==''?$override:$configured;
+    $base=parse_url($address);
+    if (!$base || ($base['scheme']??'')!=='https' ||
+        !preg_match('/\A(?:[a-z0-9.-]+|\[[0-9a-f:]+\])\z/iD',$base['host']??'') ||
+        isset($base['user']) || isset($base['pass']) || isset($base['query']) || isset($base['fragment']) ||
+        !filter_var($address,FILTER_VALIDATE_URL)) bootstrapFailure(tr('Invalid public site address.'));
+    $origin='https://'.$base['host'].(isset($base['port'])?':'.$base['port']:'');
+    if ($cli) {
+        $path=rtrim($base['path']??'','/').'/';
+    } else {
+        // SCRIPT_NAME is the web server's public path to the PHP entry point,
+        // not PATH_INFO, the underlying filesystem path, or a proxy header.
+        $script=$_SERVER['SCRIPT_NAME']??'';
+        if (!is_string($script)||!preg_match('~\A((?:/[a-zA-Z0-9._-]+)*/)(?:up|api|index)\.php\z~D',$script,$parts))
+            bootstrapFailure(tr('Cannot determine the public application path.'));
+        $path=$parts[1];
+    }
+    if (!preg_match('~\A(?:/[a-zA-Z0-9._-]+)*/\z~D',$path)||preg_match('~/(?:\.|\.\.)/~',$path))
+        bootstrapFailure(tr('Invalid public site address.'));
+    return $origin.$path;
+}
+
 $locations=['books_dir'=>__DIR__.'/books-data', 'config_dir'=>__DIR__.'/conf'];
 if (file_exists(__DIR__.'/paths.php') || is_link(__DIR__.'/paths.php')) {
     if (is_link(__DIR__.'/paths.php') || !is_file(__DIR__.'/paths.php') || !is_readable(__DIR__.'/paths.php')) {
@@ -49,7 +77,7 @@ if (PHP_SAPI!=='cli') {
     }
 }
 define('SHARE_KEY', $settings['share_key']);
-define('BASE_URL', $settings['base_url']);
+define('BASE_URL', publicAppBase(is_string($settings['base_url']??null)?$settings['base_url']:''));
 define('LIBRARY_TITLE', $settings['title']);
 define('MAX_CATEGORY_DEPTH', $settings['max_category_depth']);
 define('DATA_DIR', $locations['books_dir']);

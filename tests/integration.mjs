@@ -848,6 +848,48 @@ try{
      pass('Chinese desktop/mobile member tabs, single-role editing and invitations, separate library settings');
    } finally { await browser.close(); }
  }
+ {
+ // Move the real PHP application without changing config.php or private data.
+ fs.rmSync(path.join(data,'conf','.rate.json'),{force:true});
+ const relocated=path.join(web,'opds');
+ fs.renameSync(app,relocated);
+ const moved=new URL('/opds/',base).href;
+ cookies.clear();
+ const signIn=await request(moved+'up.php');
+ assert.equal(signIn.status,200);
+ assert((signIn.headers['set-cookie']??[]).some(cookie=>/path=\/opds\//i.test(cookie)));
+ const loginMoved=await post(moved+'up.php',{action:'login',csrf:csrf(signIn),username:'alice',password});
+ assert.equal(loginMoved.status,303);
+ assert.equal(loginMoved.headers.location,moved+'up.php');
+ const shelf=await request(moved+'up.php');
+ assert(shelf.text.includes('Library root'));
+ const xml=await request(moved+'index.php',{headers:{...auth('alice',password),host:'untrusted.example','x-forwarded-host':'untrusted.example','x-forwarded-prefix':'/wrong'}});
+ assert.equal(xml.status,200); assert(xml.text.includes(moved+'index.php')); assert(!xml.text.includes('untrusted.example'));
+ assert.equal((await request(moved+url({s:legacyKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'kept in the original library');
+ const setup=await post(moved+'up.php',{action:'agent_setup',csrf:csrf(shelf)});
+ assert.equal(setup.status,200); assert(setup.json.setup.includes(moved+'api.php'));
+ const created=await post(moved+'up.php',{action:'account_invite',csrf:csrf(shelf),username:'moveduser',operation:'create'});
+ assert.equal(created.status,200); assert(created.text.includes(moved+'up.php?account=moveduser'));
+ const cliLink=execFileSync(php,[path.join(relocated,'admin.php'),'invite','movedcli'],{encoding:'utf8',env:{...process.env,OPDS_BASE_URL:moved}}).trim();
+ assert(cliLink.startsWith(moved+'up.php?account=movedcli'));
+ if(process.env.PLAYWRIGHT_MODULE && process.env.CHROME_BIN){
+   const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+   const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+   try {
+     const ctx=await browser.newContext({ignoreHTTPSErrors:true});
+     await ctx.addCookies([{name:'OPDS_LIBRARY',value:'old-install-cookie',domain:'localhost',path:'/library/',secure:true,httpOnly:true}]);
+     const page=await ctx.newPage();
+     await page.goto(moved+'up.php');
+     await page.getByLabel('Username',{exact:true}).fill('alice');
+     await page.getByLabel('Password',{exact:true}).fill(password);
+     await page.getByRole('button',{name:'Sign in',exact:true}).click();
+     await page.getByRole('heading',{name:'Library root',exact:true}).waitFor();
+     assert(page.url().startsWith(moved));
+     assert((await ctx.cookies(moved)).some(cookie=>cookie.path==='/opds/'));
+   } finally { await browser.close(); }
+ }
+ pass('physical relocation without configuration changes: browser login, cookies, feed, anonymous download, and issued links follow the new path');
+ }
  console.log(`Passed ${results.length} integration suites.`);
 } catch(e) {
  console.error(fs.readFileSync(path.join(temp,'php.log'),'utf8').split('\n').slice(-30).join('\n').replace(/((?:activate|s)=)[^&\s]+/g,'$1[redacted]'));
