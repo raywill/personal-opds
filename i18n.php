@@ -1,12 +1,12 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
-  'Connect Agent' => '连接 Agent',
+  'Connect Agent' => '连接Agent',
   'Copy complete Agent setup' => '复制完整 Agent 配置',
   'Choose a destination, then paste the complete setup into your agent. It includes the Skill, connection address, and an upload-only token.' => '选择上传位置，再将完整配置粘贴给 Agent。配置已包含 Skill、连接地址和仅用于上传的令牌。',
   'Manage Agent connections' => '管理 Agent 连接',
   'Revoke this Agent connection? Uploads using it will stop.' => '撤销此 Agent 连接？使用该连接的上传将停止。',
-  'Standalone Skill download was removed. Use Connect Agent to copy the complete setup.' => '已移除独立的 Skill 下载，请在右上角「连接 Agent」复制完整配置。',
+  'Standalone Skill download was removed. Use Connect Agent to copy the complete setup.' => '已移除独立的 Skill 下载，请在右上角「连接Agent」复制完整配置。',
   'Account not found.' => '找不到该账号。',
   'Only disabled accounts can be restored.' => '只能恢复已禁用的账号。',
   'Only the server operator can change another site administrator.' => '其他站点管理员只能由服务器运维人员变更。',

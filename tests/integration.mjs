@@ -482,13 +482,13 @@ try{
      await zh.getByRole('button',{name:'上传书籍',exact:true}).waitFor();
      const account=zh.locator('header.top details.account');
      const avatar=account.getByLabel('账号菜单');
-     const cliMenu=account.getByRole('button',{name:'连接 Agent'});
+     const cliMenu=account.getByRole('button',{name:'连接Agent'});
      const tools=zh.locator('#tools-dialog');
      assert.equal(await cliMenu.isVisible(),false);
      await avatar.focus();await zh.keyboard.press('Enter');
      await cliMenu.waitFor();
      await account.getByRole('button',{name:'连接阅读器'}).waitFor();
-     assert.deepEqual(await account.locator('button.menu-item[data-dialog]').allTextContents(),['连接 Agent','书库设置','连接阅读器','站点账号','书库成员']);
+     assert.deepEqual(await account.locator('button.menu-item[data-dialog]').allTextContents(),['连接Agent','连接阅读器','书库设置','站点账号','书库成员']);
      await account.getByRole('button',{name:'连接阅读器'}).click();
      await zh.getByRole('dialog',{name:'连接阅读器'}).getByRole('button',{name:'复制 OPDS 地址'}).waitFor();
      await zh.getByRole('dialog',{name:'连接阅读器'}).getByLabel('关闭').click();
@@ -502,7 +502,7 @@ try{
      assert(toolBounds.x>=0 && toolBounds.x+toolBounds.width<=390);
      await cliMenu.click();
      assert.equal(await account.getAttribute('open'),null);
-     await tools.getByRole('heading',{name:'连接 Agent'}).waitFor();
+     await tools.getByRole('heading',{name:'连接Agent'}).waitFor();
      for (const old of ['终端命令','API 接口','旧版个人上传令牌','下载 SKILL.md','本库成员令牌','有效上传令牌']) {
        assert.equal(await tools.getByText(old,{exact:true}).count(),0);
      }
@@ -878,7 +878,7 @@ try{
      await page.getByLabel('账号菜单').click();
      await page.getByLabel('你在当前书库的角色').getByText('所有者',{exact:true}).waitFor();
      assert.equal(await page.getByRole('button',{name:'新建书库',exact:true}).count(),0);
-     await page.getByRole('button',{name:'连接 Agent'}).click();
+     await page.getByRole('button',{name:'连接Agent'}).click();
      const compound=page.locator('#agent-setup');
      await compound.locator('select[name=destination]').selectOption('Legacy upgrade');
      if(process.env.RBAC_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.RBAC_SCREENSHOT_DIR,'02-一键安装Skill.png')});
@@ -896,7 +896,7 @@ try{
      await page.locator('#tools-dialog').getByLabel('关闭').click();
      await page.waitForLoadState();
      await page.getByLabel('账号菜单').click();
-     await page.getByRole('button',{name:'连接 Agent'}).click();
+     await page.getByRole('button',{name:'连接Agent'}).click();
      const management=page.locator('#tools-dialog details').filter({hasText:'管理 Agent 连接'});
      assert.equal(await management.getAttribute('open'),null);
      await management.locator('summary').click();

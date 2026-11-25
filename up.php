@@ -393,9 +393,9 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <div class="account-library" aria-label="<?=tr_html('Your role in this library')?>"><span><?=h(libraryTitle($library,$viewer))?></span><span class="role-chip <?=$library['owner']===$viewer?'role-owner':''?>"><?=h($library['owner']===$viewer?tr('Owner'):libraryRoleLabel($library['members'][$viewer]??null))?></span></div>
 <?php endif; ?></div>
 <?php if (isset($permissions['agent_upload'])): ?><button type="button" class="menu-item" data-dialog="tools-dialog"><?=icon('terminal')?><?=tr_html('Connect Agent')?></button><?php endif; ?>
-<?php if (isset($permissions['settings'])): ?><button type="button" class="menu-item" data-dialog="library-settings-dialog"><?=icon('more')?><?=tr_html('Library settings')?></button><?php endif; ?>
 <?php if (array_filter($allLibraries,static fn($row)=>in_array('opds',$row['permissions'],true))): ?>
 <button type="button" class="menu-item" data-dialog="reader-dialog"><?=icon('book')?><?=tr_html('Connect e-reader')?></button><?php endif; ?>
+<?php if (isset($permissions['settings'])): ?><button type="button" class="menu-item" data-dialog="library-settings-dialog"><?=icon('more')?><?=tr_html('Library settings')?></button><?php endif; ?>
 <?php if ($siteAdmin): ?><button type="button" class="menu-item" data-dialog="accounts-dialog"><?=icon('plus')?><?=tr_html('Site accounts')?></button><?php endif; ?>
 <?php if (isset($permissions['members'])): ?><button type="button" class="menu-item" data-dialog="members-dialog"><?=icon('folder')?><?=tr_html('Library members')?></button><?php endif; ?>
 <?php if ($pendingInvites || $archivedLibraries): ?><button type="button" class="menu-item" data-dialog="account-libraries-dialog"><?=icon('folder')?><?=tr_html('Invitations and archived libraries')?><?php if ($pendingInvites): ?> · <?=count($pendingInvites)?><?php endif; ?></button><?php endif; ?>
