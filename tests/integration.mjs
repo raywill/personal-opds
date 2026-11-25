@@ -1232,13 +1232,18 @@ try{
     <item id="cover" href="cover.png" media-type="image/png"/>
     <item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>
     </manifest><spine><itemref idref="intro"/><itemref idref="second"/></spine></package>');
-    $z->addFromString("nav.xhtml",'<html><body><nav epub:type="toc"><ol><li><a href="read/one.xhtml">Opening pages</a></li><li><a href="read/two.xhtml#return-here">Second chapter</a></li></ol></nav></body></html>');
+    $nav='';$subsections='';
+    for ($i=1;$i<=32;$i++) {
+      $nav.='<li><a href="read/two.xhtml#sub-'.$i.'">Subsection '.$i.'</a></li>';
+      $subsections.='<h3 id="sub-'.$i.'">Topic '.$i.'</h3>'.str_repeat('<p>Topic reading text.</p>',12);
+    }
+    $z->addFromString("nav.xhtml",'<html><body><nav epub:type="toc"><ol><li><a href="read/one.xhtml">Opening pages</a></li><li><a href="read/two.xhtml#return-here">Second chapter</a></li>'.$nav.'</ol></nav></body></html>');
     $z->addFromString("read/one.xhtml",'<html><body><h2>Opening text</h2><p>First chapter.</p>
     <a href="two.xhtml#return-here">Go to chapter two</a><img src="../cover.png" alt="Book image" onload="alert(1)">
     <iframe src="https://example.invalid/frame"></iframe><script>alert(1)</script>
     <img src="https://example.invalid/image"><a href="https://example.invalid/">External</a></body></html>');
     $z->addFromString("read/two.xhtml",'<html><body><h2 id="return-here">The second chapter</h2>'.
-    str_repeat('<p>This chapter has enough text to scroll and test saved progress on reload.</p>',60).'</body></html>');
+    str_repeat('<p>This chapter has enough text to scroll and test saved progress on reload.</p>',60).$subsections.'</body></html>');
     $z->addFromString("other.bin",random_bytes(4*1024*1024));$z->setCompressionName("other.bin",ZipArchive::CM_STORE);
     $z->addFromString("cover.png",base64_decode($argv[2]));$z->close();
  `,fixture,png]);
@@ -1361,6 +1366,20 @@ try{
      await contents.click();
      await web.keyboard.press('Escape');
      await drawer.waitFor({state:'hidden'});
+     await web.locator('[data-book-anchor="sub-28"]').evaluate(heading=>heading.scrollIntoView({block:'start'}));
+     const beforeDrawer=await web.locator('#viewport').evaluate(el=>el.scrollTop);
+     await contents.click();
+     const focused=drawer.getByRole('button',{name:'Subsection 28',exact:true});
+     await focused.waitFor();
+     await drawer.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+     assert.equal(await focused.getAttribute('aria-current'),'location');
+     assert.equal(await drawer.locator('[aria-current]').count(),1);
+     const drawerBox=await drawer.boundingBox(), focusedBox=await focused.boundingBox();
+     assert(focusedBox.y>=drawerBox.y&&focusedBox.y+focusedBox.height<=drawerBox.y+drawerBox.height);
+     assert((await drawer.evaluate(el=>el.scrollTop))>300);
+     assert.equal(await web.locator('#viewport').evaluate(el=>el.scrollTop),beforeDrawer);
+     await web.keyboard.press('Escape');
+     await drawer.waitFor({state:'hidden'});
      await web.getByRole('link',{name:'Back to library'}).click();
      await web.getByRole('link',{name:'readable',exact:true}).waitFor();
      await web.setViewportSize({width:390,height:844});
@@ -1398,7 +1417,7 @@ try{
      await position.click();
      assert.equal(await positionDialog.getByRole('slider',{name:'Reading position'}).inputValue(),'0');
      assert.deepEqual(errors,[]);
-     pass('desktop/mobile EPUB drawer, continuous TXT, percentage jump and resume, and header fades without layout movement');
+     pass('desktop/mobile EPUB drawer, current subsection centered on reopen, continuous TXT, percentage jump and resume, and header fades without layout movement');
    } finally { await browser.close(); }
  }
  {

@@ -297,6 +297,7 @@
          busy=false;displayProgress();
          if(!jumpAnchor(fragment))vp.scrollTop=clamp(ratio)*limit();
          displayProgress();position();
+         if(toc.open)highlightCurrentChapter();
      }catch(error){
          if(seq!==requestNo)return;
          failed=()=>load(target,ratio,fragment);
@@ -341,21 +342,56 @@
          event.preventDefault();step(['ArrowRight','PageDown'].includes(event.key)?1:-1);
      }
  });
+ const chapters=$('chapters');
+ let tocCache=null,tocRequest=null,tocRows=[];
  function addChapter(label,to,fragment=''){
      const item=document.createElement('button');item.type='button';item.textContent=label;
-     if(to===part)item.setAttribute('aria-current','location');
      item.addEventListener('click',()=>{if(closingToc)return;closeToc();load(to,0,fragment);});
-     $('chapters').append(item);
+     chapters.append(item);
+     return {item,to,fragment};
  }
- let tocCache=null;
+ function highlightCurrentChapter(){
+     const same=tocRows.filter(row=>row.to===part);
+     let active=same.find(row=>!row.fragment)??same[0];
+     if(same.length>1){
+         const anchors=new Map();
+         for(const node of book.querySelectorAll('[data-book-anchor]')){
+             if(!anchors.has(node.dataset.bookAnchor))anchors.set(node.dataset.bookAnchor,node);
+         }
+         const viewport=vp.getBoundingClientRect();
+         const readingLine=viewport.top+(document.querySelector('.reader-bar')?.offsetHeight||0)+28;
+         let nearest=-Infinity;
+         for(const row of same){
+             const anchor=anchors.get(row.fragment);
+             if(!anchor||!anchor.getClientRects().length)continue;
+             const top=anchor.getBoundingClientRect().top;
+             if(top<=readingLine&&top>=nearest){nearest=top;active=row;}
+         }
+     }
+     chapters.querySelector('[aria-current]')?.removeAttribute('aria-current');
+     active?.item.setAttribute('aria-current','location');
+     // Some EPUBs omit a spine document from their TOC. Show the nearest
+     // preceding entry in that case, without marking it as the current one.
+     let prior=null;
+     if(!active)for(const row of tocRows)if(row.to<part&&(!prior||row.to>=prior.to))prior=row;
+     const item=(active??prior??tocRows[0])?.item;
+     if(item){
+         const drawer=toc.getBoundingClientRect(), row=item.getBoundingClientRect();
+         toc.scrollTop+=row.top-drawer.top-(toc.clientHeight-row.height)/2;
+     }
+ }
  contents.addEventListener('click',async()=>{
-     showToc();$('chapters').replaceChildren();
-     const message=document.createElement('p');message.textContent=cfg.loading;$('chapters').append(message);
+     if(toc.open)return;
+     showToc();
+     if(tocRows.length){highlightCurrentChapter();return;}
+     const message=document.createElement('p');message.textContent=cfg.loading;chapters.replaceChildren(message);
      try{
-         tocCache??=(await get({toc:1})).toc;
-         $('chapters').replaceChildren();
-         for(const [to,fragment,label] of tocCache)addChapter(label||format(cfg.part,to+1,data?.count||tocCache.length),to,fragment);
-         if(toc.open)$('chapters').querySelector('[aria-current]')?.scrollIntoView({block:'nearest'});
+         tocRequest??=get({toc:1}).then(result=>result.toc).finally(()=>{tocRequest=null;});
+         tocCache??=await tocRequest;
+         if(!toc.open||closingToc)return;
+         chapters.replaceChildren();
+         tocRows=tocCache.map(([to,fragment,label])=>addChapter(label||format(cfg.part,to+1,data?.count||tocCache.length),to,fragment));
+         highlightCurrentChapter();
      }catch(error){message.textContent=error.message||cfg.failed;}
  });
  load(validPart(saved.part)?saved.part:0,clamp(saved.ratio));
