@@ -2,6 +2,8 @@
 declare(strict_types=1);
 require_once __DIR__.'/libraries.php';
 
+final class AccountStorageError extends RuntimeException {}
+
 const ACTIVATION_TTL = 86400;
 const SHARE_TTL = 120 * 86400;
 
@@ -114,7 +116,11 @@ function activeAccount(string $name): ?array
 }
 function loginAccount(string $name,string $password): ?array
 {
-    $user=activeAccount($name);
+    try {
+        $user=activeAccount($name);
+    } catch (Throwable $error) {
+        throw new AccountStorageError('Account storage could not be read. Ask the site operator to run the account diagnostics.',0,$error);
+    }
     $valid=verifyAccountPassword($password,$user['password']??ACCOUNT_PASSWORD_FORMAT.'$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.');
     return $valid && $password!=='' ? $user : null;
 }
@@ -187,14 +193,20 @@ function activateAccount(string $name,string $secret,string $password): void
 {
     if (!accountName($name) || !preg_match('/\A[a-f0-9]{64}\z/D',$secret)) reject('Activation link is invalid or expired.',403);
     if ($password==='') reject(tr('Password cannot be empty.'));
-    withLock('libraries',fn()=>stateUpdate('users',function (&$users) use ($name,$secret,$password) {
-        $row=$users[$name]??[];
-        if (!in_array($row['state']??null,['pending','active'],true) || ($row['activation']['expires']??0)<=time() ||
-            !hash_equals($row['activation']['digest']??'',hash('sha256',$secret))) reject('Activation link is invalid or expired.',403);
-        directoryUnder(accountBooks(),$name);
-        $row['password']=ACCOUNT_PASSWORD_FORMAT.password_hash(accountPasswordMaterial($password),PASSWORD_DEFAULT);
-        $row['state']='active'; unset($row['activation']); $users[$name]=$row;
-    }));
+    try {
+        withLock('libraries',fn()=>stateUpdate('users',function (&$users) use ($name,$secret,$password) {
+            $row=$users[$name]??[];
+            if (!in_array($row['state']??null,['pending','active'],true) || ($row['activation']['expires']??0)<=time() ||
+                !hash_equals($row['activation']['digest']??'',hash('sha256',$secret))) reject('Activation link is invalid or expired.',403);
+            directoryUnder(accountBooks(),$name);
+            $row['password']=ACCOUNT_PASSWORD_FORMAT.password_hash(accountPasswordMaterial($password),PASSWORD_DEFAULT);
+            $row['state']='active'; unset($row['activation']); $users[$name]=$row;
+        }));
+    } catch (RequestError $error) {
+        throw $error;
+    } catch (Throwable $error) {
+        throw new AccountStorageError('Account activation could not save the password. Ask the site operator to run the account diagnostics.',0,$error);
+    }
 }
 function tokenAccount(string $token): ?string
 {

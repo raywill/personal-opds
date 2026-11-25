@@ -6,8 +6,79 @@ require __DIR__.'/security.php';
 require __DIR__.'/upload-common.php';
 require __DIR__.'/accounts.php';
 
+// Running write commands as root replaces 0600 state with root-owned files.
+function checkOperatorIdentity(): void
+{
+    $uid=function_exists('posix_geteuid')?posix_geteuid():null;
+    $owner=@fileowner(CONFIG_DIR);
+    if ($uid!==null && $owner!==false && $uid!==$owner) {
+        throw new RuntimeException("Run admin.php as the PHP service user (private config directory owner UID $owner, current UID $uid). Use sudo -u USER php admin.php ...");
+    }
+}
+
+function doctorAccounts(string $username): int
+{
+    $issues=0;
+    $uid=function_exists('posix_geteuid')?posix_geteuid():null;
+    $dir=CONFIG_DIR;
+    $owner=@fileowner($dir);
+    if ($uid!==null && $owner!==false && $uid!==$owner) {
+        echo "ERROR: Run this check as the PHP service user. Config owner UID $owner; current UID $uid.
+";
+        return 2;
+    }
+    if ($username!==''&&!accountName($username)) throw new RuntimeException('Specify a lowercase username.');
+    $inspect=static function (string $path,bool $write,bool $optional=false,bool $directory=false) use (&$issues,$owner): bool {
+        clearstatcache(true,$path);
+        $info=@lstat($path);
+        if (!$info && $optional) {
+            echo "OK: $path does not exist yet; created on first use.
+";
+            return true;
+        }
+        $reasons=[];
+        if (!$info) $reasons[]='missing or inaccessible';
+        else {
+            if (($info['mode']&0170000)!==($directory?0040000:0100000)) $reasons[]='wrong file type (no symlinks)';
+            if (!$directory&&$info['nlink']!==1) $reasons[]='not a single-link file';
+            if (($info['mode']&0077)!==0) $reasons[]='accessible by other accounts';
+            if ($owner!==false&&$info['uid']!==$owner) $reasons[]="owner UID {$info['uid']} differs from PHP service UID $owner";
+            if (!is_readable($path)) $reasons[]='not readable';
+            if ($write&&!is_writable($path)) $reasons[]='not writable';
+            if ($directory&&!is_executable($path)) $reasons[]='not traversable';
+        }
+        if ($reasons) { ++$issues; echo 'ERROR: '.$path.' — '.implode('; ',$reasons).PHP_EOL; return false; }
+        echo "OK: $path
+"; return true;
+    };
+    if (!$inspect($dir,true,false,true)) return 2;
+    if ($inspect($dir.'/users.json',false)) {
+        try {
+            $accounts=stateRead('users');
+            echo "OK: users.json format.
+";
+            if ($username!=='') {
+                if (!isset($accounts[$username])) { ++$issues; echo "ERROR: Account does not exist.
+"; }
+                else {
+                    try {
+                        $root=directoryUnder(accountBooks(),$username);
+                        if (!is_executable($root)) throw new RuntimeException('Personal book directory cannot be entered.');
+                        echo "OK: Personal book directory.
+";
+                    } catch (Throwable $e) { ++$issues; echo 'ERROR: Personal book directory: '.$e->getMessage().PHP_EOL; }
+                }
+            }
+        } catch (Throwable $e) { ++$issues; echo 'ERROR: users.json: '.$e->getMessage().PHP_EOL; }
+    }
+    foreach (['.users.lock','.libraries.lock','.rate.json'] as $file) $inspect($dir.'/'.$file,true,true);
+    return $issues?2:0;
+}
+
 try {
     [$script,$command,$user]=array_pad($argv,3,'');
+    if ($command==='doctor') exit(doctorAccounts($user));
+    if ($command!=='rbac-audit') checkOperatorIdentity();
     if ($command==='rbac-check') {
         $report=withLock('libraries','libraryPreflight');
         echo json_encode($report,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR).PHP_EOL;
@@ -107,7 +178,7 @@ try {
             }
             echo "Copied; original library retained.\n";
         });
-    } else reject('Usage: php admin.php invite|reset|disable|quota|migrate|grant-site-admin|revoke-site-admin USER [options], library-quota LIBRARY_ID BYTES FILES, rbac-check, or rbac-audit');
+    } else reject('Usage: php admin.php invite|reset|disable|quota|migrate|grant-site-admin|revoke-site-admin USER [options], library-quota LIBRARY_ID BYTES FILES, rbac-check, rbac-audit, or doctor [USERNAME]');
 } catch (Throwable $e) {
     fwrite(STDERR,$e->getMessage().PHP_EOL);exit(1);
 }

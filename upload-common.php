@@ -20,6 +20,11 @@ function publicError(Throwable $error): string
     // Do not log a stack trace: its arguments could contain credentials.
     error_log('EPUB uploader: ' . get_class($error) . ': ' . $error->getMessage()
         . ' at ' . $error->getFile() . ':' . $error->getLine());
+    if ($error instanceof AccountStorageError) {
+        $cause=$error->getPrevious();
+        if ($cause) error_log('EPUB uploader (account storage): '.get_class($cause).': '.$cause->getMessage().' at '.$cause->getFile().':'.$cause->getLine());
+        return tr($error->getMessage());
+    }
     return tr('Server processing failed. Check the server log.');
 }
 

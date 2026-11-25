@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'Account storage could not be read. Ask the site operator to run the account diagnostics.' => '无法读取账号文件，请让站点管理员运行账号诊断。',
+  'Account activation could not save the password. Ask the site operator to run the account diagnostics.' => '账号激活时无法保存密码，请让站点管理员运行账号诊断。',
   'Cannot determine the public application path.' => '无法识别当前应用的访问路径，请检查 Web 服务器的 SCRIPT_NAME 设置。',
   'Invalid public site address.' => '站点公开地址无效。',
   'Existing library path; refusing to claim it.' => '书库目录已存在，不能将它分配给新账号。',

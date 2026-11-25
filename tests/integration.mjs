@@ -197,6 +197,22 @@ try{
  const replacementFirstLink=cli('invite','alice');
  assert.notEqual(replacementFirstLink,aliceLink);
  assert.equal((await activate('alice',aliceLink)).status,403);
+ const activationLock=path.join(data,'conf','.libraries.lock');
+ const accountFile=path.join(data,'conf','users.json');
+ const pendingBefore=fs.readFileSync(accountFile,'utf8');
+ fs.chmodSync(activationLock,0o644);
+ const blockedActivation=await activate('alice',replacementFirstLink);
+ assert.equal(blockedActivation.status,503);
+ assert(blockedActivation.text.includes('Account activation could not save the password.'));
+ assert(!blockedActivation.text.includes('.libraries.lock'));
+ assert.equal(fs.readFileSync(accountFile,'utf8'),pendingBefore);
+ const doctor=await runFile(php,[path.join(app,'admin.php'),'doctor','alice']).catch(error=>error);
+ assert.equal(doctor.code,2);assert.match(doctor.stdout,/ERROR: .*\.libraries\.lock/);
+ assert(!doctor.stdout.includes(JSON.parse(pendingBefore).records.alice.activation.digest));
+ fs.chmodSync(activationLock,0o600);
+ assert.match(cli('doctor','alice'),/OK: users.json format/);
+ assert.equal(fs.readFileSync(accountFile,'utf8'),pendingBefore);
+ pass('account diagnostics names the blocked write lock without exposing secrets or consuming the activation link');
  assert.equal((await activate('alice',replacementFirstLink)).status,303);
  assert.equal((await activate('alice',replacementFirstLink)).status,403);
  // Simulate an existing deployment with an unversioned bcrypt hash.

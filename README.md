@@ -130,6 +130,16 @@ php admin.php migrate alice /absolute/path/to/old/books --apply
 
 The first command previews safe root and first-level EPUB/TXT files and conflicts. The second copies into one account without deleting or overwriting source files. It rejects destination name conflicts before copying. If a storage or validation error occurs midway, already copied files remain and original files are not removed. Review the report before retrying. Unsupported types, symlinks and nested folders are not migrated. Reset clients to the new username/password; the old upload token is not reused. Never copy the old credential file into the new data directory.
 
+## Diagnose account storage
+
+Run the read-only check as the same OS user that runs PHP-FPM, not as root:
+
+```sh
+sudo -u www-data php admin.php doctor USERNAME
+```
+
+Use your actual PHP service user in place of `www-data`. This checks the private config directory, the account file and format, the relevant write locks and optionally the named account’s personal book directory. It does not generate links, change file permissions or print secrets. An exit code of 2 indicates a problem. Do not remove live lock files or apply recursive permissions: if an affected regular, single-link file is wrongly owned, correct only that file. When PHP provides the POSIX extension, CLI write commands reject a user that does not match the private configuration directory owner.
+
 ## Move the application to another URL path
 
 You can move the application to another directory on the same HTTPS host without rerunning the installer or changing the private data path. Web login, OPDS links and new Agent and activation links use the current public PHP entry-point path; the HTTPS origin still comes from the private configuration, not from request headers. After moving, open the new web URL and sign in again. Update the URLs in existing readers and upload clients; old URLs will only work if the web server still serves or redirects the old path. Do not rely on redirects for authenticated uploads.

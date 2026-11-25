@@ -210,7 +210,7 @@ try {
     }
 } catch (Throwable $e) {
     if ($action==='agent_setup') jsonResponse(['success'=>false,'message'=>publicError($e)],$e instanceof RequestError?$e->getCode():500);
-    $status=$e instanceof RequestError?$e->getCode():500;
+    $status=$e instanceof RequestError?$e->getCode():($e instanceof AccountStorageError?503:500);
     if ($action==='folder' && ($_SERVER['HTTP_ACCEPT']??'')==='application/json')
         jsonResponse(['success'=>false,'message'=>publicError($e)],$status);
     if ($action==='upload') jsonResponse(['success'=>false,'message'=>publicError($e),'results'=>[]],$status);
