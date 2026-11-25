@@ -428,9 +428,22 @@ try{
      assert(await page.evaluate(()=>Boolean(document.querySelector('#root-folders').compareDocumentPosition(document.querySelector('#books-panel')) & Node.DOCUMENT_POSITION_FOLLOWING)));
      await rootFolder.click();
      await page.getByRole('heading',{name:'Share shelf',exact:true}).waitFor();
-     await page.getByRole('navigation',{name:'Library location'}).getByRole('link',{name:'alice’s library',exact:true}).waitFor();
+     const breadcrumb=page.getByRole('navigation',{name:'Library location'});
+     const shelfRoot=breadcrumb.getByRole('link',{name:'alice’s library',exact:true});
+     await shelfRoot.waitFor();
+     assert.equal(await breadcrumb.locator('h1').getAttribute('aria-current'),'page');
+     assert.equal(await breadcrumb.locator('.separator').textContent(),'/');
+     for(const width of [1260,390]){
+       await page.setViewportSize({width,height:900});
+       const rootBox=await shelfRoot.boundingBox();
+       const folderBox=await breadcrumb.getByRole('heading',{name:'Share shelf',exact:true}).boundingBox();
+       const fontSize=await breadcrumb.locator('h1').evaluate(h=>parseFloat(getComputedStyle(h).fontSize));
+       assert(Math.abs(rootBox.y-folderBox.y)<=1 && rootBox.x<folderBox.x,'Breadcrumb is on one line');
+       assert(fontSize>=16&&fontSize<=20,'Breadcrumb uses restrained readable text');
+     }
+     await page.setViewportSize({width:1260,height:900});
      assert.equal(await page.locator('#root-folders').count(),0);
-     await page.locator('header a.brand').click();
+     await shelfRoot.click();
      await page.getByRole('heading',{name:'alice’s library',exact:true}).waitFor();
 
      const download=page.waitForEvent('download');
