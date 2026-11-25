@@ -67,45 +67,58 @@ function phpProcessIds(bool $installing = false): ?array {
 }
 function permissionCommands(string $path,int $uid,int|false $owner,bool $traverseOnly,bool $dedicatedAppDirectory): array {
     $quoted=shellArg($path);
-    $mode=$traverseOnly?'--x':'rwx';
     if ($owner===$uid) return ['sudo chmod u+'.($traverseOnly?'x':'rwx').' -- '.$quoted];
     if ($owner!==false && !$traverseOnly && $dedicatedAppDirectory)
         return ['sudo chown -- '.shellArg((string)$uid).' '.$quoted,'sudo chmod u+rwx -- '.$quoted];
-    return ['sudo setfacl -m '.shellArg('u:'.$uid.':'.$mode).' -- '.$quoted];
+    return [];
 }
 function directoryAdvice(string $path,bool $traverseOnly=false): array {
     $ids=phpProcessIds();
     if (!$ids || $ids['uid']===0) return [];
-    $documentRoot=realpath((string)($_SERVER['DOCUMENT_ROOT']??''));
+    $documentRoot=empty($_SERVER['DOCUMENT_ROOT']) ? false : realpath((string)$_SERVER['DOCUMENT_ROOT']);
     // Never suggest taking ownership of a parent directory or a website's document root.
-    $dedicatedAppDirectory=$documentRoot!==false && $path===__DIR__ && $path!==$documentRoot;
-    return permissionCommands($path,(int)$ids['uid'],@fileowner($path),$traverseOnly,$dedicatedAppDirectory);
+    $dedicatedAppDirectory=$documentRoot!==false && $path===__DIR__ && $path!==$documentRoot && insideDirectory($path,$documentRoot);
+    $owner=@fileowner($path);
+    if (!$traverseOnly && !$dedicatedAppDirectory && ($path===__DIR__ || $owner!==$ids['uid'])) return [];
+    return permissionCommands($path,(int)$ids['uid'],$owner,$traverseOnly,$dedicatedAppDirectory);
 }
 function permissionProblem(string $path,bool $traverseOnly=false): never {
     $ids=phpProcessIds();
     $who=$ids && $ids['uid']!==0 ? 'UID '.(int)$ids['uid'] : tr('the PHP service account');
     $need=$traverseOnly ? tr('traverse (x)') : tr('read, write and traverse (rwx)');
-    throw new InstallProblem(sprintf(tr('%s needs %s on %s.'),$who,$need,$path),directoryAdvice($path,$traverseOnly));
+    $commands=directoryAdvice($path,$traverseOnly);
+    $message=sprintf(tr('%s needs %s on %s.'),$who,$need,$path);
+    if (!$commands) {
+        if ($traverseOnly)
+            $message.=' '.tr('Choose a location whose parent directories PHP can already enter, or ask the administrator to grant traverse access only. Do not make a shared parent writable.');
+        elseif ($path===__DIR__)
+            $message.=' '.tr('Use a dedicated application directory. Do not grant PHP write access to the website root or a shared directory.');
+    }
+    throw new InstallProblem($message,$commands);
 }
 function targetPath(string $path): string {
     $path=rtrim(trim($path),'/');
     if ($path==='' || $path[0]!=='/' || strlen($path)>4096 || preg_match('/[\\\\\x00-\x1f\x7f]/',$path)) stopInstall(tr('Use an absolute data directory path.'));
+    foreach (explode('/',substr($path,1)) as $part)
+        if ($part==='' || $part==='.' || $part==='..') stopInstall(tr('The data directory path contains an invalid component.'));
+    return $path;
+}
+function checkStoragePath(string $path): void {
     $cursor='';
     foreach (explode('/',substr($path,1)) as $part) {
-        if ($part==='' || $part==='.' || $part==='..') stopInstall(tr('The data directory path contains an invalid component.'));
         if (is_dir($cursor ?: '/') && !is_executable($cursor ?: '/')) permissionProblem($cursor ?: '/',true);
         $cursor.='/'.$part;
         if (is_link($cursor) || (file_exists($cursor) && !is_dir($cursor))) stopInstall(tr('The data directory path must not contain symbolic links or files.'));
     }
-    return $path;
 }
 function makeDirectory(string $path,int $mode,array &$createdDirs): void {
     clearstatcache(true);
     if (is_link($path)) stopInstall(tr('The data directory path must not contain symbolic links or files.'));
     if (is_dir($path)) return;
     $parent=dirname($path);
-    if (!is_dir($parent)) makeDirectory($parent,0755,$createdDirs);
-    writableDirectory($parent);
+    clearstatcache(true,$parent);
+    if (!is_dir($parent) || !is_writable($parent) || !is_executable($parent))
+        stopInstall(tr('Cannot create directory under this parent. Check the directory and filesystem policy: ').$parent);
     if (!@mkdir($path,$mode)) {
         if (is_dir($path) && !is_link($path)) return;
         stopInstall(tr('Cannot create directory. Check free space and filesystem policy: ').$path);
@@ -132,6 +145,9 @@ function storageLayout(string $webRoot,string $dataDir): array {
     $documentRoot=$documentRoot!==''?realpath($documentRoot):false;
     if ($documentRoot===false || !is_dir($documentRoot)) stopInstall(tr('Cannot verify the document root. Configure DOCUMENT_ROOT correctly.'));
     if (insideDirectory($dataRoot,$documentRoot) || insideDirectory($dataRoot,$webRoot) || insideDirectory($documentRoot,$dataRoot) || insideDirectory($webRoot,$dataRoot)) stopInstall(tr('Choose a separate data directory outside the document root and web application directory: ').$documentRoot);
+    // Reject disallowed paths before reporting permissions or suggesting shell commands.
+    clearstatcache(true);
+    checkStoragePath($dataRoot);
     return ['root'=>$dataRoot,'books'=>$dataRoot.'/books','conf'=>$dataRoot.'/conf'];
 }
 function payloadFiles(string $root): array {
@@ -149,11 +165,35 @@ function payloadFiles(string $root): array {
     }
     return $files;
 }
-function inspectDirectoryTarget(string $path, string $invalidMessage): void {
+function preparePrivateRootCommand(string $path,int $uid): string {
+    $quoted=shellArg($path);
+    // Deliberately no -p: never change an existing directory or any parent.
+    return 'sudo mkdir -m 0700 -- '.$quoted.' && sudo chown -- '.shellArg((string)$uid).' '.$quoted;
+}
+function inspectPrivateRoot(string $path): bool {
+    if (is_dir($path)) return true;
+    $parent=dirname($path);
+    if (!@is_dir($parent)) stopInstall(sprintf(tr('The parent directory %s does not exist or PHP cannot see it. Choose an existing accessible parent outside the website, or ask the administrator to prepare the private data directory.'),$parent));
+    if (!@is_executable($parent)) permissionProblem($parent,true);
+    if (!@is_writable($parent)) {
+        $ids=phpProcessIds();
+        $commands=$ids && $ids['uid']!==0 ? [preparePrivateRootCommand($path,(int)$ids['uid'])] : [];
+        throw new InstallProblem(sprintf(tr('The private data directory %s does not exist and PHP cannot create it under %s. Ask the administrator to create only the private directory, or choose another location. Do not grant PHP write access to the parent.'),$path,$parent),$commands);
+    }
+    return false;
+}
+function inspectPrivateDirectory(string $path,string $invalidMessage,bool $privateConfig=false): void {
     if (is_link($path) || (file_exists($path) && !is_dir($path))) stopInstall(tr($invalidMessage));
-    $existing=$path;
-    while (!is_dir($existing) && dirname($existing)!==$existing) $existing=dirname($existing);
-    writableDirectory($existing);
+    if (!is_dir($path)) return;
+    $ids=phpProcessIds();
+    $phpOwns=$ids && $ids['uid']!==0 && @fileowner($path)===$ids['uid'];
+    if ($privateConfig && ((int)fileperms($path)&077)!==0) {
+        $commands=$phpOwns ? ['sudo chmod 700 -- '.shellArg($path)] : [];
+        throw new InstallProblem(tr('The configuration directory must be private (0700).').' '.$path,$commands);
+    }
+    if (is_readable($path) && is_writable($path) && is_executable($path)) return;
+    if ($phpOwns) permissionProblem($path);
+    throw new InstallProblem(sprintf(tr('PHP cannot read, write or enter the private directory %s. Ask the administrator to grant the PHP service account access to this dedicated directory only, or choose a new private data directory.'),$path));
 }
 function inspectConfiguration(string $conf): void {
     foreach (['pass.conf','config.php','users.json','shares.json','installed.lock'] as $name) {
@@ -163,18 +203,15 @@ function inspectConfiguration(string $conf): void {
 }
 function inspectStorage(array $layout): void {
     $books=$layout['books']; $conf=$layout['conf'];
-    inspectDirectoryTarget($layout['root'],'Invalid storage configuration.');
-    inspectDirectoryTarget($books,'Invalid library directory.');
-    inspectDirectoryTarget($conf,'Invalid configuration directory.');
+    if (!inspectPrivateRoot($layout['root'])) return;
+    inspectPrivateDirectory($layout['root'],'Invalid storage configuration.');
+    inspectPrivateDirectory($books,'Invalid library directory.');
+    inspectPrivateDirectory($conf,'Invalid configuration directory.',true);
     inspectConfiguration($conf);
-    inspectDirectoryTarget($conf.'/cache','Invalid cache path.');
-    if (is_dir($conf) && ((int)fileperms($conf)&077)!==0) {
-        $commands=@fileowner($conf)===(phpProcessIds()['uid']??null) ? ['sudo chmod 700 -- '.shellArg($conf)] : [];
-        throw new InstallProblem(tr('The configuration directory must be private (0700).').' '.$conf,$commands);
-    }
+    inspectPrivateDirectory($conf.'/cache','Invalid cache path.');
     if (!is_dir($books)) return;
     $entries=@scandir($books);
-    if ($entries===false) permissionProblem($books);
+    if ($entries===false) stopInstall(tr('Cannot list the private books directory.').' '.$books);
     foreach ($entries as $entry) {
         if ($entry==='.' || $entry==='..') continue;
         $path=$books.'/'.$entry;
@@ -436,10 +473,9 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <?php if ($error!==''): ?>
 <div class="alert" role="alert"><strong><?=tr_html($locked?'Setup locked':'Cannot continue')?></strong><p class="message"><?=esc($error)?></p>
 <?php if ($commands): ?>
-<p><?=tr_html(str_starts_with($commands[0],'sudo chown')?'If this directory is dedicated to this OPDS installation, run these commands, then retry:':'On the server, use this command, then retry:')?></p>
+<p><?=tr_html(str_starts_with($commands[0],'sudo chown')?'If this directory is dedicated to this OPDS installation, run these commands, then retry:':'Run the following on the server, then retry:')?></p>
 <pre><?=esc(implode("\n",$commands))?></pre>
-<?php if (str_starts_with($commands[0],'sudo chown')): ?><small><?=tr_html('This changes only the listed directory, not its contents. If ownership must stay unchanged, ask the administrator to grant PHP access with ACLs instead.')?></small><?php endif; ?>
-<?php if (str_contains($commands[0],'setfacl')): ?><small><?=tr_html('If ACLs are unavailable, ask the server administrator to grant only the permissions shown above.')?></small><?php endif; ?>
+<?php if (str_starts_with($commands[0],'sudo chown')): ?><small><?=tr_html('This changes only the listed directory, not its contents. If ownership must stay unchanged, ask the administrator to grant access using the server’s existing policy or choose another directory.')?></small><?php endif; ?>
 <?php elseif (str_contains($error,tr('the PHP service account'))): ?><small><?=tr_html('Find the worker user in PHP-FPM pool settings or your hosting panel, then grant the permissions shown above.')?></small><?php endif; ?>
 </div>
 <?php endif; ?>
@@ -462,7 +498,7 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <label for="title"><?=tr_html('Site name')?></label><input id="title" name="title" maxlength="200" value="<?=esc($fields['title'])?>" required>
 <small><?=tr_html('Shown on the website and in the OPDS catalog. It applies to all users.')?></small>
 <label for="data_dir"><?=tr_html('Private data root')?></label><input id="data_dir" name="data_dir" aria-describedby="data_help" value="<?=esc($fields['data_dir'])?>" required>
-<small id="data_help"><?=tr_html('Use a dedicated directory outside the website root. Do not expose it through an alias.')?></small>
+<small id="data_help"><?=tr_html('Use a dedicated directory outside the website root, under an existing parent. Do not expose it through an alias.')?></small>
 <div class="hint"><code>conf/</code> <?=tr_html('stores configuration')?><br><code>books/&lt;username&gt;/</code> <?=tr_html('is each user’s private book directory')?></div>
 <?php elseif ($step===3): ?>
 <label for="username"><?=tr_html('First username')?></label>

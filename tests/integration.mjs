@@ -44,7 +44,8 @@ async function request(endpoint='install.php',options={}){
 }
 const form=fields=>({method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:Buffer.from(new URLSearchParams(fields).toString())});
 const csrf=r=>{const m=r.text.match(/name="csrf" value="([a-f0-9]+)"/);assert(m,r.text.slice(0,400));return m[1];};
-const data=path.join(temp,'opds-data');
+const dataParent=path.join(temp,'storage-parent');fs.mkdirSync(dataParent,0o700);
+const data=path.join(dataParent,'opds-data');
 const settings={data_dir:data,title:'Test Site',username:'alice'};
 const auth=(user,password)=>({authorization:'Basic '+Buffer.from(user+':'+password).toString('base64')});
 const password='safe-test-password-123';
@@ -76,14 +77,17 @@ try{
  const example='/home/wwwroot/www.reactshare.cn/personal-opds';
  const permissionNonOwner=JSON.parse(execFileSync(php,['-r',
    extract('shellArg','phpProcessIds')+extract('permissionCommands','directoryAdvice')+
-   'echo json_encode([permissionCommands($argv[1],33,0,false,true),permissionCommands($argv[1],33,33,false,true),permissionCommands($argv[1],33,0,true,false),permissionCommands($argv[1],33,0,false,false)]);',example
+   'echo json_encode([permissionCommands($argv[1],33,0,false,true),permissionCommands($argv[1],33,33,false,true),permissionCommands($argv[1],33,0,true,false),permissionCommands($argv[1],33,0,false,false),permissionCommands($argv[1],33,33,true,false),permissionCommands($argv[1],33,false,false,true)]);',example
  ],{encoding:'utf8'}));
  assert.deepEqual(permissionNonOwner,[
    ["sudo chown -- '33' '"+example+"'","sudo chmod u+rwx -- '"+example+"'"],
    ["sudo chmod u+rwx -- '"+example+"'"],
-   ["sudo setfacl -m 'u:33:--x' -- '"+example+"'"],
-   ["sudo setfacl -m 'u:33:rwx' -- '"+example+"'"]
+   [],
+   [],
+   ["sudo chmod u+x -- '"+example+"'"],
+   []
  ]);
+ assert(!fs.readFileSync(path.join(project,'install.php'),'utf8').includes('setfacl'));
  pass('installer permission commands: dedicated directory without ACL, unchanged ownership for shared directories');
  let r=await request(); for(let n=0;n<50&&r.status===502;n++){await delay(25);r=await request();} const setup=csrf(r);
  const setupPost=(step,action,fields={})=>post('install.php',{csrf:setup,step,action,...fields},{accept:'application/json'});
@@ -99,12 +103,29 @@ try{
  assert(!locationStep.text.includes('name="base_url"'));assert(locationStep.text.includes('Site name'));
  r=await setupPost(2,'next',{...settings,title:''});assert.equal(r.status,400);assert.equal(r.json.step,2);
  assert(r.json.message.includes('Invalid site name'));
- r=await setupPost(2,'next',{...settings,data_dir:path.join(readOnly,'opds-data')});assert.equal(r.status,400);assert.equal(r.json.step,2);
- assert(r.json.message.includes(readOnly));assert(r.json.commands[0].includes('chmod u+rwx'));
+ const protectedData=path.join(readOnly,"opds-data's");
+ r=await setupPost(2,'next',{...settings,data_dir:protectedData});
+ assert.equal(r.status,400);assert.equal(r.json.step,2);
+ assert(r.json.message.includes(protectedData));assert(r.json.message.includes(readOnly));
+ const quote=p=>"'"+p.replaceAll("'", "'\"'\"'")+"'";
+ assert.deepEqual(r.json.commands,[`sudo mkdir -m 0700 -- ${quote(protectedData)} && sudo chown -- '${process.getuid()}' ${quote(protectedData)}`]);
+ assert(!fs.existsSync(protectedData));
+ r=await setupPost(2,'next',{...settings,data_dir:path.join(readOnly,'missing','opds-data')});
+ assert.equal(r.status,400);assert.match(r.json.message,/does not exist or PHP cannot see it/);assert.deepEqual(r.json.commands,[]);
  fs.chmodSync(readOnly,0o600);
- r=await setupPost(2,'next',{...settings,data_dir:path.join(readOnly,'opds-data')});
- assert.equal(r.json.step,2);assert(r.json.commands[0].includes('chmod u+x'));
+ r=await setupPost(2,'next',{...settings,data_dir:protectedData});
+ assert.equal(r.json.step,2);assert.deepEqual(r.json.commands,[`sudo chmod u+x -- ${quote(readOnly)}`]);
+ assert.match(r.json.message,/traverse \(x\)/);
+ fs.chmodSync(readOnly,0o700);fs.mkdirSync(protectedData,0o700);fs.chmodSync(readOnly,0o100);
+ r=await setupPost(2,'next',{...settings,data_dir:protectedData});
+ assert.equal(r.status,200,r.text);assert.equal(r.json.step,3);
+ assert.equal(fs.statSync(readOnly).mode&0o777,0o100);
+ r=await setupPost(3,'back');assert.equal(r.json.step,2);
+ fs.chmodSync(protectedData,0o500);
+ r=await setupPost(2,'next',{...settings,data_dir:protectedData});
+ assert.equal(r.status,400);assert.deepEqual(r.json.commands,[`sudo chmod u+rwx -- ${quote(protectedData)}`]);
  fs.chmodSync(readOnly,0o700);
+ pass('private leaf creation advice contains no ACL or parent writes; precreated root works with traverse-only ancestors');
  denySetupProbe=true;
  r=await setupPost(2,'next',settings);assert.equal(r.status,400);assert.equal(r.json.step,2);assert(r.json.message.includes('HTTP 403'));
  denySetupProbe=false;
@@ -135,8 +156,11 @@ try{
  r=await setupPost(4,'install');assert.equal(r.status,400);assert.equal(r.json.step,3);
  assert(fs.existsSync(latePath));assert(!fs.existsSync(path.join(app,'paths.php')));
  fs.rmdirSync(latePath);
+ fs.chmodSync(dataParent,0o100);
  r=await setupPost(3,'next',{username:'alice'});assert.equal(r.json.step,4);
  r=await setupPost(4,'install',{username:'tampered'});assert.equal(r.status,200,r.text);assert(r.json.installed);const aliceLink=r.json.activation_url;
+ assert.equal(fs.statSync(dataParent).mode&0o777,0o100);
+ fs.chmodSync(dataParent,0o700);
  assert.equal(r.json.catalog_url,base+'index.php');assert.equal(r.json.upload_url,base+'up.php');
  assert.equal(new URL(aliceLink).pathname,'/library/up.php');
  assert(fs.readFileSync(path.join(data,'conf','config.php'),'utf8').includes('Test Site'));
@@ -336,5 +360,5 @@ try{
 } finally {
  proxy.closeAllConnections();await new Promise(r=>proxy.close(r));
  try{process.kill(-server.pid,'SIGTERM');}catch{}
- fs.closeSync(log);fs.rmSync(temp,{recursive:true,force:true});
+ fs.closeSync(log);fs.chmodSync(dataParent,0o700);fs.rmSync(temp,{recursive:true,force:true});
 }
