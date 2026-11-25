@@ -109,7 +109,7 @@ try {
             if ($password!==passwordField('confirm')) reject(tr('Passwords do not match.'));
             activateAccount($activateFor,$activate,$password);
             $_SESSION=[]; session_regenerate_id(true);
-            $_SESSION['notice']=tr('Password set. Sign in with your new password.');
+            $_SESSION['notice']='Password set. Sign in with your new password.';
             go();
         }
         if ($action==='login') {
@@ -136,7 +136,7 @@ try {
             $requested=field('target_library',$_POST);
             if ($action==='library_restore') librarySettings($requested,$viewer,$action);
             else libraryAnswerInvite($requested,$viewer,$action==='invite_accept',field('invitation_id',$_POST));
-            $_SESSION['notice']=tr($action==='library_restore'?'Library restored.':($action==='invite_accept'?'Invitation accepted.':'Invitation declined.'));
+            $_SESSION['notice']=$action==='library_restore'?'Library restored.':($action==='invite_accept'?'Invitation accepted.':'Invitation declined.');
             go();
         }
         if ($action==='account_invite') {
@@ -146,7 +146,7 @@ try {
             $operation=field('operation',$_POST);
             if ($operation==='disable') {
                 disableAccount($accountInviteName,$viewer,$signedIn['password']);
-                $_SESSION['account_notice']=sprintf(tr('%s was disabled. Their books were kept.'),$accountInviteName);
+                $_SESSION['disabled_account_notice']=$accountInviteName;
                 $return=field('library',$_POST);
                 $returnDir=field('dir',$_POST);
                 header('Location: '.BASE_URL.'up.php?'.http_build_query(
@@ -185,21 +185,21 @@ try {
                 case 'folder':
                     $new=field('folder',$_POST); uploadCommit(static fn()=>createCategory($new));
                     if (($_SERVER['HTTP_ACCEPT']??'')==='application/json') jsonResponse(['success'=>true,'message'=>tr('Folder ready.'),'folder'=>$new]);
-                    $_SESSION['notice']=tr('Folder ready.'); go($new);
+                    $_SESSION['notice']='Folder ready.'; go($new);
                 case 'share':
                 case 'revoke':
                     uploadCommit(static fn()=>manageShare($dir,$action==='revoke'));
                     noteLibraryAction('share.'.$action,['directory'=>$dir]);
-                    $_SESSION['notice']=$action==='revoke'?tr('Share revoked.'):tr('Share link ready.'); go($dir);
+                    $_SESSION['notice']=$action==='revoke'?'Share revoked.':'Share link ready.'; go($dir);
                 case 'rename':
                     $renameDraft=['file'=>field('file',$_POST),'name'=>field('new_name',$_POST)];
                     manageBook('rename',$dir,$renameDraft['file'],$renameDraft['name']);
-                    $_SESSION['notice']=tr('Book renamed.'); go($dir);
+                    $_SESSION['notice']='Book renamed.'; go($dir);
                 case 'move':
                 case 'delete':
                     manageBook($action,$dir,field('file',$_POST),field('destination',$_POST));
                     if ($action==='delete') noteLibraryAction('book.deleted',['directory'=>$dir,'file'=>field('file',$_POST)]);
-                    $_SESSION['notice']=$action==='move'?tr('Book moved.'):tr('Book deleted.'); go($dir);
+                    $_SESSION['notice']=$action==='move'?'Book moved.':'Book deleted.'; go($dir);
                 case 'agent_setup':
                     reserveRateAttempt('agent-setup',30,300);
                     $grant=issueAgentToken($library['id'],$viewer);
@@ -210,11 +210,11 @@ try {
                         stateUpdate('users',static function (&$users) use ($viewer) { unset($users[$viewer]['token']); });
                     });
                     noteLibraryAction('legacy-token.revoked');
-                    $_SESSION['notice']=tr('Token revoked.'); go($dir);
+                    $_SESSION['notice']='Token revoked.'; go($dir);
                 case 'agent_revoke':
                 case 'managed_token_revoke':
                     revokeAgentToken($library['id'],$viewer,field('token_id',$_POST));
-                    $_SESSION['notice']=tr('Token revoked.'); go($dir);
+                    $_SESSION['notice']='Token revoked.'; go($dir);
                 case 'member_invite':
                 case 'member_edit':
                 case 'member_remove':
@@ -223,15 +223,15 @@ try {
                     if (isset($_POST['roles']) || $role==='') reject('Choose one role.');
                     $newInvite=libraryMemberChange($library['id'],$viewer,field('member',$_POST),$action,$role,field('invitation_id',$_POST));
                     if ($newInvite!==null) $_SESSION['created_invitation']=['library'=>$library['id'],'id'=>$newInvite];
-                    $_SESSION['notice']=tr(match($action) {
+                    $_SESSION['notice']=match($action) {
                         'member_invite'=>'Library invitation sent.', 'member_cancel'=>'Invitation cancelled.',
                         default=>'Library membership saved.',
-                    }); goMembers($dir,$action);
+                    }; goMembers($dir,$action);
                 case 'library_rename':
                 case 'library_archive':
                     librarySettings($library['id'],$viewer,$action,field('title',$_POST));
                     if ($action==='library_archive') { unset($GLOBALS['opdsLibrary']); go(); }
-                    $_SESSION['notice']=tr('Library renamed.'); go($dir);
+                    $_SESSION['notice']='Library renamed.'; go($dir);
                 default: reject('Unknown action.');
             }
         }
@@ -254,8 +254,11 @@ try {
     $error=publicError($e);
     if ($library) { try { resolveDestinationDirectory($dir); } catch (Throwable) { $dir=''; } }
 }
-$notice=$_SESSION['notice']??''; unset($_SESSION['notice']);
-if ($siteAdmin && isset($_GET['accounts'])) { $accountNotice=$_SESSION['account_notice']??''; unset($_SESSION['account_notice']); }
+$notice=tr($_SESSION['notice']??''); unset($_SESSION['notice']);
+if ($siteAdmin && isset($_GET['accounts']) && isset($_SESSION['disabled_account_notice'])) {
+    $accountNotice=sprintf(tr('%s was disabled. Their books were kept.'),$_SESSION['disabled_account_notice']);
+    unset($_SESSION['disabled_account_notice']);
+}
 $siteAccounts=$siteAdmin?stateRead('users'):[];
 ksort($siteAccounts,SORT_NATURAL);
 $pendingInvites=$user?libraryInvites($viewer):[];
@@ -312,7 +315,7 @@ function fileSizeLabel(int $size): string {
     return $size>=1048576?number_format($size/1048576,1).' MiB':($size>=1024?number_format($size/1024,1).' KiB':$size.' B');
 }
 ?>
-<!doctype html><html lang="<?=uiLanguage()==='zh'?'zh-CN':'en'?>"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!doctype html><html lang="<?=uiLanguageTag()?>"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?=h(LIBRARY_TITLE)?> · Personal OPDS</title>
 <style nonce="<?=h($nonce)?>">
 :root{color-scheme:light;--ink:#182739;--soft:#465d77;--line:#d9e3ee;--paper:#fff;--bg:#f8fafc;--accent:#204fce;--blue-soft:#e8eefc;--mint:#e6f5ed;--green:#056447;--warn:#9b263a}

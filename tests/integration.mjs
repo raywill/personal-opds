@@ -86,7 +86,26 @@ try{
    for(const [,label] of fs.readFileSync(path.join(project,source),'utf8').matchAll(/\b(?:tr|tr_html|reject|RequestError)\('((?:[^'\\]|\\.)*)'/g))
      assert(uniqueKeys.has(label),`Missing Chinese translation in ${source}: ${label}`);
  }
- pass('Chinese dictionary has no duplicate keys or missing literal labels and public errors');
+ const literals=source=>[...source.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map(m=>m[1]);
+ const librarySource=fs.readFileSync(path.join(project,'libraries.php'),'utf8');
+ const flowSource=fs.readFileSync(path.join(project,'up.php'),'utf8');
+ const dynamicLabels=[
+   ...literals(template.match(/\$steps=\[(.*?)\];/s)[1]),
+   ...literals(template.match(/\$headings=\[(.*?)\];/s)[1]),
+   ...literals(template.match(/\$descriptions=\[(.*?)\];/s)[1]),
+   ...literals(librarySource.match(/const LIBRARY_ROLE_LABELS = \[(.*?)\];/s)[1]).filter(t=>/^[A-Z]/.test(t)),
+   ...literals(librarySource.match(/const LIBRARY_ROLE_GROUPS = \[(.*?)\];/s)[1]).filter(t=>/^[A-Z]/.test(t)),
+   ...literals(librarySource.match(/const LIBRARY_ROLE_DESCRIPTIONS = \[(.*?)\];/s)[1]).filter(t=>/^[A-Z]/.test(t)),
+   ...literals(flowSource.match(/tr_html\(match\(\$state\)\{([^}]+)\}/)[1]).filter(t=>/^[A-Z]/.test(t)),
+   'Shared','Expiring soon','Expired','Revoked','Not shared','Unavailable',
+   'Library invitation sent.','Invitation cancelled.','Library membership saved.','Invitation accepted.','Invitation declined.',
+ ];
+ for(const label of dynamicLabels)assert(uniqueKeys.has(label),'Missing dynamic Chinese label: '+label);
+ const placeholder=/%(?:\d+\$)?[sd]/g;
+ for(const [,source,target] of dictionary.matchAll(/^  '((?:[^'\\]|\\.)*)' => '((?:[^'\\]|\\.)*)',/gm)){
+   assert.deepEqual(source.match(placeholder)??[],target.match(placeholder)??[],'Translation placeholders: '+source);
+ }
+ pass('Chinese dictionary covers literal and dynamic labels without duplicate keys or mismatched placeholders');
  const extract=(name,next)=>template.slice(template.indexOf('function '+name+'('),template.indexOf('function '+next+'('));
  const example='/home/wwwroot/www.reactshare.cn/personal-opds';
  const permissionNonOwner=JSON.parse(execFileSync(php,['-r',
@@ -115,6 +134,8 @@ try{
  r=await setupPost(2,'next',{...settings,data_dir:path.join(web,'data')});assert.equal(r.status,400);assert.equal(r.json.step,2);
  const locationStep=await request();assert(!locationStep.text.includes(base));
  const zhSetup=await request('install.php',{headers:{'accept-language':'zh-CN'}});
+ assert.equal(zhSetup.headers['content-language'],'zh-CN');
+ assert.match(zhSetup.headers.vary,/Accept-Language/i);
  assert(zhSetup.text.includes('lang="zh-CN"'));assert(zhSetup.text.includes('设置书库与存储'));assert(zhSetup.text.includes('私有数据根目录'));
  const badStorage=await post('install.php',{csrf:setup,step:2,action:'next',...settings,data_dir:path.join(web,'data')},{'accept':'application/json','accept-language':'zh-CN'});
  assert.equal(badStorage.status,400);assert(badStorage.json.message.includes('网站根目录'));
@@ -161,6 +182,9 @@ try{
  assert(reviewStep.text.includes('<dt>OPDS address:</dt><dd><code>'+base+'index.php</code>'));
  assert(reviewStep.text.includes('<dt>Web dashboard:</dt><dd><code>'+base+'up.php</code>'));
  assert(!reviewStep.text.includes('<code>'+base+'</code>'));
+ const reviewZh=await request('install.php',{headers:{'accept-language':'en; q=0.2, zh-CN; q=0.9'}});
+ assert.equal(reviewZh.headers['content-language'],'zh-CN');
+ assert(reviewZh.text.includes('<dt>OPDS 地址：</dt>')&&reviewZh.text.includes('<dt>网页后台：</dt>'));
  r=await setupPost(4,'back');assert.equal(r.json.step,3);
  r=await setupPost(3,'back',{username:'alice'});assert.equal(r.json.step,2);
  const occupied=path.join(temp,'occupied');
@@ -267,6 +291,17 @@ try{
  const book=await opds('alice',{download:'sample.epub'});
  assert.equal(book.status,200); assert.equal(book.headers['content-type'],'application/epub+zip');
  pass('valid EPUB upload, metadata search and download; malformed EPUB rejected');
+ const feedZh=await request(url({feed:'books',q:'private'}),{headers:{...auth('alice',password),'accept-language':'zh-CN'}});
+ const feedEn=await request(url({feed:'books',q:'private'}),{headers:{...auth('alice',password),'accept-language':'en'}});
+ assert.equal(feedZh.headers['content-language'],'zh-CN');
+ assert.match(feedZh.headers.vary,/Accept-Language/i);
+ assert.match(feedZh.headers.vary,/Authorization/i);
+ assert(feedZh.text.includes('<name>未知作者</name>')&&feedEn.text.includes('<name>Unknown author</name>'));
+ const zhApiError=await request('api.php?action=verify',{headers:{'accept-language':'zh-CN'}});
+ assert.equal(zhApiError.status,401);
+ assert.equal(zhApiError.headers['content-language'],'zh-CN');
+ assert.match(zhApiError.json.message,/令牌|token/);
+ pass('OPDS and API agree with the negotiated language even on a warm metadata cache');
 
 
  r=await ui({action:'share',dir:'Share shelf'});assert.equal(r.status,303,r.text);
@@ -709,6 +744,8 @@ try{
  assert.equal((await request(directInvite(currentInvite))).status,200);
  assert.equal((await ui({action:'invite_accept',target_library:family,invitation_id:oldInvite})).status,410);
  assert.equal((await ui({action:'invite_accept',target_library:family,invitation_id:currentInvite})).status,303);
+ const zhFlash=await request('up.php',{headers:{'accept-language':'zh-CN'}});
+ assert(zhFlash.text.includes('已接受邀请。')&&!zhFlash.text.includes('Invitation accepted.'));
 
  assert.equal((await ui({action:'invite_accept',target_library:family})).status,410);
  assert.equal((await ui({action:'invite_accept',target_library:tech})).status,303);
@@ -1032,6 +1069,7 @@ try{
      await currentRole.getByText('阅读者',{exact:true}).waitFor();
      await page.getByRole('button',{name:'站点账号',exact:true}).click();
      const accountDialog=page.locator('#accounts-dialog');
+     await accountDialog.locator('.account-record').filter({hasText:'ellen'}).getByText('已激活',{exact:true}).waitFor();
      await accountDialog.getByLabel('用户名').fill('frank');
      await accountDialog.getByRole('button',{name:'创建账号并生成链接'}).click();
      await accountDialog.getByRole('button',{name:'复制激活链接'}).click();

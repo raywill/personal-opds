@@ -17,7 +17,7 @@ function xmlDocument(string $text): DOMDocument
 }
 function metadata(string $path, string $name): array
 {
-    $result = ['title' => pathinfo($name, PATHINFO_FILENAME), 'author' => 'Unknown', 'language' => ''];
+    $result = ['title' => pathinfo($name, PATHINFO_FILENAME), 'author' => '', 'language' => ''];
     if (strtolower(pathinfo($name, PATHINFO_EXTENSION)) === 'txt') { validateTxt($path); return $result; }
     validateEpub($path);
     $zip = new ZipArchive();
@@ -78,12 +78,13 @@ function books(array $directories, string $requiredCategory = '', bool $requireC
                 if (!$stat || $stat['size'] < 1 || $stat['size'] > MAX_FILE_SIZE) continue;
                 $old = $cache[$relative] ?? [];
                 if (($old['mtime'] ?? null) === $stat['mtime'] && ($old['size'] ?? null) === $stat['size']
-                    && ($old['ctime'] ?? null) === $stat['ctime'] && ($old['ino']??null)===$stat['ino'] && ($old['dev']??null)===$stat['dev'] && !($old['pending'] ?? false)) {
+                    && ($old['ctime'] ?? null) === $stat['ctime'] && ($old['ino']??null)===$stat['ino'] && ($old['dev']??null)===$stat['dev'] && !($old['pending'] ?? false)
+                    && (($old['author']??null)!=='Unknown'||isset($old['metadata_version']))) {
                     $updated[$relative] = $old; continue;
                 }
                 $record = ['path'=>$relative, 'category'=>(string)$category, 'mtime'=>$stat['mtime'],
                     'size'=>$stat['size'], 'ctime'=>$stat['ctime'], 'ino'=>$stat['ino'], 'dev'=>$stat['dev'], 'title'=>pathinfo($name, PATHINFO_FILENAME),
-                    'author'=>'Unknown', 'language'=>''];
+                    'author'=>'', 'language'=>'', 'metadata_version'=>2];
                 if ($requiredCategory !== '' && (string)$category !== $requiredCategory) {
                     $record['pending'] = true; $updated[$relative] = $record; continue;
                 }

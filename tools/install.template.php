@@ -7,6 +7,7 @@ ini_set('display_errors','0'); ini_set('log_errors','1'); umask(0077);
 header('Content-Type: text/html; charset=UTF-8'); header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff'); header('X-Frame-Options: DENY');
 header('Referrer-Policy: no-referrer');
+sendUiLanguageHeaders();
 $nonce=base64_encode(random_bytes(24));
 header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$nonce'; script-src 'nonce-$nonce'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
 function esc(string $s): string { return htmlspecialchars($s,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }
@@ -424,7 +425,7 @@ $accountPath=rtrim($fields['data_dir'],'/').'/books/'.$fields['username'];
 $headings=['Check the server','Set up your library','Choose the first username','Confirm your setup'];
 ?>
 <!doctype html>
-<html lang="<?=uiLanguage()==='zh'?'zh-CN':'en'?>">
+<html lang="<?=uiLanguageTag()?>">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?=tr_html('Set up Personal OPDS')?></title>
 <style nonce="<?=esc($nonce)?>">
@@ -487,7 +488,7 @@ dl{display:grid;grid-template-columns:minmax(100px,28%) minmax(0,1fr);margin:0}d
 <form method="post" novalidate>
 <input type="hidden" name="csrf" value="<?=esc($csrf)?>"><input type="hidden" name="step" value="<?=$step?>">
 <?php if ($step===1): ?>
-<dl><dt>PHP</dt><dd><?=esc(PHP_VERSION)?> · <?=esc((string)(PHP_INT_SIZE*8))?>‑bit · <?=esc(PHP_SAPI)?></dd>
+<dl><dt>PHP</dt><dd><?=esc(PHP_VERSION)?> · <?=esc(sprintf(tr('%s-bit'),PHP_INT_SIZE*8))?> · <?=esc(PHP_SAPI)?></dd>
 <dt><?=tr_html('Application directory')?></dt><dd><code><?=esc(__DIR__)?></code></dd></dl>
 <div class="hint"><?=tr_html('Next checks HTTPS, required extensions, upload settings and write access. It does not install anything.')?></div>
 <?php if ($warnings=uploadWarnings()): ?>

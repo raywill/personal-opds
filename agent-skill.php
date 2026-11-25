@@ -30,7 +30,7 @@ description: Upload user-selected EPUB or TXT books to Personal OPDS, choosing a
 
 ### If the upload token stops working
 
-If `expires_at` has passed or verify/upload returns HTTP 401, stop retrying with that token. Say “expired” only if its expiry has passed; otherwise say the token was rejected or may have been revoked. Ask the user to open the same OPDS library, then use the top-right account menu → **Connect Agent** → **Copy complete Agent setup** (「连接Agent」→「复制完整 Agent 配置」) and paste the full setup into this chat.
+If `expires_at` has passed or verify/upload returns HTTP 401, stop retrying with that token. Respond in the user’s language. Say “expired” only if its expiry has passed; otherwise say the token was rejected or may have been revoked. Ask the user to open the same OPDS library, then use the top-right account menu → **Connect Agent** → **Copy complete Agent setup** (「连接Agent」→「复制完整 Agent 配置」) and paste the full setup into this chat.
 
 Replace only that library's saved profile and verify the new token. Resume only the pending files that are known not to have been saved; never resend a successful file or one whose result is unknown.
 SETUP;

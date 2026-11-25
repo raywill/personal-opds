@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'Active' => '已激活',
+  'Unknown author' => '未知作者',
+  '%s-bit' => '%s 位',
   'Connect Agent' => '连接Agent',
   'Copy complete Agent setup' => '复制完整 Agent 配置',
   'Copy and paste into your Agent. It chooses or creates folders in this library. The upload-only token lasts 90 days.' => '复制后粘贴给 Agent。它会在当前书库自行选择或新建目录。上传令牌有效期 90 天。',
@@ -23,7 +26,6 @@ const UI_TRANSLATIONS = array (
   'Remove this member from this library? Their account and own library will stay active.' => '将该成员移出当前书库？对方的账号及其个人书库不会受影响。',
   'Remove from library' => '移出书库',
   '%s’s library' => '%s 的书库',
-  'Connect upload tools' => '连接上传工具',
   'Connect e-reader' => '连接阅读器',
   'Site accounts' => '站点账号',
   'Library members' => '书库成员',
@@ -44,12 +46,6 @@ const UI_TRANSLATIONS = array (
   'Back to my libraries' => '返回我的书库',
   'Add the OPDS address to your reader and sign in with your account.' => '将 OPDS 地址添加到阅读器，并用你的账号登录。',
   'Copy OPDS address' => '复制 OPDS 地址',
-  'One-click Agent setup' => 'Agent 一键配置',
-  'Terminal command' => '终端命令',
-  'API endpoint' => 'API 接口',
-  'Set OPDS_TOKEN to your upload token, then run this command with your file.' => '将上传令牌设为 OPDS_TOKEN，再用下面的命令上传文件。',
-  'Use your upload token as an Authorization: Bearer header. Upload with multipart POST and the files[] field.' => '在 Authorization: Bearer 请求头中传入上传令牌，通过 multipart POST 的 files[] 字段上传。',
-  'Upload API URL' => '上传 API 地址',
   'No account yet? A site administrator can create one from Site accounts.' => '对方还没有账号？请先由站点管理员在「站点账号」开通。',
   'Account storage could not be read. Ask the site operator to run the account diagnostics.' => '无法读取账号文件，请让站点管理员运行账号诊断。',
   'Account activation could not save the password. Ask the site operator to run the account diagnostics.' => '账号激活时无法保存密码，请让站点管理员运行账号诊断。',
@@ -106,17 +102,10 @@ const UI_TRANSLATIONS = array (
   'Web contributor' => '网页投稿者',
   'OPDS-only reader' => '仅 OPDS 阅读',
   'Reader' => '阅读者',
-  'Legacy personal upload token' => '旧版个人上传令牌',
   'Revoke this token? Existing scripts using it will stop working.' => '撤销此令牌？使用该令牌的旧脚本将无法继续上传。',
   'Invalid token name or validity period.' => '令牌名称或有效期无效。',
   'Folder creation requires a whole-library token.' => '只有整库令牌可以允许自动新建目录。',
-  'Token options' => '令牌选项',
-  'Token label' => '令牌名称',
-  'Validity in days' => '有效期（天）',
-  'Upload scope' => '上传范围',
-  'Selected folder only' => '仅选定目录',
   'Entire library' => '整个书库',
-  'Allow folder creation with an entire-library token' => '允许整库令牌自动新建目录',
   'Cancel' => '取消',
   'My personal library' => '我的书库',
   'Library access denied.' => '没有权限访问这个书库。',
@@ -349,7 +338,6 @@ const UI_TRANSLATIONS = array (
   'The token is shown once. Keep it private. Generating one replaces any previous token.' => '令牌只显示一次，请妥善保管。生成新令牌会立即替换旧令牌。',
   'Generate upload token' => '生成上传令牌',
   'Upload token' => '上传令牌',
-  'Download SKILL.md' => '下载 SKILL.md',
   'Set up Personal OPDS' => '安装 Personal OPDS',
   'Your library is installed' => '书库已安装',
   'Open the one-time activation link to set your password. It expires in 24 hours.' => '打开一次性激活链接来设置密码，链接 24 小时后失效。',
@@ -715,11 +703,18 @@ function uiLanguage(): string
     if ($selected !== null) return $selected;
     $best = -1.0; $selected = 'en';
     foreach (explode(',', substr((string)($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? 'en'),0,1024)) as $item) {
-        if (!preg_match('/^\s*(en|zh)(?:-[a-z0-9-]+)?\s*(?:;q=(0(?:\.\d+)?|1(?:\.0+)?))?\s*$/i',$item,$m)) continue;
+        if (!preg_match('/^\s*(en|zh)(?:-[a-z0-9-]+)?\s*(?:;\s*q\s*=\s*(0(?:\.\d+)?|1(?:\.0+)?))?\s*$/i',$item,$m)) continue;
         $weight=isset($m[2])?(float)$m[2]:1.0;
         if ($weight>0 && $weight>$best) { $selected=strtolower($m[1]); $best=$weight; }
     }
     return $selected;
+}
+function uiLanguageTag(): string { return uiLanguage()==='zh'?'zh-CN':'en'; }
+function sendUiLanguageHeaders(): void
+{
+    if (PHP_SAPI==='cli') return;
+    header('Content-Language: '.uiLanguageTag());
+    header('Vary: Accept-Language',false);
 }
 function tr(string $text): string { return uiLanguage()==='zh' ? (UI_TRANSLATIONS[$text] ?? $text) : $text; }
 function tr_html(string $text): string { return htmlspecialchars(tr($text),ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }

@@ -15,7 +15,7 @@ const OPDS_PAGE_SIZE = 50;
 function requireOpdsAccess(): void
 {
     requireUploadHttps();
-    header('Vary: Authorization');
+    header('Vary: Authorization',false);
     if (isset($_SERVER['HTTP_AUTHORIZATION'],$_SERVER['REDIRECT_HTTP_AUTHORIZATION']) &&
         $_SERVER['HTTP_AUTHORIZATION']!==$_SERVER['REDIRECT_HTTP_AUTHORIZATION']) reject('Ambiguous authorization.',401);
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null;
@@ -130,7 +130,7 @@ try {
         foreach (array_slice($all,$offset,OPDS_PAGE_SIZE) as $book) {
             $entry=add($doc,$feed,'entry',''); add($doc,$entry,'id','urn:sha256:'.hash('sha256',accountScope().'/'.$book['path']));
             add($doc,$entry,'title',$book['title']); add($doc,$entry,'updated',gmdate('Y-m-d\TH:i:s\Z',$book['mtime']));
-            $author=add($doc,$entry,'author',''); add($doc,$author,'name',$book['author']);
+            $author=add($doc,$entry,'author',''); add($doc,$author,'name',$book['author']===''?tr('Unknown author'):$book['author']);
             if ($book['language'] !== '') {
                 $language=$doc->createElementNS('http://purl.org/dc/elements/1.1/','dc:language');
                 $language->appendChild($doc->createTextNode($book['language'])); $entry->appendChild($language);
