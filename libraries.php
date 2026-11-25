@@ -6,15 +6,10 @@ const LIBRARY_PERMISSIONS = [
 ];
 const LIBRARY_ROLES = [
     'reader'=>['view','download','opds'],
-    'web_view'=>['view'],
-    'web_download'=>['view','download'],
     'opds_reader'=>['opds'],
     'web_upload'=>['web_upload'],
     'agent_upload'=>['agent_upload'],
-    'folder_creator'=>['folder'],
-    'organizer'=>['view','organize'],
-    'deleter'=>['view','delete'],
-    'share_manager'=>['view','share'],
+    'editor'=>['view','download','opds','web_upload','folder','organize'],
     'admin'=>['view','download','opds','web_upload','agent_upload','folder','organize','delete','share','members','tokens'],
 ];
 const WEB_PERMISSIONS = ['view','web_upload','folder','members','tokens','settings','agent_upload'];
@@ -80,9 +75,8 @@ function libraryPermissions(array $row,string $username): array
 {
     if (!empty($row['archived'])) return $row['owner']===$username?['settings']:[];
     if ($row['owner']===$username) return LIBRARY_PERMISSIONS;
-    $permissions=[];
-    foreach ($row['members'][$username]??[] as $role) $permissions=array_merge($permissions,LIBRARY_ROLES[$role]??[]);
-    return array_values(array_unique($permissions));
+    $role=$row['members'][$username]??null;
+    return is_string($role)?(LIBRARY_ROLES[$role]??[]):[];
 }
 
 function availableLibraries(string $username): array
@@ -155,27 +149,37 @@ function libraryCreate(string $title,string $owner): string
     }
 }
 
-function libraryMemberChange(string $id,string $actor,string $member,array $roles): void
+function libraryMemberChange(string $id,string $actor,string $member,string $action,?string $role=null): void
 {
-    $roles=array_values(array_unique($roles));
-    if (!accountName($member)||array_diff($roles,array_keys(LIBRARY_ROLES))) reject('Invalid username or role.');
-    libraryUpdate(function (&$rows) use ($id,$actor,$member,$roles) {
+    if (!accountName($member)||($role!==null&&!isset(LIBRARY_ROLES[$role]))) reject('Invalid username or role.');
+    libraryUpdate(function (&$rows) use ($id,$actor,$member,$action,$role) {
         $row=libraryInfo($id,$rows);
         if (!$row || !activeAccount($actor) || !in_array('members',libraryPermissions($row,$actor),true)) reject('Library access denied.',403);
         if ($member===$row['owner'] || $member===$actor) reject('You cannot change this member.',403);
-        if ($roles && !activeAccount($member)) reject('Choose an active account.',404);
-        $previous=$row['members'][$member]??[];
-        if ($actor!==$row['owner'] && (in_array('admin',$previous,true)||in_array('admin',$roles,true)||in_array('admin',$row['invites'][$member]['roles']??[],true)))
+        if ($role!==null && !activeAccount($member)) reject('Choose an active account.',404);
+        $previous=$row['members'][$member]??null;
+        $invite=$row['invites'][$member]??null;
+        if ($actor!==$row['owner'] && ($previous==='admin'||$role==='admin'||($invite['role']??null)==='admin'))
             reject('Only the owner can manage library admins.',403);
-        if ($roles && !$previous) {
-            $row['invites'][$member]=['roles'=>$roles,'from'=>$actor,'expires'=>time()+MEMBERSHIP_TTL];
+        if ($action==='member_invite') {
+            if ($previous!==null) reject('This account is already a member.',409);
+            if (($invite['expires']??0)>time()) reject('This account already has a pending invitation.',409);
+            $row['invites'][$member]=['role'=>$role,'from'=>$actor,'expires'=>time()+MEMBERSHIP_TTL];
             $rows[$id]=libraryPersisted($row);
-            libraryAudit($rows,'member.invited',$actor,$id,['member'=>$member,'roles'=>$roles]);
+            libraryAudit($rows,'member.invited',$actor,$id,['member'=>$member,'role'=>$role]);
             return;
         }
-        unset($row['invites'][$member]);
-        if ($roles) $row['members'][$member]=$roles;
-        else unset($row['members'][$member]);
+        if ($action==='member_cancel') {
+            if (!$invite) reject('Library invitation is unavailable.',410);
+            unset($row['invites'][$member]);
+            $rows[$id]=libraryPersisted($row);
+            libraryAudit($rows,'member.invitation_cancelled',$actor,$id,['member'=>$member]);
+            return;
+        }
+        if ($previous===null) reject('Member not found.',404);
+        if ($action==='member_edit') $row['members'][$member]=$role;
+        elseif ($action==='member_remove') unset($row['members'][$member]);
+        else reject('Unknown action.');
         $nowPermissions=libraryPermissions($row,$member);
         foreach ($row['tokens'] as &$token) if ($token['user']===$member &&
             (!in_array('agent_upload',$nowPermissions,true)||(!empty($token['whole'])&&!in_array('tokens',$nowPermissions,true))))
@@ -183,7 +187,7 @@ function libraryMemberChange(string $id,string $actor,string $member,array $role
         unset($token);
         if (($row['transfer']['to']??null)===$member && !in_array('view',libraryPermissions($row,$member),true)) unset($row['transfer']);
         $rows[$id]=libraryPersisted($row);
-        libraryAudit($rows,'member.changed',$actor,$id,['member'=>$member,'before'=>$previous,'after'=>$roles]);
+        libraryAudit($rows,'member.changed',$actor,$id,['member'=>$member,'before'=>$previous,'after'=>$role]);
     });
 }
 
@@ -263,20 +267,27 @@ function agentScope(string $token): ?array
 }
 
 const LIBRARY_ROLE_LABELS = [
-    'reader'=>'Reader (web and OPDS)','web_view'=>'Web browse only','web_download'=>'Web browse and download',
-    'opds_reader'=>'OPDS reader','web_upload'=>'Web upload','agent_upload'=>'Agent upload',
-    'folder_creator'=>'Create folders','organizer'=>'Rename and move books','deleter'=>'Delete books',
-    'share_manager'=>'Manage anonymous shares','admin'=>'Library admin',
+    'reader'=>'Reader','opds_reader'=>'OPDS-only reader',
+    'web_upload'=>'Web contributor','agent_upload'=>'Agent contributor',
+    'editor'=>'Library editor','admin'=>'Library admin',
+];
+const LIBRARY_ROLE_GROUPS = [
+    'Read books'=>['reader','opds_reader'],
+    'Contribute books'=>['web_upload','agent_upload'],
+    'Manage library'=>['editor','admin'],
+];
+const LIBRARY_ROLE_DESCRIPTIONS = [
+    'reader'=>'Browse, download and read on the web or through OPDS.',
+    'opds_reader'=>'Read in an OPDS reader, without access to the web catalog.',
+    'web_upload'=>'Upload on the web to existing folders, without browsing books.',
+    'agent_upload'=>'Set up an upload token for an Agent, without web uploads or reading.',
+    'editor'=>'Read, upload on the web, create folders, rename and move books.',
+    'admin'=>'Manage books, uploads, anonymous shares and ordinary members.',
 ];
 
-function libraryCapabilityLabels(array $permissions,bool $owner): array
+function libraryRoleLabel(mixed $role): string
 {
-    if ($owner) return ['Owner'];
-    if (in_array('members',$permissions,true)) return ['Library admin'];
-    return array_values(array_intersect_key([
-        'view'=>'Web browse','download'=>'Download','web_upload'=>'Web upload',
-        'agent_upload'=>'Agent upload','opds'=>'OPDS reader','folder'=>'Create folders',
-    ],array_fill_keys($permissions,true)));
+    return tr(is_string($role)?(LIBRARY_ROLE_LABELS[$role]??'Unknown role'):'Unknown role');
 }
 
 function libraryTransfer(string $id,string $actor,string $action,string $member): void
@@ -321,7 +332,7 @@ function validLibraryTitle(string $title): string
 
 function libraryInvites(string $viewer): array
 {
-    return array_filter(libraryRecords(),static fn($row)=>empty($row['archived'])&&($row['invites'][$viewer]['expires']??0)>time());
+    return array_filter(libraryRecords(),static fn($row)=>empty($row['archived'])&&($row['invites'][$viewer]['expires']??0)>time() && isset($row['invites'][$viewer]['role']));
 }
 
 function libraryAnswerInvite(string $id,string $viewer,bool $accept): void
@@ -332,9 +343,9 @@ function libraryAnswerInvite(string $id,string $viewer,bool $accept): void
         $invite=$row['invites'][$viewer];
         if ($accept) {
             $from=$invite['from'];
-            if (!activeAccount($from) || !in_array('members',libraryPermissions($row,$from),true) ||
-                (in_array('admin',$invite['roles'],true)&&$row['owner']!==$from)) reject('Library invitation is unavailable.',410);
-            $row['members'][$viewer]=$invite['roles'];
+            if (!is_string($invite['role']??null)||!isset(LIBRARY_ROLES[$invite['role']])||isset($row['members'][$viewer])||!activeAccount($from) || !in_array('members',libraryPermissions($row,$from),true) ||
+                ($invite['role']==='admin'&&$row['owner']!==$from)) reject('Library invitation is unavailable.',410);
+            $row['members'][$viewer]=$invite['role'];
         }
         unset($row['invites'][$viewer]);
         $rows[$id]=libraryPersisted($row);

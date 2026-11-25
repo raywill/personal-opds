@@ -64,24 +64,21 @@ Back up the private data directory and protect the backup. The JSON config files
 
 A single web-accessible library opens directly after sign-in. With two or more, choose a library first, then use the switcher at the top left. The page shows folders and books from the selected library only. Reader-only OPDS libraries are listed in the account menu’s **OPDS catalog** panel, not in the web picker. Use the copied library-specific OPDS URL with your account credentials. Existing clients with the old URL without a library parameter still reach their original personal library, subject to current access.
 
-1. Open the target library. As its owner or admin, open the top-right account menu and choose **Members and permissions**.
-2. Enter the recipient’s existing active username, choose one or more roles, and send the invitation. If they do not yet have an account, the site operator must issue an activation link first. The recipient chooses their own password.
+1. Open the target library. As its owner or admin, open the top-right account menu and choose **Members and invitations**.
+2. Enter the recipient’s existing active username, choose one role, and send the invitation. If they do not yet have an account, the site operator must issue an activation link first. The recipient chooses their own password.
 3. The recipient signs in with that account and opens **Review library invitations**. They can see the roles and accept or decline. Invitations are single-use, valid for seven days, and visible only in the application. The app does not send email. The sender can cancel a pending invitation from the members panel.
 4. After acceptance, edit or revoke roles in the same panel. The change affects only that library; it does not revoke anonymous subscription URLs. Only the owner can appoint or modify library admins.
 
-| Role | Access granted |
-| --- | --- |
-| Reader | Web browse, web download and private OPDS read |
-| Web browse only / Web browse and download | Browse metadata; downloads only for the latter |
-| OPDS reader | Read and download through OPDS, with no web catalog access |
-| Web upload | Upload to existing folders without listing or downloading books |
-| Agent upload | Issue a destination-scoped upload token for oneself; does not grant web uploads |
-| Create folders | Add a folder; does not grant uploads |
-| Organizer / Delete books | Rename and move, or delete, respectively; each also gives web browse |
-| Manage anonymous shares | Web browse plus issue, preview and revoke anonymous links |
-| Library admin | All content channels, manage ordinary members and view/revoke upload tokens; cannot manage peer admins or transfer ownership |
+| Scenario | Role | Access granted |
+| --- | --- | --- |
+| Read | Reader | Browse and download on the web or through OPDS |
+| Read | OPDS-only reader | Read and download through OPDS, without a web catalog |
+| Contribute | Web contributor | Upload on the web to existing folders, without browsing books |
+| Contribute | Agent contributor | Set up a scoped Agent upload token, without web uploads or reading |
+| Manage | Library editor | Read, upload on the web, create folders, rename and move; no delete or public sharing |
+| Manage | Library admin | Manage books, uploads, anonymous shares, ordinary members and upload tokens; no owner controls |
 
-Roles combine only inside the same library. The site operator does not gain in-app access to books by managing accounts or quotas. The library owner can rename, archive, restore, or request transfer to an existing member with web browse access. Transfer takes effect only when that person accepts. Archiving stops anonymous subscriptions and Agent tokens, which stay invalid after restore. Files and member roles are retained. Site operators can set per-library quotas with `php admin.php library-quota LIBRARY_ID BYTES MAX_FILES`, inspect recent administration events with `php admin.php rbac-audit`, or disable self-service library creation with `'allow_library_creation' => false` in the private `config.php`.
+A member has one role per library and may hold different roles in different libraries. Use the **Pending invitations** tab to track outgoing invitations, and the **Members** tab to change a role or revoke access. Rename, ownership transfer and archive are under the separate **Library settings** menu, visible to the owner. Administrators can review and revoke member upload tokens under **CLI / API & upload Skill**. The site operator does not gain in-app access to books by managing accounts or quotas. The library owner can rename, archive, restore, or request transfer to an existing member with web browse access. Transfer takes effect only when that person accepts. Archiving stops anonymous subscriptions and Agent tokens, which stay invalid after restore. Files and member roles are retained. Site operators can set per-library quotas with `php admin.php library-quota LIBRARY_ID BYTES MAX_FILES`, inspect recent administration events with `php admin.php rbac-audit`, or disable self-service library creation with `'allow_library_creation' => false` in the private `config.php`.
 
 ## Books and subscriptions
 

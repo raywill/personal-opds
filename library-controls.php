@@ -1,14 +1,18 @@
 <?php
 declare(strict_types=1);
 if (!defined('BASE_URL')) { http_response_code(404); exit; }
-function roleInputs(array $roles,bool $adminAllowed): void {
-    echo '<fieldset class="roles"><legend>'.tr_html('Library roles').'</legend>';
-    foreach (LIBRARY_ROLE_LABELS as $key=>$label) {
-        if (!$adminAllowed && $key==='admin') continue;
-        echo '<label><input type="checkbox" name="roles[]" value="'.h($key).'"'.(in_array($key,$roles,true)?' checked':'').'>'.tr_html($label).'</label>';
-    }
-    echo '</fieldset>';
-}
+function roleInputs(string $selected,bool $adminAllowed): void { ?>
+<fieldset class="role-options"><legend><?=tr_html('Choose one role')?></legend>
+<?php foreach (LIBRARY_ROLE_GROUPS as $group=>$roles): ?>
+<div class="role-group"><h3><?=tr_html($group)?></h3>
+<div class="role-grid">
+<?php foreach ($roles as $role): if (!$adminAllowed&&$role==='admin') continue; ?>
+<label class="role-card"><input type="radio" name="role" value="<?=h($role)?>" <?=$selected===$role?'checked':''?> required>
+<span><strong><?=h(libraryRoleLabel($role))?></strong><small><?=tr_html(LIBRARY_ROLE_DESCRIPTIONS[$role])?></small></span></label>
+<?php endforeach; ?></div></div>
+<?php endforeach; ?></fieldset>
+<?php }
+function memberAvatar(string $username): void { ?><span class="member-avatar" aria-hidden="true"><?=h(strtoupper(substr($username,0,1)))?></span><?php }
 $owner=$library['owner']===$viewer;
 ?>
 <?php if (isset($permissions['agent_upload'])): ?>
@@ -42,50 +46,95 @@ $owner=$library['owner']===$viewer;
 <form method="post" action="up.php"><?php hidden($csrf,'agent_revoke',$dir);?><input type="hidden" name="token_id" value="<?=h($id)?>"><button class="danger"><?=tr_html('Revoke')?></button></form></div>
 <?php endforeach; ?>
 <a class="button" href="<?=h(libraryHref($dir,['skill'=>'1']))?>"><?=icon('download')?><?=tr_html('Download SKILL.md')?></a>
-</div></dialog>
-<?php endif; ?>
-<?php if (isset($permissions['members'])): ?>
-<dialog id="members-dialog" class="sheet" aria-labelledby="members-title">
-<div class="bar dialog-head"><h2 id="members-title"><?=tr_html('Members and permissions')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
-<p class="muted"><?=tr_html('Roles apply only to this library. Web upload and Agent upload are separate.')?></p>
-<div class="member-row"><strong><?=h($library['owner'])?></strong> · <?=tr_html('Owner')?></div>
-<?php foreach ($library['members'] as $member=>$roles): $member=(string)$member; $editable=$member!==$viewer && ($owner||!in_array('admin',$roles,true)); ?>
-<details class="member-row"><summary><?=h($member)?> · <?=h(implode(' · ',array_map(static fn($r)=>tr(LIBRARY_ROLE_LABELS[$r]),$roles)))?></summary>
-<?php if ($editable): ?>
-<form method="post" action="up.php"><?php hidden($csrf,'member_save',$dir);?><input type="hidden" name="member" value="<?=h($member)?>"><?php roleInputs($roles,$owner);?><button class="primary"><?=tr_html('Save permissions')?></button></form>
-<form method="post" action="up.php" data-confirm="<?=tr_html('Remove access for this member?')?>"><?php hidden($csrf,'member_remove',$dir);?><input type="hidden" name="member" value="<?=h($member)?>"><button class="danger"><?=tr_html('Remove access')?></button></form>
-<?php endif; ?></details>
+</div>
+<?php if (isset($permissions['tokens'])): ?>
+<details class="tool-divider"><summary><?=tr_html('Library members’ upload tokens')?></summary>
+<?php foreach ($library['tokens'] as $id=>$item): if ($item['user']===$viewer || !empty($item['revoked']) || $item['expires']<=time()) continue; ?>
+<div class="token-row bar"><span><?=h($item['user'])?> · <?=h(($item['name']??'')!==''?$item['name'].' · ':'')?><?=h(!empty($item['whole'])?tr('Entire library'):($item['dir']?:tr('Library root')))?> · <?=h(substr($id,0,8))?></span>
+<form method="post" action="up.php"><?php hidden($csrf,'managed_token_revoke',$dir);?><input type="hidden" name="token_id" value="<?=h($id)?>"><button class="danger"><?=tr_html('Revoke')?></button></form></div>
 <?php endforeach; ?>
-<?php foreach ($library['invites']??[] as $member=>$invite): if ($invite['expires']<=time()) continue; ?>
-<div class="member-row bar"><span><?=h((string)$member)?> · <?=tr_html('Invitation pending')?></span>
-<?php if ($owner||!in_array('admin',$invite['roles'],true)): ?><form method="post" action="up.php"><?php hidden($csrf,'member_remove',$dir);?><input type="hidden" name="member" value="<?=h((string)$member)?>"><button><?=tr_html('Cancel invitation')?></button></form><?php endif; ?></div>
-<?php endforeach; ?>
-<div class="tool-divider"><h3><?=tr_html('Invite an existing account')?></h3><form method="post" action="up.php"><?php hidden($csrf,'member_save',$dir);?>
-<label><?=tr_html('Username')?><input name="member" maxlength="32" required autocapitalize="none"></label><?php roleInputs([],$owner);?><button class="primary"><?=tr_html('Send invitation')?></button></form></div>
-<?php if ($owner): ?>
-<details class="tool-divider"><summary><?=tr_html('Library settings')?></summary>
-<form method="post" action="up.php"><?php hidden($csrf,'library_rename',$dir);?><label><?=tr_html('Library name')?><input name="title" value="<?=h(libraryTitle($library,$viewer))?>" required maxlength="120"></label><button><?=tr_html('Save name')?></button></form>
-<form method="post" action="up.php" data-confirm="<?=tr_html('Archive this library? Its upload tokens and anonymous shares will stop working, even after restore.')?>"><?php hidden($csrf,'library_archive',$dir);?><button class="danger"><?=tr_html('Archive library')?></button></form>
 </details><?php endif; ?>
-<?php if ($owner && $library['members']): ?>
-<details class="tool-divider"><summary><?=tr_html('Transfer ownership')?></summary>
+
+</dialog>
+<?php endif; ?>
+<?php if ($owner): ?>
+<dialog id="library-settings-dialog" class="sheet manage-dialog" aria-labelledby="settings-title">
+<div class="bar dialog-head"><h2 id="settings-title"><?=tr_html('Library settings')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<p class="muted"><?=h(libraryTitle($library,$viewer))?></p>
+<section class="settings-section"><h3><?=tr_html('General')?></h3>
+<form method="post" action="up.php"><?php hidden($csrf,'library_rename',$dir);?><label><?=tr_html('Library name')?><input name="title" value="<?=h(libraryTitle($library,$viewer))?>" required maxlength="120"></label><button><?=tr_html('Save name')?></button></form>
+</section>
+
+<?php $transferOptions=array_filter(array_keys($library['members']),static fn($member)=>in_array('view',libraryPermissions($library,(string)$member),true)&&activeAccount((string)$member)); if ($transferOptions): ?>
+<section class="settings-section"><h3><?=tr_html('Transfer ownership')?></h3>
 <?php if (($library['transfer']['expires']??0)>time()): ?>
 <p><?=h(sprintf(tr('Waiting for %s to accept ownership.'),$library['transfer']['to']))?></p>
 <form method="post" action="up.php"><?php hidden($csrf,'transfer_cancel',$dir);?><button><?=tr_html('Cancel')?></button></form>
 <?php else: ?>
 <form method="post" action="up.php" data-confirm="<?=tr_html('You will lose access when the new owner accepts. Continue?')?>"><?php hidden($csrf,'transfer_begin',$dir);?>
 <label><?=tr_html('Username')?><select name="member" required>
-<?php foreach ($library['members'] as $member=>$roles): if (!in_array('view',libraryPermissions($library,(string)$member),true)) continue; ?>
+<?php foreach ($transferOptions as $member): ?>
 <option value="<?=h((string)$member)?>"><?=h((string)$member)?></option><?php endforeach; ?></select></label>
 <button><?=tr_html('Request transfer')?></button></form>
-<?php endif; ?></details>
+<?php endif; ?></section>
 <?php endif; ?>
-<?php if (isset($permissions['tokens'])): ?>
-<details class="tool-divider"><summary><?=tr_html('Manage member upload tokens')?></summary>
-<?php foreach ($library['tokens'] as $id=>$item): if (!empty($item['revoked']) || $item['expires']<=time()) continue; ?>
-<div class="token-row bar"><span><?=h($item['user'])?> · <?=h(($item['name']??'')!==''?$item['name'].' · ':'')?><?=h(!empty($item['whole'])?tr('Entire library'):($item['dir']?:tr('Library root')))?> · <?=h(substr($id,0,8))?></span>
-<form method="post" action="up.php"><?php hidden($csrf,'managed_token_revoke',$dir);?><input type="hidden" name="token_id" value="<?=h($id)?>"><button class="danger"><?=tr_html('Revoke')?></button></form></div>
-<?php endforeach; ?>
-</details><?php endif; ?>
+<section class="settings-section archive-section"><h3><?=tr_html('Archive library')?></h3><p class="muted"><?=tr_html('Keeps books and members, but disables access and revokes links and tokens.')?></p>
+<form method="post" action="up.php" data-confirm="<?=tr_html('Archive this library? Its upload tokens and anonymous shares will stop working, even after restore.')?>"><?php hidden($csrf,'library_archive',$dir);?><button class="danger"><?=tr_html('Archive library')?></button></form>
+</section></dialog>
+<?php endif; ?>
+<?php if (isset($permissions['members'])):
+$pending=array_filter($library['invites']??[],static fn($invite)=>isset($invite['role'])&&$invite['expires']>time());
+$tabPending=($_GET['manage']??'')==='pending'||($error!==''&&$action==='member_cancel');
+$inviteError=$error!==''&&$action==='member_invite';
+$editError=$error!==''&&$action==='member_edit';
+$manageOpen=!$inviteError&&!$editError&&(in_array($_GET['manage']??null,['members','pending'],true)||($error!==''&&in_array($action,['member_remove','member_cancel'],true)));
+$draftMember=is_string($_POST['member']??null)?$_POST['member']:'';
+$draftRole=is_string($_POST['role']??null)?$_POST['role']:'';
+?>
+<dialog id="members-dialog" class="sheet manage-dialog" aria-labelledby="members-title" <?=$manageOpen?'data-manage-open':''?>>
+<div class="bar dialog-head"><div><p class="eyebrow"><?=h(libraryTitle($library,$viewer))?></p><h2 id="members-title"><?=tr_html('Members and invitations')?></h2></div><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<?php if ($manageOpen&&($notice!==''||$error!=='')): ?><p class="<?=$error!==''?'error':'status'?>" role="<?=$error!==''?'alert':'status'?>"><?=h($error!==''?$error:$notice)?></p><?php endif; ?>
+<div class="member-toolbar">
+<div role="tablist" aria-label="<?=tr_html('Membership views')?>" class="member-tabs">
+<button type="button" id="member-tab-current" role="tab" aria-controls="member-current" aria-selected="<?=$tabPending?'false':'true'?>" tabindex="<?=$tabPending?-1:0?>"><?=tr_html('Members')?> <span><?=count($library['members'])+1?></span></button>
+<button type="button" id="member-tab-pending" role="tab" aria-controls="member-pending" aria-selected="<?=$tabPending?'true':'false'?>" tabindex="<?=$tabPending?0:-1?>"><?=tr_html('Pending invitations')?> <span><?=count($pending)?></span></button>
+</div>
+<button type="button" class="primary" data-dialog="invite-member-dialog"><?=icon('plus')?><?=tr_html('Invite member')?></button>
+</div>
+<div id="member-current" role="tabpanel" aria-labelledby="member-tab-current" tabindex="0" <?=$tabPending?'hidden':''?>>
+<div class="member-line"><?php memberAvatar($library['owner']);?><strong><?=h($library['owner'])?></strong><span class="role-chip role-owner"><?=tr_html('Owner')?></span></div>
+<?php foreach ($library['members'] as $member=>$role): $member=(string)$member; ?>
+<div class="member-line"><?php memberAvatar($member);?><strong><?=h($member)?></strong><span class="role-chip"><?=h(libraryRoleLabel($role))?></span>
+<?php if ($member!==$viewer&&($owner||$role!=='admin')): ?>
+<details class="book-menu member-menu"><summary class="button icon-button" aria-label="<?=h(sprintf(tr('Actions for %s'),$member))?>"><?=icon('more')?></summary>
+<div class="book-actions">
+<button type="button" data-dialog="edit-role-dialog" data-member="<?=h($member)?>" data-member-role="<?=h(is_string($role)?$role:'')?>"><?=tr_html('Change role')?></button>
+<form method="post" action="up.php" data-confirm="<?=tr_html('Remove access for this member?')?>"><?php hidden($csrf,'member_remove',$dir);?><input type="hidden" name="member" value="<?=h($member)?>"><button class="danger"><?=tr_html('Remove access')?></button></form>
+</div></details>
+<?php endif; ?></div>
+<?php endforeach; ?></div>
+<div id="member-pending" role="tabpanel" aria-labelledby="member-tab-pending" tabindex="0" <?=$tabPending?'':'hidden'?>>
+<?php if (!$pending): ?><p class="member-empty muted"><?=tr_html('No pending invitations. New invitations will appear here.')?></p><?php endif; ?>
+<?php foreach ($pending as $member=>$invite): $member=(string)$member; ?>
+<div class="member-line"><?php memberAvatar($member);?><div><strong><?=h($member)?></strong><small><?=h(sprintf(tr('Expires %s UTC'),gmdate('Y-m-d',$invite['expires'])))?></small></div><span class="role-chip"><?=h(libraryRoleLabel($invite['role']))?></span>
+<?php if ($owner||$invite['role']!=='admin'): ?><form method="post" action="up.php"><?php hidden($csrf,'member_cancel',$dir);?><input type="hidden" name="member" value="<?=h($member)?>"><button><?=tr_html('Cancel invitation')?></button></form><?php endif; ?></div>
+<?php endforeach; ?></div>
+</dialog>
+<dialog id="invite-member-dialog" class="sheet manage-dialog role-dialog" aria-labelledby="invite-member-title" <?=$inviteError?'data-manage-open':''?>>
+<div class="bar dialog-head"><h2 id="invite-member-title"><?=tr_html('Invite member')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<p class="muted"><?=tr_html('Invite an existing account. Access starts after they accept.')?></p>
+<?php if ($inviteError): ?><p class="error" role="alert"><?=h($error)?></p><?php endif; ?>
+<form method="post" action="up.php" class="role-form"><?php hidden($csrf,'member_invite',$dir);?>
+<label class="member-name-input"><?=tr_html('Username')?><input name="member" value="<?=h($inviteError?$draftMember:'')?>" maxlength="32" required autocapitalize="none" autofocus></label>
+<?php roleInputs($inviteError?$draftRole:'',$owner); ?>
+<footer class="role-footer"><button class="primary"><?=tr_html('Send invitation')?></button></footer></form>
+</dialog>
+<dialog id="edit-role-dialog" class="sheet manage-dialog role-dialog" aria-labelledby="edit-role-title" <?=$editError?'data-manage-open':''?>>
+<div class="bar dialog-head"><h2 id="edit-role-title"><?=tr_html('Change role')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<p class="muted" data-current-member><?=h($editError?$draftMember:'')?></p>
+<?php if ($editError): ?><p class="error" role="alert"><?=h($error)?></p><?php endif; ?>
+<form method="post" action="up.php" class="role-form"><?php hidden($csrf,'member_edit',$dir);?><input type="hidden" name="member" value="<?=h($editError?$draftMember:'')?>">
+<?php roleInputs($editError?$draftRole:'',$owner); ?>
+<footer class="role-footer"><button class="primary"><?=tr_html('Save role')?></button></footer></form>
 </dialog>
 <?php endif; ?>

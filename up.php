@@ -33,6 +33,10 @@ function go(string $dir=''): never {
     header('Location: '.BASE_URL.(currentLibrary()?libraryHref($dir):'up.php'),true,303);
     exit;
 }
+function goMembers(string $dir,string $action): never {
+    header('Location: '.BASE_URL.libraryHref($dir,['manage'=>in_array($action,['member_invite','member_cancel'],true)?'pending':'members']),true,303);
+    exit;
+}
 function managementDownload(string $dir,string $name): never {
     $path=managedBook($dir,$name);
     $f=fopen($path,'rb'); if (!$f) reject('Book not found.',404);
@@ -117,7 +121,7 @@ try {
         $required=[
             'upload'=>'web_upload','folder'=>'folder','share'=>'share','revoke'=>'share','rename'=>'organize',
             'move'=>'organize','delete'=>'delete','agent_setup'=>'agent_upload','agent_revoke'=>'agent_upload',
-            'legacy_token_revoke'=>'settings','member_save'=>'members','member_remove'=>'members','managed_token_revoke'=>'tokens',
+            'legacy_token_revoke'=>'settings','member_invite'=>'members','member_edit'=>'members','member_remove'=>'members','member_cancel'=>'members','managed_token_revoke'=>'tokens',
             'library_rename'=>'settings','library_archive'=>'settings',
             'transfer_begin'=>'settings','transfer_cancel'=>'settings','transfer_accept'=>'view',
         ][$action]??null;
@@ -169,13 +173,17 @@ try {
             case 'managed_token_revoke':
                 revokeAgentToken($library['id'],$viewer,field('token_id',$_POST));
                 $_SESSION['notice']=tr('Token revoked.'); go($dir);
-            case 'member_save':
+            case 'member_invite':
+            case 'member_edit':
             case 'member_remove':
-                $roles=$action==='member_save'?($_POST['roles']??[]):[];
-                if (!is_array($roles)||array_filter($roles,static fn($v)=>!is_string($v))) reject('Invalid username or role.');
-                if ($action==='member_save' && !$roles) reject('Choose at least one role.');
-                libraryMemberChange($library['id'],$viewer,field('member',$_POST),$roles);
-                $_SESSION['notice']=tr($action==='member_save'&&!isset($library['members'][field('member',$_POST)])?'Library invitation sent.':'Library membership saved.'); go($dir);
+            case 'member_cancel':
+                $role=in_array($action,['member_invite','member_edit'],true)?field('role',$_POST):null;
+                if (isset($_POST['roles']) || $role==='') reject('Choose one role.');
+                libraryMemberChange($library['id'],$viewer,field('member',$_POST),$action,$role);
+                $_SESSION['notice']=tr(match($action) {
+                    'member_invite'=>'Library invitation sent.', 'member_cancel'=>'Invitation cancelled.',
+                    default=>'Library membership saved.',
+                }); goMembers($dir,$action);
             case 'library_rename':
             case 'library_archive':
                 librarySettings($library['id'],$viewer,$action,field('title',$_POST));
@@ -327,8 +335,25 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 .share-summary{margin:7px 0 10px;color:var(--soft)}.share-summary time{white-space:nowrap}.share-secondary{border-top:1px solid var(--line);padding-top:9px;margin-top:12px}.share-secondary .button,.share-secondary button{border-color:transparent}.tool-divider{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
 @media(max-width:760px){.top{min-height:60px;padding:0 16px}.account-name{display:none}.account summary{padding:4px 9px}.account-popover{inset-inline-end:16px}.layout{display:block;min-height:calc(100vh - 60px)}.sidebar{display:none}.shelf-body{padding:17px 16px 40px}.page-message{margin:10px 16px 0}.auth{margin:32px 14px}.folder-trigger{display:inline-flex;align-items:center;gap:7px;margin-bottom:3px;border:0;padding:4px 10px}.shelf-heading-row .eyebrow{display:none}.shelf-head{padding-bottom:14px}.heading-title{font-size:clamp(26px,8vw,36px)}.shelf-meta{margin-top:6px}.shelf-heading-row{gap:8px}.book{grid-template-columns:34px minmax(0,1fr) 34px 32px;gap:8px;min-height:66px;padding:9px 0}.book-icon{width:34px;height:42px}.book .icon-button{width:100%;min-height:40px}.sheet{margin:auto 0 0;width:100%;max-width:none;max-height:88%;border-radius:18px 18px 0 0;padding:14px 16px max(20px,env(safe-area-inset-bottom));}}
 .brand-area{display:flex;align-items:center;gap:12px;min-width:0}.switcher{overflow-wrap:anywhere;line-height:1.2}
-.library-picker{width:min(910px,calc(100% - 36px));margin:clamp(24px,6vw,76px) auto}.library-picker h1{font-size:clamp(26px,5vw,44px);letter-spacing:-.045em}.library-picker h2{margin-top:24px}.library-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,235px),1fr));gap:12px}.library-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;color:var(--ink);text-decoration:none}.library-card:hover{border-color:var(--accent);background:var(--blue-soft)}.library-card strong,.library-card small{display:block;overflow-wrap:anywhere}.library-card small{margin-top:4px}.roles{display:grid;grid-template-columns:1fr 1fr;gap:0 8px;margin:10px 0}.roles label{margin:3px 0;font-weight:530}.roles input{margin-inline-end:6px}.member-row,.token-row{padding:10px 0;border-top:1px solid var(--line)}.member-row summary{cursor:pointer}.member-row p,.token-row p{overflow-wrap:anywhere}
-@media(max-width:480px){.brand-area .brand>span:last-child{display:none}.brand-area{gap:8px}.switcher{min-height:36px}.roles{grid-template-columns:1fr}}
+.library-picker{width:min(910px,calc(100% - 36px));margin:clamp(24px,6vw,76px) auto}.library-picker h1{font-size:clamp(26px,5vw,44px);letter-spacing:-.045em}.library-picker h2{margin-top:24px}.library-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,235px),1fr));gap:12px}.library-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;color:var(--ink);text-decoration:none}.library-card:hover{border-color:var(--accent);background:var(--blue-soft)}.library-card strong,.library-card small{display:block;overflow-wrap:anywhere}.library-card small{margin-top:4px}.member-row,.token-row{padding:10px 0;border-top:1px solid var(--line)}.member-row summary{cursor:pointer}.member-row p,.token-row p{overflow-wrap:anywhere}
+@media(max-width:480px){.brand-area .brand>span:last-child{display:none}.brand-area{gap:8px}.switcher{min-height:36px}}
+.manage-dialog{width:min(44rem,calc(100% - 2rem));padding:24px;border:1px solid var(--line);border-radius:18px}
+.manage-dialog .dialog-head{margin-bottom:1rem}.manage-dialog .dialog-head .eyebrow{margin:0 0 .25rem;color:var(--soft)}
+.member-toolbar,.member-tabs{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.member-toolbar{justify-content:space-between;margin-bottom:1rem}.member-tabs{padding:.25rem;background:#f1f5f9;border-radius:.75rem}
+.member-tabs [role=tab]{border:0;background:transparent;color:#475569;padding:.55rem .65rem;font-size:.9rem;white-space:nowrap}
+.member-tabs [aria-selected=true]{background:white;color:#15348a;box-shadow:0 1px 4px #182f5420}
+.member-tabs span{font-variant-numeric:tabular-nums;margin-left:.3em}
+.member-line{display:grid;grid-template-columns:2.3rem minmax(0,1fr) auto auto;align-items:center;gap:.7rem;border-bottom:1px solid var(--line);padding:.75rem 0}
+.member-line>strong,.member-line>div>strong{overflow-wrap:anywhere}.member-line small{display:block;color:#64748b}.member-avatar{display:grid;place-items:center;width:2.15rem;height:2.15rem;border-radius:50%;background:#eef2ff;color:#1e40af;font-weight:650}
+.member-menu{position:relative}.member-menu .book-actions{z-index:2;min-width:10rem}.member-menu .book-actions button{text-align:left}
+.role-chip{background:#f1f5f9;color:#36465e;border-radius:99px;padding:.23rem .65rem;font-size:.83rem;white-space:nowrap}.role-owner{background:#e9efff;color:#1e40af}
+.member-empty{padding:1.4rem;text-align:center;background:#f8fafc;border:1px dashed var(--line);border-radius:.8rem}
+.role-options{border:0;padding:0;margin:1rem 0}.role-options>legend{font-weight:700}.role-group{margin-top:.9rem}.role-group h3{font-size:.85rem;color:#475569;margin:0 0 .35rem}
+.role-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.role-card{display:flex;align-items:flex-start;gap:.6rem;border:1px solid var(--line);padding:.7rem .75rem;border-radius:.75rem;cursor:pointer;margin:0;background:white}.role-card:hover{border-color:#94aae4}.role-card:has(input:checked){outline:1px solid #3863df;border-color:#3863df;background:#f1f5ff}.role-card input{margin:.22rem 0 0;accent-color:#3159d9;flex:none}.role-card strong,.role-card small{display:block}.role-card small{font-weight:400;color:#475569;margin-top:.22rem;line-height:1.4}
+.role-footer{position:sticky;bottom:-24px;background:white;border-top:1px solid var(--line);padding:.7rem 0;display:flex;justify-content:flex-end}.member-name-input input{width:100%}
+.settings-section{border-top:1px solid var(--line);margin-top:1rem;padding-top:.8rem}.settings-section h3{margin:0 0 .55rem}.archive-section h3{color:#a52132}
+@media(max-width:600px){.manage-dialog{width:100%;padding:17px}.role-grid{grid-template-columns:1fr}.role-footer{bottom:-17px}.member-line{gap:.45rem}.member-toolbar{align-items:stretch}.member-line form button{padding:.35rem .45rem}}
 </style></head><body>
 <header class="top">
 <div class="brand-area"><a class="brand" href="<?=h($library?libraryHref(''):'up.php')?>"><span class="brand-mark"><?=icon('book')?></span><span><?=h(LIBRARY_TITLE)?></span></a>
@@ -339,7 +364,8 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <div class="account-popover">
 <span class="account-caption"><?=h(sprintf(tr('Signed in as %s'),$viewer))?></span>
 <?php if (isset($permissions['agent_upload'])): ?><button type="button" class="menu-item" data-dialog="tools-dialog"><?=icon('terminal')?><?=tr_html('CLI / API & upload Skill')?></button><?php endif; ?>
-<?php if (isset($permissions['members'])): ?><button type="button" class="menu-item" data-dialog="members-dialog"><?=icon('folder')?><?=tr_html('Members and permissions')?></button><?php endif; ?>
+<?php if (isset($permissions['members'])): ?><button type="button" class="menu-item" data-dialog="members-dialog"><?=icon('folder')?><?=tr_html('Members and invitations')?></button><?php endif; ?>
+<?php if (isset($permissions['settings'])): ?><button type="button" class="menu-item" data-dialog="library-settings-dialog"><?=icon('more')?><?=tr_html('Library settings')?></button><?php endif; ?>
 <?php if (ALLOW_LIBRARY_CREATION): ?><button type="button" class="menu-item" data-dialog="create-library-dialog"><?=icon('plus')?><?=tr_html('New library')?></button><?php endif; ?>
 <?php if ($pendingInvites || $archivedLibraries): ?><button type="button" class="menu-item" data-dialog="account-libraries-dialog"><?=icon('folder')?><?=tr_html('Invitations and archived libraries')?><?php if ($pendingInvites): ?> · <?=count($pendingInvites)?><?php endif; ?></button><?php endif; ?>
 <?php if (array_filter($allLibraries,static fn($row)=>in_array('opds',$row['permissions'],true))): ?>
@@ -356,7 +382,7 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <dialog id="account-libraries-dialog" class="sheet" aria-labelledby="account-libraries-title">
 <div class="bar dialog-head"><h2 id="account-libraries-title"><?=tr_html('Invitations and archived libraries')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
 <?php foreach ($pendingInvites as $id=>$row): $invite=$row['invites'][$viewer]; ?>
-<div class="member-row"><strong><?=h(libraryTitle(libraryInfo((string)$id),$viewer))?></strong><p class="muted"><?=h(implode(' · ',array_map(static fn($r)=>tr(LIBRARY_ROLE_LABELS[$r]),$invite['roles'])))?></p>
+<div class="member-row"><strong><?=h(libraryTitle(libraryInfo((string)$id),$viewer))?></strong><p class="muted"><?=h(libraryRoleLabel($invite['role']??null))?></p>
 <div class="actions"><?php foreach (['invite_accept'=>'Accept invitation','invite_decline'=>'Decline'] as $inviteAction=>$label): ?>
 <form method="post" action="up.php"><?php hidden($csrf,$inviteAction);?><input type="hidden" name="target_library" value="<?=h((string)$id)?>"><button class="<?=$inviteAction==='invite_accept'?'primary':''?>"><?=tr_html($label)?></button></form>
 <?php endforeach; ?></div></div>
@@ -398,7 +424,7 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php foreach ($group as $id=>$item): ?>
 <a class="panel library-card" href="<?=h('up.php?'.http_build_query(['library'=>$id]))?>">
 <span class="brand-mark"><?=icon('book')?></span>
-<span><strong><?=h(libraryTitle($item,$viewer))?></strong><small><?=h(implode(' · ',array_map('tr',libraryCapabilityLabels($item['permissions'],$owned))))?></small></span>
+<span><strong><?=h(libraryTitle($item,$viewer))?></strong><small><?=h($owned?tr('Owner'):libraryRoleLabel($item['members'][$viewer]??null))?></small></span>
 <span class="root-folder-arrow"><?=icon('down')?></span></a>
 <?php endforeach; ?>
 </div><?php endforeach; ?>
@@ -567,7 +593,7 @@ document.addEventListener('click',e=>{
  const open=e.target.closest('[data-dialog]');
  if(open){
   const target=document.getElementById(open.dataset.dialog);
-  target?.showModal();
+  if(target){target.showModal();if(open.hasAttribute('data-member'))target.dispatchEvent(new CustomEvent('edit-member',{detail:open.dataset}));}
   if(target&&accountMenu&&accountMenu.contains(open))accountMenu.open=false;
   if(open.hasAttribute('data-focus-folder'))target?.querySelector('[name=folder]')?.focus();
  }
@@ -599,6 +625,39 @@ shareDialog?.addEventListener('close',()=>{
 });
 if(renameDialog?.hasAttribute('data-show')){renameDialog.showModal();renameName.focus();}
 if(shareDialog?.hasAttribute('data-show'))shareDialog.showModal();
+const membersDialog=document.querySelector('#members-dialog');
+const roleEditor=document.querySelector('#edit-role-dialog');
+membersDialog?.addEventListener('close',()=>{
+ const current=new URL(location.href);
+ if(current.searchParams.has('manage')){current.searchParams.delete('manage');history.replaceState(null,'',current);}
+});
+roleEditor?.addEventListener('edit-member',({detail})=>{
+ roleEditor.querySelector('[name=member]').value=detail.member;
+ roleEditor.querySelector('[data-current-member]').textContent=detail.member;
+ roleEditor.querySelectorAll('[name=role]').forEach(input=>input.checked=input.value===detail.memberRole);
+ const source=Array.from(membersDialog.querySelectorAll('[data-member]')).find(button=>button.dataset.member===detail.member);
+ if(source) source.closest('details').open=false;
+});
+const tabs=Array.from(membersDialog?.querySelectorAll('[role=tab]')??[]);
+function activateMemberTab(active,focus=false){
+ for(const tab of tabs){
+  const selected=tab===active;
+  tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;
+  document.getElementById(tab.getAttribute('aria-controls')).hidden=!selected;
+ }
+ if(focus)active.focus();
+}
+tabs.forEach((tab,index)=>{
+ tab.addEventListener('click',()=>activateMemberTab(tab));
+ tab.addEventListener('keydown',event=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  event.preventDefault();
+  const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+  activateMemberTab(tabs[next],true);
+ });
+});
+for(const dialog of [membersDialog,document.querySelector('#invite-member-dialog'),roleEditor])
+ if(dialog?.hasAttribute('data-manage-open'))dialog.showModal();
 const agentSetupForm=document.querySelector('#agent-setup');
 const agentSetupText=document.querySelector('#agent-setup-text');
 agentSetupForm?.addEventListener('submit',async e=>{

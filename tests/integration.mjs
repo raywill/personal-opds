@@ -615,13 +615,14 @@ try{
  assert.equal((await ui({action:'share',library:family,dir:'Legacy upgrade'})).status,303);
  const modernKey=(await request(libraryWeb(family,{dir:'Legacy upgrade'}))).text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)[1];
  assert.equal((await request(url({s:modernKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'only in shared library');
- assert.equal((await ui({action:'member_save',library:family,member:'bob','roles[]':'web_upload'})).status,303);
- assert.equal((await ui({action:'member_save',library:tech,member:'bob','roles[]':'opds_reader'})).status,303);
+ assert.equal((await ui({action:'member_invite',library:family,member:'bob',role:'web_upload'})).status,303);
+ assert.equal((await ui({action:'member_invite',library:tech,member:'bob',role:'opds_reader'})).status,303);
 
  const thirdUser='casey';
  cookies.clear();
  assert.equal((await activate(thirdUser,cli('invite',thirdUser))).status,303);
  await switchUser(thirdUser);
+ const caseySession=savedSession();
  assert.equal((await ui({action:'invite_accept',target_library:family})).status,410);
  assert.equal((await request(libraryWeb(family))).status,403);
  await switchUser('bob','new-test-password-123');
@@ -649,15 +650,23 @@ try{
  assert.equal((await scopedUpload(tech,'','wrong.txt','must not be created')).status,403);
 
  restoreSession(ownerSession);
- async function setBobRoles(id,...roles) {
-   const page=await request(libraryWeb(id));
-   const fields=new URLSearchParams({csrf:csrf(page),action:'member_save',library:id,member:'bob'});
-   for(const role of roles) fields.append('roles[]',role);
-   return post('up.php',fields);
- }
- assert.equal((await setBobRoles(family,'web_view','agent_upload')).status,303);
+ assert.equal((await ui({action:'member_edit',library:family,member:'bob','role[]':'editor'})).status,400);
+ assert.equal((await ui({action:'member_edit',library:family,member:'bob',role:'reader','roles[]':'admin'})).status,400);
+ assert.equal((await ui({action:'member_edit',library:family,member:'bob',role:'web_view'})).status,400);
+ assert.equal((await ui({action:'member_invite',library:family,member:'bob',role:'admin'})).status,409);
+ assert.equal((await ui({action:'member_edit',library:family,member:'bob',role:'agent_upload'})).status,303);
+ assert.equal(readState(libState).records[family].members.bob,'agent_upload');
+ assert.equal((await ui({action:'member_invite',library:family,member:thirdUser,role:'editor'})).status,303);
+ restoreSession(caseySession);
+ assert.equal((await ui({action:'invite_accept',target_library:family})).status,303);
+ assert.equal((await ui({action:'folder',library:family,folder:'Editor folder'})).status,303);
+ assert.equal((await ui({action:'share',library:family,dir:'Editor folder'})).status,403);
+ assert.equal((await ui({action:'delete',library:family,dir:'Legacy upgrade',file:'same.txt'})).status,403);
+ assert.equal((await ui({action:'agent_setup',library:family,dir:'Editor folder'})).status,403);
+ assert.equal((await scopedUpload(family,'Editor folder','draft.txt','editable')).status,200);
+ assert.equal((await ui({action:'rename',library:family,dir:'Editor folder',file:'draft.txt',new_name:'draft revised'})).status,303);
  restoreSession(bobSession);
- assert((await request(libraryWeb(family,{dir:'Legacy upgrade'}))).text.includes('web-only'));
+ assert(!(await request(libraryWeb(family,{dir:'Legacy upgrade'}))).text.includes('web-only'));
  assert.equal((await request(libraryWeb(family,{dir:'Legacy upgrade',download:'same.txt'}))).status,403);
  assert.equal((await scopedUpload(family,'Legacy upgrade','not-web.txt','no')).status,403);
  function setupConfig(res) {
@@ -699,7 +708,7 @@ try{
  pass('named invitations, mandatory multi-library picker, isolated WEB and OPDS permissions, scoped uploads and independent anonymous access');
 
  restoreSession(ownerSession);
- assert.equal((await setBobRoles(family,'reader')).status,303);
+ assert.equal((await ui({action:'member_invite',library:family,member:'bob',role:'reader'})).status,303);
  restoreSession(bobSession);
  assert.equal((await ui({action:'invite_accept',target_library:family})).status,303);
  assert.equal((await request(libraryWeb(family,{dir:'Legacy upgrade',download:'same.txt'}))).text,'only in shared library');
@@ -754,6 +763,40 @@ try{
      assert(text.includes('"directory":"Legacy upgrade"'));
      assert.deepEqual(errors,[]);
      pass('Chinese multi-library browser picker and actual one-click clipboard copy of the complete profile');
+     await page.goto(base+libraryWeb(family));
+     const account=page.getByLabel('账号菜单');
+     const members=page.locator('#members-dialog');
+     const settings=page.locator('#library-settings-dialog');
+     await account.click(); await page.getByRole('button',{name:'成员与邀请',exact:true}).click();
+     await members.getByRole('tab',{name:/成员/}).waitFor();
+     if(process.env.RBAC_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.RBAC_SCREENSHOT_DIR,'03-成员管理.png')});
+     assert.equal(await members.getByText('归档书库').count(),0);
+     assert.equal(await members.getByText('本库成员令牌').count(),0);
+     await members.getByLabel('casey 的操作').click();
+     await members.getByRole('button',{name:'更换角色'}).click();
+     const edit=page.locator('#edit-role-dialog');
+     assert.equal(await edit.locator('input[value=editor]').isChecked(),true);
+     await edit.locator('input[value=reader]').check();
+     assert.equal(await edit.locator('input:checked').count(),1);
+     await edit.getByRole('button',{name:'保存角色'}).click();
+     await members.getByText('阅读者',{exact:true}).waitFor();
+     await page.setViewportSize({width:390,height:844});
+     await members.getByRole('button',{name:'邀请成员'}).click();
+     const invite=page.locator('#invite-member-dialog');
+     await invite.getByLabel('用户名').fill('alice');
+     await invite.locator('input[value=agent_upload]').check();
+     if(process.env.RBAC_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.RBAC_SCREENSHOT_DIR,'04-手机邀请成员.png')});
+     await invite.getByRole('button',{name:'发送邀请'}).click();
+     await members.getByRole('tab',{name:/待接受邀请/}).waitFor();
+     assert.equal(await members.getByRole('tab',{name:/待接受邀请/}).getAttribute('aria-selected'),'true');
+     await members.getByText('Agent 投稿者',{exact:true}).waitFor();
+     await members.getByRole('button',{name:'撤销邀请'}).click();
+     await members.getByText('没有待接受的邀请。新邀请会显示在这里。').waitFor();
+     await members.getByLabel('关闭').click();
+     await account.click(); await page.getByRole('button',{name:'书库设置',exact:true}).click();
+     await settings.getByRole('button',{name:'归档书库'}).waitFor();
+     assert.deepEqual(errors,[]);
+     pass('Chinese desktop/mobile member tabs, single-role editing and invitations, separate library settings');
    } finally { await browser.close(); }
  }
  console.log(`Passed ${results.length} integration suites.`);
