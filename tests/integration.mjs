@@ -256,6 +256,19 @@ try{
  assert.equal((await opds('bob',{download:'Share shelf/same.txt'})).status,400);
  assert.equal((await opds('alice',{download:'private.txt'})).text,'Alice root content');
  pass('subscription case-folding, live scoped feed/search and account isolation');
+ const original='Share shelf/new.txt', renamed='Share shelf/改名后的书.txt';
+ assert.equal((await ui({action:'rename',dir:'Share shelf',file:'new.txt',new_name:'same'})).status,409);
+ assert.equal((await ui({action:'rename',dir:'Share shelf',file:'new.txt',new_name:'../outside'})).status,400);
+ assert.equal((await ui({action:'rename',dir:'Share shelf',file:'new.txt',new_name:'  '})).status,400);
+ assert.equal((await request(url({s:key,download:original}))).text,'saved');
+ assert.equal((await ui({action:'rename',dir:'Share shelf',file:'new.txt',new_name:'改名后的书'})).status,303);
+ assert.equal((await request(url({s:key,download:original}))).status,404);
+ assert.equal((await request(url({s:key,download:renamed}))).text,'saved');
+ assert((await request(url({s:key}))).text.includes('改名后的书'));
+ assert.equal((await ui({action:'rename',dir:'Share shelf',file:'改名后的书.txt',new_name:'改名后的书'})).status,303);
+ assert.equal((await ui({action:'rename',dir:'Share shelf',file:'改名后的书.txt',new_name:'new'})).status,303);
+ pass('rename preserves the extension and sharing, rejects invalid names and never overwrites a book');
+
 
  r=await ui({action:'move',dir:'Share shelf',file:'other.txt',destination:''});assert.equal(r.status,303,r.text);
  assert.equal((await request(url({s:key,download:'Share shelf/other.txt'}))).status,404);
@@ -398,6 +411,18 @@ try{
      const download=page.waitForEvent('download');
      await page.getByRole('link',{name:'Download web-ui.txt'}).click();
      assert.equal((await download).suggestedFilename(),'web-ui.txt');
+     await page.getByLabel('More actions for web-ui.txt').click();
+     await page.getByRole('button',{name:'Rename',exact:true}).click();
+     const renameModal=page.getByRole('dialog',{name:'Rename book'});
+     assert.equal(await renameModal.getByLabel('New book name').inputValue(),'web-ui');
+     await renameModal.getByLabel('New book name').fill('private');
+     await renameModal.getByRole('button',{name:'Save name'}).click();
+     await renameModal.getByRole('alert').getByText('A book with this name already exists.').waitFor();
+     assert.equal(await renameModal.getByLabel('New book name').inputValue(),'private');
+     await renameModal.getByLabel('New book name').fill('web-ui-renamed');
+     await renameModal.getByRole('button',{name:'Save name'}).click();
+     await page.getByRole('link',{name:'Download web-ui-renamed.txt'}).waitFor();
+
      await page.setViewportSize({width:390,height:844});
      assert(await rootFolder.isVisible());
      await page.getByRole('button',{name:'Choose folder'}).click();

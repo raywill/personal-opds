@@ -279,9 +279,24 @@ function manageBook(string $action,string $category,string $name,string $to): vo
             if (!unlink($source)) reject('Could not delete the book.',409);
             return;
         }
-        if ($category===$to) reject('Choose a different destination.');
-        $target=resolveDestinationDirectory($to).'/'.$name;
-        if (!@link($source,$target)) reject('Could not move; check for an existing book with the same name.',409);
+        if ($action==='rename') {
+            $stem=$to;
+            if ($stem===pathinfo($name,PATHINFO_FILENAME)) return;
+            $suffix='.'.pathinfo($name,PATHINFO_EXTENSION);
+            if (trim($stem)==='' || trim($stem)!==$stem) reject('Enter a valid book name.');
+            $newName=safeFilename($stem.$suffix);
+            if ($newName===$name) return;
+            $target=dirname($source).'/'.$newName;
+            if (!@link($source,$target)) {
+                clearstatcache(true,$target);
+                if (file_exists($target) || is_link($target)) reject('A book with this name already exists.',409);
+                reject('Could not rename the book.',409);
+            }
+        } elseif ($action==='move') {
+            if ($category===$to) reject('Choose a different destination.');
+            $target=resolveDestinationDirectory($to).'/'.$name;
+            if (!@link($source,$target)) reject('Could not move; check for an existing book with the same name.',409);
+        } else reject('Unknown action.');
         if (!@unlink($source)) {
             @unlink($target);
             reject('Could not remove the original book.',409);

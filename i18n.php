@@ -1,6 +1,16 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'Enter a valid book name.' => '请输入有效的书名。',
+  'A book with this name already exists.' => '当前目录已有同名书籍，不会覆盖。',
+  'Could not rename the book.' => '无法重命名这本书。',
+  'Book renamed.' => '已重命名。',
+  'Rename' => '重命名',
+  'Rename book' => '重命名书籍',
+  'New book name' => '新书名',
+  'This changes the filename, not the file format or the title stored inside an EPUB.' => '只更改文件名，不会改变文件格式或 EPUB 内部的书名。',
+  'The subscription URL stays the same, but the old download link for this book will stop working.' => '目录的订阅链接不变，但这本书原来的下载链接将失效。',
+  'Save name' => '保存名称',
   'Account menu' => '账号菜单',
   'Signed in as %s' => '当前账号：%s',
   'View SKILL.md' => '查看 SKILL.md',

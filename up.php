@@ -53,7 +53,7 @@ if (!$user || !hash_equals($user['password'],$_SESSION['password']??'') ||
     $viewer=''; $user=null;
     unset($_SESSION['account'],$_SESSION['password'],$_SESSION['activity'],$_SESSION['issued']);
 } else { $_SESSION['activity']=$now; setAccountScope($viewer); }
-$error=''; $notice=''; $token=''; $dir=''; $activate=''; $activateFor=''; $preview=false;
+$error=''; $notice=''; $token=''; $dir=''; $activate=''; $activateFor=''; $preview=false; $renameDraft=null;
 $action=is_string($_POST['action']??null)?$_POST['action']:'';
 try {
     if (!in_array($method,['GET','HEAD','POST'],true)) reject('Method not allowed.',405);
@@ -98,6 +98,10 @@ try {
             case 'revoke':
                 manageShare($dir,$action==='revoke');
                 $_SESSION['notice']=$action==='revoke'?tr('Share revoked.'):tr('Share link ready.'); go($dir);
+            case 'rename':
+                $renameDraft=['file'=>field('file',$_POST),'name'=>field('new_name',$_POST)];
+                manageBook('rename',$dir,$renameDraft['file'],$renameDraft['name']);
+                $_SESSION['notice']=tr('Book renamed.'); go($dir);
             case 'move':
             case 'delete':
                 manageBook($action,$dir,field('file',$_POST),field('destination',$_POST));
@@ -234,7 +238,7 @@ h1,h2,h3,p{margin:0 0 10px}h2{font-size:1.06rem}.bar,.actions{display:flex;align
 .status,.error{padding:9px 12px;border-radius:9px;margin-bottom:12px;background:var(--mint);overflow-wrap:anywhere}.error{background:#fae9ed;color:var(--warn)}.shelf-notice:empty{display:none}
 button,.button{min-height:40px;font:inherit;font-size:.89rem;font-weight:680;background:white;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 11px;cursor:pointer;text-decoration:none;display:inline-flex;gap:7px;align-items:center;justify-content:center;line-height:1.5}button:hover,.button:hover{background:var(--bg)}.primary{background:var(--accent);color:white;border-color:var(--accent)}.primary:hover{background:#1744bd}.primary.upload-launch{min-height:42px;padding:8px 14px;font-size:.96rem}
 .icon-button{border-color:transparent;background:transparent;width:42px;min-height:42px;padding:0}.icon-button:hover{background:var(--blue-soft)}button.danger{color:var(--warn)}button:disabled{opacity:.6;cursor:wait}
-input,select,textarea{max-width:100%;font:inherit;border:1px solid #acbfd9;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin:12px 0;font-weight:650}.auth input{width:100%}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:116px}.dialog-close{margin-inline-start:auto}
+input,select,textarea{max-width:100%;font:inherit;border:1px solid #acbfd9;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin:12px 0;font-weight:650}.auth input{width:100%}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:116px}.dialog-close{margin-inline-start:auto}.rename-name{display:flex;align-items:center;gap:8px;margin-bottom:10px}.rename-name input{min-width:0;flex:1}.rename-name span{color:var(--soft);flex:none}
 dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1px solid var(--line);border-radius:16px;padding:18px;color:var(--ink);box-shadow:0 16px 64px #182c4a30}dialog::backdrop{background:#172b4470}dialog h2{font-size:1.23rem}dialog select{width:100%}.folder-form{margin-top:12px}.folder-form input{min-width:0;flex:1}.dialog-head{margin-bottom:10px}.upload-form input[type=file]{display:block;width:100%;margin-top:5px}.upload-form input::file-selector-button{border:0;padding:6px 10px;border-radius:6px;background:var(--blue-soft);color:var(--ink);font:inherit;margin-right:8px}.upload-form progress{accent-color:var(--accent)}progress{max-width:94px}.queue p{overflow-wrap:anywhere}.queue{margin-top:10px}.subscription-preview{margin-top:12px}.subscription-preview ul{max-height:180px;overflow:auto;padding-inline-start:20px}
 .share-summary{margin:7px 0 10px;color:var(--soft)}.share-summary time{white-space:nowrap}.share-secondary{border-top:1px solid var(--line);padding-top:9px;margin-top:12px}.share-secondary .button,.share-secondary button{border-color:transparent}.tool-divider{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
 @media(max-width:760px){.top{min-height:60px;padding:0 16px}.account-name{display:none}.account summary{padding:4px 9px}.account-popover{inset-inline-end:16px}.layout{display:block;min-height:calc(100vh - 60px)}.sidebar{display:none}.shelf-body{padding:17px 16px 40px}.page-message{margin:10px 16px 0}.auth{margin:32px 14px}.folder-trigger{display:inline-flex;align-items:center;gap:7px;margin-bottom:3px;border:0;padding:4px 10px}.shelf-heading-row .eyebrow{display:none}.shelf-head{padding-bottom:14px}.heading-title{font-size:clamp(26px,8vw,36px)}.shelf-meta{margin-top:6px}.shelf-heading-row{gap:8px}.book{grid-template-columns:34px minmax(0,1fr) 34px 32px;gap:8px;min-height:66px;padding:9px 0}.book-icon{width:34px;height:42px}.book .icon-button{width:100%;min-height:40px}.sheet{margin:auto 0 0;width:100%;max-width:none;max-height:88%;border-radius:18px 18px 0 0;padding:14px 16px max(20px,env(safe-area-inset-bottom));}}
@@ -267,7 +271,7 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php endif; ?>
 <main>
 <?php if ($notice!==''): ?><p role="status" class="status page-message"><?=h($notice)?></p><?php endif;?>
-<?php if ($error!==''): ?><p role="alert" class="error page-message"><?=h($error)?></p><?php endif;?>
+<?php if ($error!=='' && !$renameDraft): ?><p role="alert" class="error page-message"><?=h($error)?></p><?php endif;?>
 <?php if ($activate!=='' || !$user): ?><section class="panel auth">
 <p class="eyebrow"><?=tr_html('Private library')?></p>
 <?php if ($activate!==''): ?><h1><?=tr_html('Set your password')?></h1><p class="muted"><?=h(sprintf(tr('Set a password for %s. Use the same password in your OPDS reader.'),$activateFor))?></p>
@@ -343,6 +347,7 @@ if ($preview) {
    <details class="book-menu">
     <summary class="button icon-button" aria-label="<?=h(sprintf(tr('More actions for %s'),$name))?>"><?=icon('more')?></summary>
     <div class="book-actions">
+     <button type="button" data-book-rename="<?=h($name)?>" data-book-stem="<?=h($title)?>" data-book-extension="<?=h('.'.pathinfo($name,PATHINFO_EXTENSION))?>"><?=tr_html('Rename')?></button>
      <?php if ($directories): ?><button type="button" data-book-move="<?=h($name)?>"><?=tr_html('Move')?></button><?php endif;?>
      <form action="up.php" method="post" data-confirm="<?=$active?tr_html('Delete this book? Subscribers will no longer be able to download it.'):tr_html('Delete this book?')?>"><?php hidden($csrf,'delete',$dir);?><input type="hidden" name="file" value="<?=h($name)?>"><button class="danger"><?=tr_html('Delete')?></button></form>
     </div>
@@ -388,6 +393,20 @@ if ($preview) {
  <button class="primary" type="submit"><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
  </form><div class="queue" id="queue" aria-live="polite"></div>
 </dialog>
+<?php if ($files || $renameDraft): ?>
+<dialog id="rename-dialog" class="sheet" aria-labelledby="rename-dialog-title" <?=$renameDraft?'data-show':''?>>
+ <div class="bar dialog-head"><h2 id="rename-dialog-title"><?=tr_html('Rename book')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+ <?php if ($renameDraft): ?><p role="alert" class="error" id="rename-error"><?=h($error)?></p><?php endif; ?>
+ <form method="post" action="up.php"><?php hidden($csrf,'rename',$dir); ?>
+  <input type="hidden" name="file" value="<?=h($renameDraft['file']??'')?>">
+  <label for="rename-name"><?=tr_html('New book name')?></label>
+  <div class="rename-name"><input id="rename-name" name="new_name" value="<?=h($renameDraft['name']??'')?>" required maxlength="240" aria-describedby="rename-hint"><span id="rename-extension"><?=h($renameDraft?'.'.pathinfo($renameDraft['file'],PATHINFO_EXTENSION):'')?></span></div>
+  <p id="rename-hint" class="muted"><?=tr_html('This changes the filename, not the file format or the title stored inside an EPUB.')?></p>
+  <?php if ($active): ?><p class="muted"><?=tr_html('The subscription URL stays the same, but the old download link for this book will stop working.')?></p><?php endif; ?>
+  <button class="primary"><?=tr_html('Save name')?></button>
+ </form>
+</dialog>
+<?php endif; ?>
 <?php if ($directories): ?><dialog id="move-dialog" class="sheet" aria-labelledby="move-dialog-title"><form method="post" action="up.php" data-move="<?=$active?'1':'0'?>" data-shared-warning="<?=tr_html('Moving this book changes what subscribers can see. Continue?')?>"><?php hidden($csrf,'move',$dir);?>
 <div class="bar dialog-head"><h2 id="move-dialog-title"><?=tr_html('Move')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div><p id="moving-book"></p>
 <input type="hidden" name="file"><label><?=tr_html('Move destination')?><select name="destination">
@@ -407,6 +426,8 @@ const toolsDialog=document.querySelector('#tools-dialog');
 const shareDialog=document.querySelector('#share-dialog');
 const uploadDialog=document.querySelector('#upload-dialog');
 const moveDialog=document.querySelector('#move-dialog');
+const renameDialog=document.querySelector('#rename-dialog');
+const renameName=renameDialog?.querySelector('#rename-name');
 const form=document.querySelector('#upload'), retry=document.querySelector('#retry');
 const destination=form?.elements.directory;
 const folderForm=document.querySelector('#upload-folder');
@@ -425,6 +446,14 @@ document.addEventListener('click',e=>{
  }
  const close=e.target.closest('.dialog-close');
  if(close&&!(close.closest('dialog')===uploadDialog&&(busy||addingFolder)))close.closest('dialog')?.close();
+ const rename=e.target.closest('[data-book-rename]');
+ if(rename&&renameDialog){
+  renameDialog.querySelector('[name=file]').value=rename.dataset.bookRename;
+  renameName.value=rename.dataset.bookStem;
+  renameDialog.querySelector('#rename-extension').textContent=rename.dataset.bookExtension;
+  const error=renameDialog.querySelector('#rename-error');if(error)error.hidden=true;
+  renameDialog.showModal();renameName.select();return;
+ }
  const trigger=e.target.closest('[data-book-move]');
  if(!trigger||!moveDialog)return;
  moveDialog.querySelector('[name=file]').value=trigger.dataset.bookMove;
@@ -441,6 +470,7 @@ shareDialog?.addEventListener('close',()=>{
  const url=new URL(location.href);
  if(url.searchParams.has('preview')){url.searchParams.delete('preview');history.replaceState(null,'',url);}
 });
+if(renameDialog?.hasAttribute('data-show')){renameDialog.showModal();renameName.focus();}
 if(shareDialog?.hasAttribute('data-show'))shareDialog.showModal();
 if(toolsDialog?.hasAttribute('data-show'))toolsDialog.showModal();
 toolsDialog?.addEventListener('close',()=>accountButton?.focus());
