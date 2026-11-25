@@ -103,8 +103,8 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title><?=re($title)?></title>
-<link rel="stylesheet" href="reader.css">
-<?php if (!$error): ?><script src="reader.js" defer></script><?php endif; ?>
+<link rel="stylesheet" href="reader.css?v=<?=filemtime(__DIR__.'/reader.css')?>">
+<?php if (!$error): ?><script src="reader.js?v=<?=filemtime(__DIR__.'/reader.js')?>" defer></script><?php endif; ?>
 </head>
 <body>
 <header class="reader-bar">
@@ -115,9 +115,9 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
 <?php if ($error): ?>
  <main class="reader-error" role="alert"><?=re($error)?></main>
 <?php else: ?>
-<div id="reader" data-config="<?=re(json_encode($page,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE))?>">
+<div id="reader" data-format="<?=re($page['format'])?>" data-config="<?=re(json_encode($page,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE))?>">
  <div class="reader-toolbar" id="toolbar" hidden>
-  <button id="contents" type="button"><?=tr_html('Contents')?></button>
+  <?php if ($page['format']==='txt'): ?><button id="contents" type="button"><?=tr_html('Contents')?></button><?php endif; ?>
   <button id="settings" type="button"><?=tr_html('Reading settings')?></button>
  </div>
  <div class="reader-message" id="reader-message">
@@ -128,14 +128,22 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
   <article id="book" aria-busy="true"></article>
   <button class="continue" id="continue" type="button" hidden><?=tr_html('Next section')?></button>
  </div>
+ <?php if ($page['format']==='txt'): ?>
  <footer class="reader-footer">
   <button id="previous" type="button" aria-label="<?=tr_html('Previous page')?>" disabled>‹</button>
   <span id="progress"></span>
   <button id="next" type="button" aria-label="<?=tr_html('Next page')?>" disabled>›</button>
  </footer>
- <dialog id="toc" aria-labelledby="toc-title">
+ <?php else: ?>
+ <button id="contents" class="contents-fab" type="button" aria-controls="toc" aria-expanded="false" aria-haspopup="dialog">
+  <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"><path d="M9 6h10M9 12h10M9 18h10M5 6h.01M5 12h.01M5 18h.01"/></svg>
+  <?=tr_html('Contents')?>
+ </button>
+ <?php endif; ?>
+ <dialog id="toc"<?=$page['format']==='epub'?' class="contents-drawer"':''?> aria-labelledby="toc-title">
   <button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button>
   <h2 id="toc-title"><?=tr_html('Contents')?></h2>
+  <?php if ($page['format']==='epub'): ?><p id="progress" class="contents-progress"></p><?php endif; ?>
   <div id="chapters"></div>
  </dialog>
  <dialog id="preferences" aria-labelledby="prefs-title">

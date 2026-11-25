@@ -4,6 +4,7 @@
  const app=$('reader'), cfg=JSON.parse(app.dataset.config);
  const vp=$('viewport'), book=$('book'), status=$('status'), more=$('continue');
  const progress=$('progress'), previous=$('previous'), next=$('next');
+ const toc=$('toc'), contents=$('contents');
  const prefix='personal-opds:reader:v1:'+location.pathname+':'+cfg.profile+':';
  const prefsKey=prefix+'settings', posKey=prefix+cfg.book;
  const read=key=>{try{return JSON.parse(localStorage.getItem(key))||{};}catch{return {};}};
@@ -55,9 +56,9 @@
      const ratio=txt?(data.total?(part+(data.next-part)*offset)/data.total:1):(part+offset)/data.count;
      const percent=new Intl.NumberFormat(document.documentElement.lang,{style:'percent'}).format(clamp(ratio));
      progress.textContent=txt?percent:format(cfg.part,part+1,data.count)+' · '+percent;
-     previous.disabled=busy||!!failed||(vp.scrollTop<1&&prevPart()===undefined);
-     next.disabled=busy||!!failed||(vp.scrollTop>=limit()-1&&nextPart()===undefined);
-     more.hidden=!!failed||nextPart()===undefined||app.dataset.mode==='page';
+     if(previous)previous.disabled=busy||!!failed||(vp.scrollTop<1&&prevPart()===undefined);
+     if(next)next.disabled=busy||!!failed||(vp.scrollTop>=limit()-1&&nextPart()===undefined);
+     more.hidden=busy||!!failed||nextPart()===undefined||(txt&&app.dataset.mode==='page');
  }
  async function get(query){
      const response=await fetch(cfg.url+'&'+new URLSearchParams(query),{cache:'no-store',credentials:'same-origin'});
@@ -76,7 +77,9 @@
      clearTimeout(saveTimer);
      busy=true; failed=null;
      book.setAttribute('aria-busy','true');
-     previous.disabled=next.disabled=true;more.hidden=true;
+     if(previous)previous.disabled=true;
+     if(next)next.disabled=true;
+     more.hidden=true;
      $('reader-message').hidden=false;status.textContent=cfg.loading;$('retry').hidden=true;
      progress.textContent='';
      // Keep the old chapter on screen until the requested one returns.
@@ -114,7 +117,7 @@
      if(dir<0&&vp.scrollTop<=1){const p=prevPart();if(p!==undefined)load(p,1);return;}
      vp.scrollBy({top:dir*Math.max(96,vp.clientHeight-56),behavior:'instant'});
  }
- previous.addEventListener('click',()=>step(-1));next.addEventListener('click',()=>step(1));
+ previous?.addEventListener('click',()=>step(-1));next?.addEventListener('click',()=>step(1));
  more.addEventListener('click',()=>{const n=nextPart();if(n!==undefined&&!busy)load(n);});
  $('retry').addEventListener('click',()=>failed?.());
  vp.addEventListener('scroll',()=>{
@@ -154,25 +157,55 @@
          event.preventDefault();step(['ArrowRight','PageDown'].includes(event.key)?1:-1);
      }
  });
+ let closingToc=0;
+ function finishTocClose(){
+     clearTimeout(closingToc);closingToc=0;
+     delete toc.dataset.closing;
+     if(toc.open)toc.close();
+ }
+ function closeToc(){
+     if(txt||matchMedia('(prefers-reduced-motion: reduce)').matches){finishTocClose();return;}
+     if(!toc.open||closingToc)return;
+     toc.dataset.closing='';
+     closingToc=setTimeout(finishTocClose,240);
+ }
+ toc.addEventListener('animationend',event=>{
+     if(event.target===toc&&event.animationName==='reader-drawer-out')finishTocClose();
+ });
+ toc.addEventListener('close',()=>{
+     clearTimeout(closingToc);closingToc=0;delete toc.dataset.closing;
+     if(!txt)contents.setAttribute('aria-expanded','false');
+ });
+ if(!txt){
+     toc.addEventListener('cancel',event=>{event.preventDefault();closeToc();});
+     toc.addEventListener('click',event=>{
+         if(event.target!==toc)return;
+         const box=toc.getBoundingClientRect();
+         if(event.clientX<box.left||event.clientX>=box.right||event.clientY<box.top||event.clientY>=box.bottom)closeToc();
+     });
+ }
  function addChapter(label,to,fragment=''){
      const item=document.createElement('button');item.type='button';item.textContent=label;
      if(to===part)item.setAttribute('aria-current','location');
-     item.addEventListener('click',()=>{$('toc').close();load(to,0,fragment);});
+     item.addEventListener('click',()=>{if(closingToc)return;closeToc();load(to,0,fragment);});
      $('chapters').append(item);
  }
  let tocCache=null;
- $('contents').addEventListener('click',async()=>{
-     $('toc').showModal();$('chapters').replaceChildren();
+ contents.addEventListener('click',async()=>{
+     toc.showModal();$('chapters').replaceChildren();
+     if(!txt)contents.setAttribute('aria-expanded','true');
      if(txt){addChapter(cfg.start,0);return;}
      const message=document.createElement('p');message.textContent=cfg.loading;$('chapters').append(message);
      try{
          tocCache??=(await get({toc:1})).toc;
          $('chapters').replaceChildren();
          for(const [to,fragment,label] of tocCache)addChapter(label||format(cfg.part,to+1,data?.count||tocCache.length),to,fragment);
+         if(toc.open)$('chapters').querySelector('[aria-current]')?.scrollIntoView({block:'nearest'});
      }catch(error){message.textContent=error.message||cfg.failed;}
  });
  $('settings').addEventListener('click',()=>$('preferences').showModal());
- document.querySelectorAll('dialog .dialog-close').forEach(button=>button.addEventListener('click',()=>button.closest('dialog').close()));
+ toc.querySelector('.dialog-close').addEventListener('click',closeToc);
+ $('preferences').querySelector('.dialog-close').addEventListener('click',()=>$('preferences').close());
  if(txt)$('encoding').addEventListener('change',()=>{
      textChoice=$('encoding').value;encoding='';boundaries.clear();$('preferences').close();load(0);
  });

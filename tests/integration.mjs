@@ -1294,9 +1294,21 @@ try{
      await web.getByText('Opening text',{exact:true}).waitFor();
      assert.equal(fetched.filter(u=>u.includes('&part=')).length,1);
      assert(!fetched.some(u=>u.includes('example.invalid')||u.includes('&toc=')));
-     await web.getByRole('button',{name:'Reading controls'}).click();
-     await web.getByRole('button',{name:'Contents'}).click();
-     await web.getByRole('button',{name:'Second chapter'}).click();
+     const drawer=web.getByRole('dialog',{name:'Contents'});
+     const contents=web.getByRole('button',{name:'Contents',exact:true});
+     assert.equal(await web.locator('.reader-footer').count(),0);
+     const fab=await contents.boundingBox();
+     assert(fab.x<25&&fab.y+fab.height>770);
+     await contents.click();
+     await drawer.getByRole('button',{name:'Opening pages'}).waitFor();
+     assert.equal(await drawer.getByRole('button',{name:'Opening pages'}).getAttribute('aria-current'),'location');
+     await drawer.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+     assert(Math.abs((await drawer.boundingBox()).x)<1);
+     await web.mouse.click(1000,370);
+     await drawer.waitFor({state:'hidden'});
+     assert.equal(await contents.getAttribute('aria-expanded'),'false');
+     await contents.click();
+     await drawer.getByRole('button',{name:'Second chapter'}).click();
      await web.getByText('The second chapter',{exact:true}).waitFor();
      await web.locator('#viewport').evaluate(v=>v.scrollTop=2200);await web.waitForTimeout(240);
      await web.reload();await web.getByText('The second chapter',{exact:true}).waitFor();
@@ -1309,15 +1321,27 @@ try{
      await web.reload();await web.getByText('The second chapter',{exact:true}).waitFor();
      assert.equal(await web.locator('html').getAttribute('data-theme'),'warm');
      assert.equal(await web.locator('#reader').getAttribute('data-mode'),'page');
+     await web.setViewportSize({width:390,height:844});
+     await contents.click();
+     await drawer.getByRole('button',{name:'Second chapter'}).waitFor();
+     await drawer.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+     assert((await drawer.boundingBox()).width<390);
+     await web.mouse.click(382,405);
+     await drawer.waitFor({state:'hidden'});
+     await contents.click();
+     await web.keyboard.press('Escape');
+     await drawer.waitFor({state:'hidden'});
      await web.getByRole('link',{name:'Back to library'}).click();
      await web.getByRole('link',{name:'readable',exact:true}).waitFor();
      await web.setViewportSize({width:390,height:844});
      await web.getByRole('link',{name:'long',exact:true}).click();
      await web.locator('.plain-text').waitFor();
+     assert(await web.locator('.reader-footer').isVisible());
+     assert.equal(await web.locator('.contents-fab').count(),0);
      assert((await web.locator('.plain-text').textContent()).includes('回到上次阅读的位置'));
      assert.equal(await web.evaluate(()=>document.documentElement.scrollWidth),390);
      assert.deepEqual(errors,[]);
-     pass('desktop/mobile reader entry, TOC navigation, reload resumes the chapter and scroll position, and themes persist');
+     pass('desktop/mobile EPUB drawer left edge, backdrop and Escape, navigation and resume; TXT unchanged');
    } finally { await browser.close(); }
  }
  {
