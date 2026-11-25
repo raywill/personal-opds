@@ -80,7 +80,7 @@ try{
  fs.chmodSync(app,0o700);
  r=await setupPost(1,'next');assert.equal(r.status,200,r.text);assert.equal(r.json.step,2);
  r=await setupPost(2,'next',{...settings,data_dir:path.join(web,'data')});assert.equal(r.status,400);assert.equal(r.json.step,2);
- const locationStep=await request();assert(locationStep.text.includes(base));
+ const locationStep=await request();assert(!locationStep.text.includes(base));
  assert(!locationStep.text.includes('name="base_url"'));assert(locationStep.text.includes('Site name'));
  r=await setupPost(2,'next',{...settings,title:''});assert.equal(r.status,400);assert.equal(r.json.step,2);
  assert(r.json.message.includes('Invalid site name'));
@@ -99,6 +99,7 @@ try{
  r=await setupPost(3,'next',{username:'root'});assert.equal(r.status,400);assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'Alice'});assert.equal(r.status,400);assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'alice'});assert.equal(r.status,200,r.text);assert.equal(r.json.step,4);
+ const reviewStep=await request();assert(!reviewStep.text.includes(base));assert(!reviewStep.text.includes('Site URL'));
  r=await setupPost(4,'back');assert.equal(r.json.step,3);
  r=await setupPost(3,'back',{username:'alice'});assert.equal(r.json.step,2);
  const occupied=path.join(temp,'occupied');
