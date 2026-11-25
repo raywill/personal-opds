@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'Folder contents' => '目录内容',
   'Archive' => '归档',
   'Active' => '已激活',
   'Unknown author' => '未知作者',

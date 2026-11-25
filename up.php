@@ -342,9 +342,15 @@ main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-temp
 .eyebrow{font-size:.78rem;color:var(--soft);font-weight:680;margin:0 0 9px}.shelf-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;margin-top:10px;color:var(--soft);font-size:.8rem}.upload-launch{flex:none}
 .pill-trigger{display:inline-flex;align-items:center;gap:7px;white-space:normal;border:0;border-radius:100px;font-size:.8rem;padding:7px 11px;min-height:36px;background:#edf2f7;color:var(--soft)}.pill-trigger.live{color:var(--green);background:var(--mint)}.pill-trigger.live:hover{background:#d9eee3}.pill-trigger time{font-weight:inherit}
 .badge{display:inline-block;font-size:.76rem;background:var(--mint);color:var(--green);border-radius:100px;padding:4px 8px;white-space:nowrap}.pill-warn{background:#fff1d8;color:#793e00}.pill-off{background:#edf2f7;color:var(--soft)}
-.root-folders{margin:0 0 22px}.root-folders h2,.root-books-title{font-size:.88rem;color:var(--soft);font-weight:730;margin:0 0 7px}.root-folder-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}.root-folder-list a{display:flex;align-items:center;gap:9px;min-height:47px;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:660}.root-folder-list a:hover{background:var(--blue-soft)}.root-folder-list .folder-name{flex:1}.root-folder-list .folder-name .icon{color:var(--accent)}.root-folder-arrow{transform:rotate(-90deg);display:flex;color:var(--soft)}.root-books-title{padding-top:2px}.books-surface{border-top:1px solid var(--line);padding-top:9px}.book{position:relative;display:grid;grid-template-columns:38px minmax(0,1fr) 42px 42px;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);min-height:70px}
+.root-folder-arrow{transform:rotate(-90deg);display:flex;color:var(--soft)}
+.shelf-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line);--row-grid:38px minmax(0,1fr) 42px 42px;--row-gap:12px}
+.book,.shelf-folder{position:relative;border-bottom:1px solid var(--line)}
+.book,.shelf-folder>a{display:grid;grid-template-columns:var(--row-grid);gap:var(--row-gap);align-items:center;min-height:64px;padding:8px 0}
+.shelf-folder>a{color:var(--ink);text-decoration:none}.shelf-folder>a:hover{background:var(--bg)}
+.shelf-folder-icon{display:grid;place-items:center;width:100%;height:38px;color:var(--accent)}
+.shelf-folder-name,.book-name{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.shelf-folder-name{font-size:.95rem;font-weight:720}.shelf-folder-detail{grid-column:3 / 5;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding-inline-end:8px}
 .book-icon{display:grid;place-items:center;width:38px;height:46px;border-radius:7px;background:var(--blue-soft);color:#234cac;font-size:.7rem;font-weight:790;letter-spacing:.02em}.book-icon.txt{background:#eaf2ec;color:#285e4b}
-.book-name{color:var(--ink);text-decoration:none;font-size:.95rem;font-weight:720;line-height:1.35;overflow-wrap:anywhere}.book-name:hover{text-decoration:underline}.book-info small{display:block;font-size:.78rem;margin-top:2px}.book-menu{position:relative}
+.book-name{color:var(--ink);text-decoration:none;font-size:.95rem;font-weight:720;line-height:1.35}.book-name:hover{text-decoration:underline}.book-info small{display:block;font-size:.78rem;margin-top:2px}.book-menu{position:relative}
 .book-actions{display:grid;gap:4px;position:absolute;z-index:2;inset-inline-end:0;top:calc(100% + 4px);min-width:130px;padding:5px;background:white;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #13264024}.book-actions button{width:100%;text-align:start}.empty{padding:30px 10px;text-align:center}.empty p{margin:0}.pagination{padding:12px 0}
 h1,h2,h3,p{margin:0 0 10px}h2{font-size:1.06rem}.bar,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar{justify-content:space-between}.bar h2{margin:0}.muted,small{color:var(--soft)}
 .status,.error{padding:9px 12px;border-radius:9px;margin-bottom:12px;background:var(--mint);overflow-wrap:anywhere}.error{background:#fae9ed;color:var(--warn)}.shelf-notice:empty{display:none}
@@ -353,7 +359,7 @@ button,.button{min-height:40px;font:inherit;font-size:.89rem;font-weight:680;bac
 input,select,textarea{max-width:100%;font:inherit;border:1px solid #acbfd9;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin:12px 0;font-weight:650}.auth input{width:100%}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:116px}.dialog-close{margin-inline-start:auto}.rename-name{display:flex;align-items:center;gap:8px;margin-bottom:10px}.rename-name input{min-width:0;flex:1}.rename-name span{color:var(--soft);flex:none}
 dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1px solid var(--line);border-radius:16px;padding:18px;color:var(--ink);box-shadow:0 16px 64px #182c4a30}dialog::backdrop{background:#172b4470}dialog h2{font-size:1.23rem}dialog select{width:100%}.folder-form{margin-top:12px}.folder-form input{min-width:0;flex:1}.dialog-head{margin-bottom:10px}.upload-target{color:var(--soft);background:var(--bg);padding:.65rem .8rem;border-radius:8px;overflow-wrap:anywhere}.upload-form input[type=file]{display:block;width:100%;margin-top:5px}.upload-form input::file-selector-button{border:0;padding:6px 10px;border-radius:6px;background:var(--blue-soft);color:var(--ink);font:inherit;margin-right:8px}.upload-form progress{accent-color:var(--accent)}progress{max-width:94px}.queue p{overflow-wrap:anywhere}.queue{margin-top:10px}.subscription-preview{margin-top:12px}.subscription-preview ul{max-height:180px;overflow:auto;padding-inline-start:20px}
 .share-summary{margin:7px 0 10px;color:var(--soft)}.share-summary time{white-space:nowrap}.share-secondary{border-top:1px solid var(--line);padding-top:9px;margin-top:12px}.share-secondary .button,.share-secondary button{border-color:transparent}.tool-divider{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
-@media(max-width:760px){.top{min-height:60px;padding:0 16px}.account-name{display:none}.account summary{padding:4px 9px}.account-popover{inset-inline-end:16px}.layout{display:block;min-height:calc(100vh - 60px)}.sidebar{display:none}.shelf-body{padding:17px 16px 40px}.page-message{margin:10px 16px 0}.auth{margin:32px 14px}.folder-trigger{display:inline-flex;align-items:center;gap:7px;margin-bottom:3px;border:0;padding:4px 10px}.shelf-head{padding-bottom:14px}.shelf-path{font-size:1.0625rem}.shelf-meta{margin-top:6px}.shelf-heading-row{gap:8px}.book{grid-template-columns:34px minmax(0,1fr) 34px 32px;gap:8px;min-height:66px;padding:9px 0}.book-icon{width:34px;height:42px}.book .icon-button{width:100%;min-height:40px}.sheet{margin:auto 0 0;width:100%;max-width:none;max-height:88%;border-radius:18px 18px 0 0;padding:14px 16px max(20px,env(safe-area-inset-bottom));}}
+@media(max-width:760px){.top{min-height:60px;padding:0 16px}.account-name{display:none}.account summary{padding:4px 9px}.account-popover{inset-inline-end:16px}.layout{display:block;min-height:calc(100vh - 60px)}.sidebar{display:none}.shelf-body{padding:17px 16px 40px}.page-message{margin:10px 16px 0}.auth{margin:32px 14px}.folder-trigger{display:inline-flex;align-items:center;gap:7px;margin-bottom:3px;border:0;padding:4px 10px}.shelf-head{padding-bottom:14px}.shelf-path{font-size:1.0625rem}.shelf-meta{margin-top:6px}.shelf-heading-row{gap:8px}.shelf-list{--row-grid:34px minmax(0,1fr) 34px 32px;--row-gap:8px}.shelf-folder-detail{padding-inline-end:0}.shelf-folder-detail .badge{white-space:normal;line-height:1.2;text-align:center}.book-icon{width:34px;height:42px}.book .icon-button{width:100%;min-height:40px}.sheet{margin:auto 0 0;width:100%;max-width:none;max-height:88%;border-radius:18px 18px 0 0;padding:14px 16px max(20px,env(safe-area-inset-bottom));}}
 .brand-area{display:flex;align-items:center;gap:12px;min-width:0}.switcher{overflow-wrap:anywhere;line-height:1.2}
 .library-picker{width:min(910px,calc(100% - 36px));margin:clamp(24px,6vw,76px) auto}.library-picker h1{font-size:clamp(26px,5vw,44px);letter-spacing:-.045em}.library-picker h2{margin-top:24px}.library-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,235px),1fr));gap:12px}.library-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;color:var(--ink);text-decoration:none}.library-card:hover{border-color:var(--accent);background:var(--blue-soft)}.library-card strong,.library-card small{display:block;overflow-wrap:anywhere}.library-card small{margin-top:4px}.member-row,.token-row{padding:10px 0;border-top:1px solid var(--line)}.member-row summary{cursor:pointer}.member-row p,.token-row p{overflow-wrap:anywhere}
 @media(max-width:480px){.brand-area .brand>span:last-child{display:none}.brand-area{gap:8px}.switcher{min-height:36px}}
@@ -557,28 +563,23 @@ if ($preview) {
   </div>
  </div>
  <p role="status" class="status shelf-notice" id="upload-notice"></p>
- <?php if ($dir==='' && $directories): ?>
- <section id="root-folders" class="root-folders" aria-labelledby="root-folders-heading">
-  <h2 id="root-folders-heading"><?=tr_html('Folders')?></h2>
-  <ul class="root-folder-list">
-   <?php foreach ($directories as $item): ?>
-   <li><a href="<?=h(libraryHref($item))?>"><span class="folder-name"><?=icon('folder')?><span><?=h($item)?></span></span><?php if (isset($statuses[$item])): ?><span class="<?=shareBadge($statuses[$item])?>"><?=h(tr($statuses[$item]))?></span><?php endif; ?><span class="root-folder-arrow"><?=icon('down')?></span></a></li>
+ <?php $listedFolders=$dir===''?$directories:[]; $canViewBooks=isset($permissions['view']); ?>
+ <?php if ($canViewBooks || $listedFolders): ?>
+ <div <?=$canViewBooks?'id="books-panel"':''?>>
+  <?php if ($listedFolders || $pageFiles): ?>
+  <ul class="shelf-list" aria-label="<?=tr_html('Folder contents')?>">
+   <?php foreach ($listedFolders as $item): ?>
+   <li class="shelf-folder"><a href="<?=h(libraryHref($item))?>">
+    <span class="shelf-folder-icon"><?=icon('folder')?></span><span class="shelf-folder-name" title="<?=h($item)?>"><?=h($item)?></span>
+    <span class="shelf-folder-detail"><?php if (isset($statuses[$item])): ?><span class="<?=shareBadge($statuses[$item])?>"><?=h(tr($statuses[$item]))?></span><?php endif; ?><span class="root-folder-arrow"><?=icon('down')?></span></span>
+   </a></li>
    <?php endforeach; ?>
-  </ul>
- </section>
- <?php endif; ?>
- <?php if (!isset($permissions['view'])): ?>
- <div class="panel"><p><?=tr_html('This role cannot browse books.')?></p></div>
- <?php else: ?>
- <section id="books-panel"  class="books-surface" aria-labelledby="books-heading">
-  <h2 id="books-heading" class="<?=$dir===''&&$directories?'root-books-title':'sr-only'?>"><?=tr_html('Books')?></h2>
-  <?php if (!$files): ?><div class="empty"><p class="muted"><?=tr_html(isset($permissions['web_upload'])?'No books here yet. Upload an EPUB or TXT to get started.':'No books here yet.')?></p></div><?php endif; ?>
   <?php foreach ($pageFiles as $name=>$size):
     $download=libraryHref($dir,['download'=>$name]);
     $format=strtolower(pathinfo($name,PATHINFO_EXTENSION)); $title=pathinfo($name,PATHINFO_FILENAME); ?>
-  <div class="book">
+  <li class="book">
    <span aria-hidden="true" class="book-icon <?=$format==='txt'?'txt':''?>"><?=h(strtoupper($format))?></span>
-   <div class="book-info"><?php if (isset($permissions['download'])): ?><a class="book-name" href="<?=h($download)?>" title="<?=h($name)?>"><?=h($title)?></a><?php else: ?><span class="book-name"><?=h($title)?></span><?php endif; ?><small><?=h(fileSizeLabel($size))?></small></div>
+   <div class="book-info"><?php if (isset($permissions['download'])): ?><a class="book-name" href="<?=h($download)?>" title="<?=h($name)?>"><?=h($title)?></a><?php else: ?><span class="book-name" title="<?=h($name)?>"><?=h($title)?></span><?php endif; ?><small><?=h(fileSizeLabel($size))?></small></div>
    <?php if (isset($permissions['download'])): ?><a class="button icon-button" href="<?=h($download)?>" title="<?=tr_html('Download')?>" aria-label="<?=h(sprintf(tr('Download %s'),$name))?>"><?=icon('download')?></a><?php else: ?><span></span><?php endif; ?>
    <?php if (isset($permissions['organize'])||isset($permissions['delete'])): ?><details class="book-menu">
     <summary class="button icon-button" aria-label="<?=h(sprintf(tr('More actions for %s'),$name))?>"><?=icon('more')?></summary>
@@ -588,10 +589,16 @@ if ($preview) {
      <?php if (isset($permissions['delete'])): ?><form action="up.php" method="post" data-confirm="<?=$active?tr_html('Delete this book? Subscribers will no longer be able to download it.'):tr_html('Delete this book?')?>"><?php hidden($csrf,'delete',$dir);?><input type="hidden" name="file" value="<?=h($name)?>"><button class="danger"><?=tr_html('Delete')?></button></form><?php endif; ?>
     </div>
    </details><?php endif; ?>
-  </div>
+  </li>
   <?php endforeach; ?>
+  </ul>
+  <?php elseif ($canViewBooks): ?>
+  <div class="empty"><p class="muted"><?=tr_html(isset($permissions['web_upload'])?'No books here yet. Upload an EPUB or TXT to get started.':'No books here yet.')?></p></div>
+  <?php endif; ?>
   <?php if ($pages>1): ?><nav class="bar pagination" aria-label="<?=tr_html('Pagination')?>"><?php if($page>1):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page-1]))?>"><?=tr_html('Previous')?></a><?php endif;?><small><?=$page?> / <?=$pages?></small><?php if($page<$pages):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page+1]))?>"><?=tr_html('Next')?></a><?php endif;?></nav><?php endif;?>
- </section><?php endif; ?>
+ </div>
+ <?php endif; ?>
+ <?php if (!$canViewBooks): ?><div class="panel"><p><?=tr_html('This role cannot browse books.')?></p></div><?php endif; ?>
 </div>
 </div>
 <dialog id="folder-list" class="sheet" aria-labelledby="folder-dialog-title">

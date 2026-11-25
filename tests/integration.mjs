@@ -465,9 +465,13 @@ try{
      await page.locator('#files').setInputFiles({name:'web-ui.txt',mimeType:'text/plain',buffer:Buffer.from('Browser UI upload')});
      await page.getByRole('button',{name:'Upload',exact:true}).click();await page.locator('#upload-notice').getByText('Saved: web-ui.txt').waitFor();
      await page.locator('#books-panel').getByRole('link',{name:'web-ui',exact:true}).waitFor();
-     const rootFolder=page.locator('#root-folders a[href="up.php?library=p-alice&dir=Share%20shelf"]');
+     const rootFolder=page.locator('.shelf-list .shelf-folder a[href="up.php?library=p-alice&dir=Share%20shelf"]');
      assert(await rootFolder.isVisible());
-     assert(await page.evaluate(()=>Boolean(document.querySelector('#root-folders').compareDocumentPosition(document.querySelector('#books-panel')) & Node.DOCUMENT_POSITION_FOLLOWING)));
+     assert.equal(await page.locator('#books-panel .shelf-list').count(),1);
+     assert.equal(await page.locator('#books-panel .shelf-list > :first-child').getAttribute('class'),'shelf-folder');
+     assert.equal(await page.locator('#books-panel .shelf-list > :last-child').getAttribute('class'),'book');
+     assert.equal(await page.locator('#books-panel .shelf-list .shelf-folder + .book').count(),1);
+     assert.equal(await page.locator('#books-panel').getByRole('heading').count(),0);
      await rootFolder.click();
      await page.getByRole('heading',{name:'Share shelf',exact:true}).waitFor();
      const breadcrumb=page.getByRole('navigation',{name:'Library location'});
@@ -484,7 +488,7 @@ try{
        assert(fontSize>=16&&fontSize<=20,'Breadcrumb uses restrained readable text');
      }
      await page.setViewportSize({width:1260,height:900});
-     assert.equal(await page.locator('#root-folders').count(),0);
+     assert.equal(await page.locator('.shelf-list .shelf-folder').count(),0);
      await shelfRoot.click();
      await page.getByRole('heading',{name:'alice’s library',exact:true}).waitFor();
 
@@ -527,6 +531,16 @@ try{
      await uploadSheet.getByRole('button',{name:'Upload',exact:true}).click();
      await page.getByRole('heading',{name:'Browser-created folder'}).waitFor();
      await page.getByRole('link',{name:'new-shelf',exact:true}).waitFor();
+     const longTitle='A very long book filename that should stay on one line even when the reader is using a narrow mobile screen';
+     await page.getByRole('button',{name:'Upload books',exact:true}).click();
+     await page.locator('#files').setInputFiles({name:longTitle+'.txt',mimeType:'text/plain',buffer:Buffer.from('Long filename example')});
+     await uploadSheet.getByRole('button',{name:'Upload',exact:true}).click();
+     const longBook=page.getByRole('link',{name:longTitle,exact:true});
+     await longBook.waitFor();
+     assert.equal(await longBook.getAttribute('title'),longTitle+'.txt');
+     assert(await longBook.evaluate(el=>getComputedStyle(el).whiteSpace==='nowrap' &&
+       getComputedStyle(el).textOverflow==='ellipsis' && el.scrollWidth>el.clientWidth));
+     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
      assert.deepEqual(errors,[]);
      pass('desktop and mobile dashboard: book-first navigation, download, current-folder uploads from desktop and mobile, share and revoke');
      await page.close();
@@ -613,7 +627,7 @@ try{
        await zh.goto(base+'up.php');
        await zh.getByLabel('用户名').fill(demo);await zh.getByLabel('密码',{exact:true}).fill(password);
        await zh.getByRole('button',{name:'登录',exact:true}).click();
-       await zh.locator('#root-folders').getByRole('link',{name:/架构与数据库/}).click();
+       await zh.locator('.shelf-list').getByRole('link',{name:/架构与数据库/}).click();
        for(const name of ['架构与数据库','周末阅读','阅读笔记'])await zh.locator('.sidebar').getByRole('link',{name:new RegExp(name)}).waitFor();
        await zh.getByRole('button',{name:'管理目录订阅'}).getByText('分享中',{exact:true}).waitFor();
        const shot=(name)=>zh.screenshot({path:path.join(process.env.SCREENSHOT_DIR,name)});
