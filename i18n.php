@@ -127,6 +127,7 @@ const UI_TRANSLATIONS = array (
   'Invalid file size.' => '文件大小不合法。',
   'Category not found.' => '分类不存在。',
   'All books' => '全部书籍',
+  'The library index is updating. Refresh the catalog shortly.' => '书库正在更新索引，请稍后刷新目录。',
   'Invalid pagination parameter.' => '分页参数无效。',
   'The library is temporarily unavailable.' => '书库暂时不可用。',
   'Server processing failed. Check the server log.' => '服务器处理失败，请检查服务端日志。',

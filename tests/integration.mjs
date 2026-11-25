@@ -161,6 +161,60 @@ try{
  fs.writeFileSync(path.join(shelf,'same.txt'),'replacement');assert.equal((await request(url({s:fourth,download:'Share shelf/same.txt'}))).status,410);
  pass('authenticated move/delete, share replacement, revocation, expiry and safe same-name recreation');
 
+ // Stage 101 small, independently valid EPUBs on disk so both catalogue indexes start cold.
+ const numberedName=i=>'Numbered '+String(i).padStart(3,'0');
+ const numberedDir='Pagination shelf';
+ let numbered=path.join(data,'books','alice',numberedDir);
+ fs.mkdirSync(numbered);
+ const makeBooks=`for($i=1;$i<=101;$i++){
+ $z=new ZipArchive();$name=sprintf("Numbered %03d",$i);
+ if($z->open($argv[1]."/".$name.".epub",ZipArchive::CREATE)!==true)exit(1);
+ $z->addFromString("mimetype","application/epub+zip");$z->setCompressionName("mimetype",ZipArchive::CM_STORE);
+ $z->addFromString("META-INF/container.xml",'<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+ $z->addFromString("book.opf",'<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>'.$name.'</dc:title><dc:creator>Pagination QA</dc:creator></metadata></package>');
+ $z->close();}`;
+ execFileSync(php,['-r',makeBooks,numbered]);
+ assert.equal((await ui({action:'share',dir:numberedDir})).status,303);
+ const numberedKey=(await request('up.php?dir=Pagination+shelf')).text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)[1];
+ const feedLink=(res,rel)=>res.text.match(new RegExp('<link rel="'+rel+'" href="([^"]+)"'))?.[1].replaceAll('&amp;','&');
+ const titles=r=>[...r.text.matchAll(/<entry>[\s\S]*?<title>([^<]+)<\/title>/g)].map(m=>m[1]);
+ async function checkPagination(params,headers={}){
+   let target=url(params), previous;
+   for(const [page,count] of [50,50,1].entries()){
+     const response=await request(target,{headers});
+     assert.equal(response.status,200,response.text);
+     assert.deepEqual(titles(response),Array.from({length:count},(_,i)=>numberedName(page*50+i+1)));
+     const self=feedLink(response,'self');
+     const sp=new URL(self).searchParams;
+     for(const [k,v] of Object.entries(params)) assert.equal(sp.get(k),v);
+     assert.equal(Number(sp.get('offset')),page*50);
+     assert.equal(feedLink(response,'previous'),previous);
+     previous=self;
+     target=feedLink(response,'next');
+     assert.equal(Boolean(target),page<2);
+   }
+ }
+ const pagingAuth=auth('alice',password);
+ const pagedParams={feed:'books',category:numberedDir,q:'Pagination QA'};
+ // A non-existent offset must not be used to warm the fixture before testing the first page.
+ assert.equal((await request(url({...pagedParams,offset:'invalid'}),{headers:pagingAuth})).status,400);
+ await checkPagination(pagedParams,pagingAuth);
+ await checkPagination({s:numberedKey,feed:'books',category:numberedDir,q:'Pagination QA'});
+ await checkPagination(pagedParams,pagingAuth);
+ assert.equal((await opds('alice',{download:numberedDir+'/'+numberedName(101)+'.epub'})).headers['content-type'],'application/epub+zip');
+
+ // A cold backlog above the work cap must not return a misleading partial 200 response.
+ const backlog='Cold backlog';
+ const cold=path.join(data,'books','alice',backlog);fs.mkdirSync(cold);
+ for(let i=0;i<121;i++)fs.writeFileSync(path.join(cold,String(i).padStart(3,'0')+'.txt'),'A valid book.');
+ const coldUrl=url({feed:'books',category:backlog});
+ const busy=await request(coldUrl,{headers:pagingAuth});
+ assert.equal(busy.status,503);assert.equal(busy.headers['retry-after'],'2');assert.equal(titles(busy).length,0);
+ const ready=await request(coldUrl,{headers:pagingAuth});
+ assert.equal(ready.status,200);assert.equal(titles(ready).length,50);
+ pass('cold and warm 101-EPUB paging (50/50/1), private and shared links, bounded cold backlog');
+
+
  r=await ui({action:'logout'});assert.equal(r.status,303);
  assert.equal((await ui({action:'login',username:'bob',password})).status,303);
  const bobToken=await getToken();assert(bobToken && bobToken!==aliceToken);

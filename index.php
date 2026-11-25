@@ -9,6 +9,8 @@ header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 header('Cache-Control: private, no-store');
 const ATOM = 'http://www.w3.org/2005/Atom';
+// Leave room below the entry cap on constrained readers such as CrossPoint.
+const OPDS_PAGE_SIZE = 50;
 
 function requireOpdsAccess(): void
 {
@@ -94,10 +96,16 @@ try {
     $params = $mode === 'books' ? ['feed'=>'books'] : [];
     if ($category !== '') $params['category']=$category;
     if ($query !== '') $params['q']=$query;
+    $offset = 0;
+    if ($mode === 'books') {
+        $rawOffset = parameter('offset','0');
+        if (!preg_match('/\A\d{1,6}\z/D',$rawOffset)) reject(tr('Invalid pagination parameter.'));
+        $offset = (int)$rawOffset;
+    }
     add($doc,$feed,'id',catalogueUrl($params)); add($doc,$feed,'title',$category ?: ($share['category']??LIBRARY_TITLE));
     add($doc,$feed,'updated',gmdate('Y-m-d\TH:i:s\Z'));
     $catalogType='application/atom+xml;profile=opds-catalog;kind=' . ($mode === '' ? 'navigation' : 'acquisition');
-    linkNode($doc,$feed,'self',catalogueUrl($params),$catalogType);
+    linkNode($doc,$feed,'self',catalogueUrl($offset > 0 ? $params+['offset'=>$offset] : $params),$catalogType);
     linkNode($doc,$feed,'search',catalogueUrl(['search'=>1]),'application/opensearchdescription+xml');
     if ($mode === '') {
         $navigation=[['category'=>'','title'=>tr('All books')]];
@@ -109,13 +117,15 @@ try {
             linkNode($doc,$entry,'subsection',catalogueUrl($p),'application/atom+xml;profile=opds-catalog;kind=acquisition');
         }
     } else {
-        $all = array_filter(books($directories), static fn ($b) => ($category === '' || $b['category'] === $category)
+        $all = array_filter(books($directories,$category,true), static fn ($b) => ($category === '' || $b['category'] === $category)
             && ($query === '' || stripos($b['title'].' '.$b['author'].' '.$b['path'],$query) !== false));
-        usort($all,static fn ($a,$b)=>strcasecmp($a['title'],$b['title']));
-        $offset=parameter('offset','0'); if (!preg_match('/\A\d{1,6}\z/D',$offset)) reject(tr('Invalid pagination parameter.'));
-        $offset=(int)$offset;
-        if ($offset+100<count($all)) linkNode($doc,$feed,'next',catalogueUrl($params+['offset'=>$offset+100]),$catalogType);
-        foreach (array_slice($all,$offset,100) as $book) {
+        usort($all,static fn ($a,$b)=>strcasecmp($a['title'],$b['title']) ?: strcmp($a['path'],$b['path']));
+        if ($offset > 0) {
+            $previous = max(0,$offset-OPDS_PAGE_SIZE);
+            linkNode($doc,$feed,'previous',catalogueUrl($previous ? $params+['offset'=>$previous] : $params),$catalogType);
+        }
+        if ($offset+OPDS_PAGE_SIZE<count($all)) linkNode($doc,$feed,'next',catalogueUrl($params+['offset'=>$offset+OPDS_PAGE_SIZE]),$catalogType);
+        foreach (array_slice($all,$offset,OPDS_PAGE_SIZE) as $book) {
             $entry=add($doc,$feed,'entry',''); add($doc,$entry,'id','urn:sha256:'.hash('sha256',accountScope().'/'.$book['path']));
             add($doc,$entry,'title',$book['title']); add($doc,$entry,'updated',gmdate('Y-m-d\TH:i:s\Z',$book['mtime']));
             $author=add($doc,$entry,'author',''); add($doc,$author,'name',$book['author']);

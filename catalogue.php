@@ -54,7 +54,7 @@ function bookPath(string $relative): string
         || dirname((string) realpath($path)) !== $directory) reject(tr('Book not found.'), 404);
     return $path;
 }
-function books(array $directories): array
+function books(array $directories, string $requiredCategory = '', bool $requireComplete = false): array
 {
     $lock = openPrivateState(CONFIG_DIR . '/index-'.accountScope().'.lock');
     if (!$lock || !flock($lock, LOCK_EX)) throw new RuntimeException('Index lock unavailable.');
@@ -64,7 +64,8 @@ function books(array $directories): array
         $raw = is_file($cachePath) ? file_get_contents($cachePath, false, null, 0, 16*1024*1024) : '';
         $cache = $raw ? json_decode($raw, true) : [];
         if (!is_array($cache)) $cache = [];
-        $updated = []; $budget = 20; $count = 0;
+        $updated = []; $budget = 120; $count = 0; $pending = false;
+        $deadline = hrtime(true) + 1_000_000_000;
         // Include existing loose books as well as top-level categories.
         foreach ((isset($GLOBALS['shareCategory'])?$directories:[''=>getLibraryRoot()] + $directories) as $category => $directory) {
             foreach (scandir($directory) ?: [] as $name) {
@@ -83,7 +84,12 @@ function books(array $directories): array
                 $record = ['path'=>$relative, 'category'=>(string)$category, 'mtime'=>$stat['mtime'],
                     'size'=>$stat['size'], 'ctime'=>$stat['ctime'], 'ino'=>$stat['ino'], 'dev'=>$stat['dev'], 'title'=>pathinfo($name, PATHINFO_FILENAME),
                     'author'=>'Unknown', 'language'=>''];
-                if ($budget <= 0) { $record['pending'] = true; $updated[$relative] = $record; continue; }
+                if ($requiredCategory !== '' && (string)$category !== $requiredCategory) {
+                    $record['pending'] = true; $updated[$relative] = $record; continue;
+                }
+                if ($budget <= 0 || hrtime(true) >= $deadline) {
+                    $record['pending'] = true; $updated[$relative] = $record; $pending = true; continue;
+                }
                 --$budget;
                 try { $record = array_merge($record, metadata($path, $name)); }
                 catch (Throwable $e) { $record['invalid'] = true; error_log('OPDS: metadata rejected.'); }
@@ -94,6 +100,11 @@ function books(array $directories): array
         $temp = CONFIG_DIR . '/cache/.index-' . bin2hex(random_bytes(16));
         if (file_put_contents($temp, $json, LOCK_EX) !== strlen($json) || !rename($temp, $cachePath)) throw new RuntimeException('Index save failed.');
         $temp = null;
+        // Partial feeds look complete or shift entries across offset boundaries as index work progresses.
+        if ($pending && $requireComplete) {
+            header('Retry-After: 2');
+            reject(tr('The library index is updating. Refresh the catalog shortly.'),503);
+        }
         return array_values(array_filter($updated, static fn ($b) => !($b['invalid'] ?? false) && !($b['pending'] ?? false)));
     } finally { if ($temp !== null) @unlink($temp); flock($lock, LOCK_UN); fclose($lock); }
 }
