@@ -346,6 +346,8 @@ main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-temp
 .book-actions{display:grid;gap:4px;position:absolute;z-index:2;inset-inline-end:0;top:calc(100% + 4px);min-width:130px;padding:5px;background:white;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #13264024}.book-actions button{width:100%;text-align:start}.empty{padding:30px 10px;text-align:center}.empty p{margin:0}.pagination{padding:12px 0}
 h1,h2,h3,p{margin:0 0 10px}h2{font-size:1.06rem}.bar,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar{justify-content:space-between}.bar h2{margin:0}.muted,small{color:var(--soft)}
 .status,.error{padding:9px 12px;border-radius:9px;margin-bottom:12px;background:var(--mint);overflow-wrap:anywhere}.error{background:#fae9ed;color:var(--warn)}.shelf-notice:empty{display:none}
+.drop-shelf{position:relative}.drop-shelf.is-drop-target{outline:2px dashed var(--accent);outline-offset:-5px;background:#f5f8ff}.drop-shelf .drop-caption{display:none}.drop-shelf.is-drop-target .drop-caption{display:block;position:sticky;top:10px;z-index:3;height:0;margin:0;text-align:center;pointer-events:none}.drop-caption span{display:inline-block;padding:8px 12px;border-radius:8px;background:var(--accent);color:white}
+#upload-dialog.is-drop-target{outline:2px dashed var(--accent);outline-offset:-5px;background:#f5f8ff}.upload-hint{color:var(--soft);font-size:.84rem;margin:.45rem 0}.upload-summary:empty,.drop-error:empty{display:none}.upload-summary{color:var(--soft);font-size:.84rem}.upload-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(45px,90px);gap:3px 10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.upload-row progress{width:100%;accent-color:var(--accent)}.upload-result{grid-column:1 / -1;font-size:.8rem;color:var(--soft)}.upload-result[data-state=error]{color:var(--warn)}.upload-result[data-state=saved]{color:var(--green)}
 button,.button{min-height:40px;font:inherit;font-size:.89rem;font-weight:680;background:white;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 11px;cursor:pointer;text-decoration:none;display:inline-flex;gap:7px;align-items:center;justify-content:center;line-height:1.5}button:hover,.button:hover{background:var(--bg)}.primary{background:var(--accent);color:white;border-color:var(--accent)}.primary:hover{background:#1744bd}.primary.upload-launch{min-height:42px;padding:8px 14px;font-size:.96rem}
 .icon-button{border-color:transparent;background:transparent;width:42px;min-height:42px;padding:0}.icon-button:hover{background:var(--blue-soft)}button.danger{color:var(--warn)}button:disabled{opacity:.6;cursor:wait}
 input,select,textarea{max-width:100%;font:inherit;border:1px solid #acbfd9;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin:12px 0;font-weight:650}.auth input{width:100%}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:116px}.dialog-close{margin-inline-start:auto}.rename-name{display:flex;align-items:center;gap:8px;margin-bottom:10px}.rename-name input{min-width:0;flex:1}.rename-name span{color:var(--soft);flex:none}
@@ -531,7 +533,8 @@ if ($preview) {
  <div class="side-title"><h2><?=tr_html('Folders')?></h2><?php if (isset($permissions['folder'])): ?><button type="button" class="icon-button" data-dialog="folder-list" data-focus-folder aria-label="<?=tr_html('New folder')?>"><?=icon('plus')?></button><?php endif; ?></div>
  <?php folderNav($directories,$dir,$statuses,$libraryName); ?>
 </aside>
-<div class="shelf-body">
+<div class="shelf-body<?=isset($permissions['web_upload'])?' drop-shelf':''?>"<?=isset($permissions['web_upload'])?' id="drop-shelf"':''?>>
+ <?php if (isset($permissions['web_upload'])): ?><p class="drop-caption" aria-hidden="true"><span><?=tr_html('Drop to upload to this folder')?></span></p><?php endif; ?>
  <div class="shelf-head">
   <button class="folder-trigger" type="button" data-dialog="folder-list" aria-label="<?=tr_html('Choose folder')?>"><?=icon('folder')?><?=tr_html('Folders')?><?=icon('down')?></button>
   <div class="shelf-heading-row">
@@ -620,11 +623,14 @@ if ($preview) {
 <?php if (isset($permissions['web_upload'])): ?><dialog id="upload-dialog" class="sheet" aria-labelledby="upload-dialog-title">
  <div class="bar dialog-head"><h2 id="upload-dialog-title"><?=tr_html('Upload books')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
  <p id="upload-target" class="upload-target"><?=h(sprintf(tr('Upload to: %s'),$libraryName.($dir===''?'':' / '.$dir)))?></p>
- <form id="upload" aria-describedby="upload-target" class="upload-form" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown; check the library before retrying.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown; check the library before retrying.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" method="post" enctype="multipart/form-data" action="<?=h(libraryHref($dir))?>">
+ <form id="upload" aria-describedby="upload-target" class="upload-form" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" data-working="<?=tr_html('Uploading %s of %s')?>" data-processing="<?=tr_html('Sent. Waiting for the server…')?>" data-unknown="<?=tr_html('No save confirmation (HTTP %s).')?>" data-check="<?=tr_html(isset($permissions['view'])?'Check this folder before retrying.':'Ask the library owner to check this folder before retrying.')?>" data-drop-invalid="<?=tr_html('Skipped items: %s. Drop EPUB or TXT files, not folders.')?>" method="post" enctype="multipart/form-data" action="<?=h(libraryHref($dir))?>">
  <input type="hidden" name="csrf" value="<?=h($csrf)?>"><input type="hidden" name="action" value="upload">
  <label><?=tr_html('Choose EPUB or TXT files')?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
+ <p class="upload-hint"><?=tr_html('You can also drop files here to start uploading.')?></p>
  <button class="primary" type="submit"><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
- </form><div class="queue" id="queue" aria-live="polite"></div>
+ </form>
+ <p class="drop-error error" id="drop-error" role="status"></p>
+ <div class="queue" id="queue"><p class="upload-summary" id="upload-summary" role="status"></p><div id="upload-rows"></div></div>
 </dialog><?php endif; ?>
 <?php if (isset($permissions['organize'])&&($files || $renameDraft)): ?>
 <dialog id="rename-dialog" class="sheet" aria-labelledby="rename-dialog-title" <?=$renameDraft?'data-show':''?>>
@@ -803,40 +809,115 @@ copy?.addEventListener('click',async()=>{const url=document.querySelector('#shar
 function setUploadControls() {
  for(const control of [filesInput,retry,form.querySelector('[type=submit]'),uploadDialog.querySelector('.dialog-close')])if(control)control.disabled=busy;
 }
-async function transfer(files,again=false) {
- if(busy||!files.length)return;
- busy=true;setUploadControls();retry.hidden=true;failed=[];if(!again)uploaded=0;
- const list=document.querySelector('#queue');list.replaceChildren();let changed=false;let lastMessage='';
- for(const file of files){
-   const row=document.createElement('p'), bar=document.createElement('progress'), result=document.createElement('span');
-   bar.max=100;bar.value=0;row.append(document.createTextNode(file.name+' '),bar,result);list.append(row);
-   const data=new FormData(form);data.delete('files[]');data.append('files[]',file);
-   const [ok,msg]=await new Promise(resolve=>{
-     const x=new XMLHttpRequest();x.open('POST',form.getAttribute('action'));x.timeout=180000;
-     x.upload.onprogress=e=>{if(e.lengthComputable)bar.value=e.loaded/e.total*100;};
-     x.onerror=()=>resolve([false,form.dataset.interrupted]);
-     x.ontimeout=()=>resolve([false,form.dataset.timeout]);
-     x.onload=()=>{try{const j=JSON.parse(x.responseText);if(typeof j.message!=='string')throw Error();resolve([x.status===200&&j.success,j.message]);}catch{resolve([false,form.dataset.rejected.replace('%s',String(x.status))]);}};x.send(data);
-   });
-   result.textContent=' '+msg; if(!ok)failed.push(file);else{bar.value=100;changed=true;uploaded++;lastMessage=msg;}
+const dropShelf=document.querySelector('#drop-shelf'), dropError=document.querySelector('#drop-error');
+const uploadRows=document.querySelector('#upload-rows'), uploadSummary=document.querySelector('#upload-summary');
+function sendUpload(file,bar,result){
+ const data=new FormData(form);data.delete('files[]');data.append('files[]',file);
+ return new Promise(resolve=>{
+   const unknown=message=>resolve({state:'error',message:message+' '+form.dataset.check});
+   const x=new XMLHttpRequest();x.open('POST',form.getAttribute('action'));x.timeout=180000;
+   x.upload.onprogress=e=>{if(e.lengthComputable)bar.value=e.loaded/e.total*100;};
+   x.upload.onload=()=>{bar.value=100;result.textContent=form.dataset.processing;};
+   x.onerror=x.onabort=()=>unknown(form.dataset.interrupted);
+   x.ontimeout=()=>unknown(form.dataset.timeout);
+   x.onload=()=>{
+    try {
+     const j=JSON.parse(x.responseText);
+     if(typeof j.message!=='string'||typeof j.success!=='boolean'||!Array.isArray(j.results))throw Error();
+     if(x.status===200&&j.success&&j.results[0]?.success===true)return resolve({state:'saved',message:j.message});
+     if(!j.success&&x.status>=400){
+      if(x.status===500)return unknown(j.message);
+      return resolve({state:'error',message:j.message,retryable:x.status===429});
+     }
+     throw Error();
+    }catch{
+     const message=(x.status>=400&&x.status<500?form.dataset.rejected:form.dataset.unknown).replace('%s',String(x.status));
+     if(x.status>=400&&x.status<500)resolve({state:'error',message});
+     else unknown(message);
+    }
+   };x.send(data);
+ });
+}
+async function transfer(files,{again=false,skipped=0}={}) {
+ if(busy)return;
+ if(!again){
+  dropError.textContent=skipped?form.dataset.dropInvalid.replace('%s',String(skipped)):'';
+  uploadRows.replaceChildren();uploaded=0;
+ }
+ if(!files.length){
+  uploadSummary.textContent='';failed=[];retry.hidden=true;return;
+ }
+ busy=true;setUploadControls();retry.hidden=true;failed=[];
+ let changed=false,lastMessage='',hadError=!!dropError.textContent;
+ for(const [i,item] of files.entries()){
+   const file=again?item.file:item;
+   const row=again?item.row:document.createElement('div');
+   const bar=again?row.querySelector('progress'):document.createElement('progress');
+   const result=again?row.querySelector('.upload-result'):document.createElement('span');
+   if(!again){
+    const label=document.createElement('strong');label.textContent=file.name;label.className='book-name';label.title=file.name;
+    row.className='upload-row';result.className='upload-result';row.append(label,bar,result);uploadRows.append(row);
+    bar.setAttribute('aria-label',file.name);
+   }
+   bar.max=100;bar.value=0;result.textContent='';result.removeAttribute('data-state');
+   uploadSummary.textContent=form.dataset.working.replace('%s',String(i+1)).replace('%s',String(files.length));
+   const receipt=await sendUpload(file,bar,result);
+   result.textContent=receipt.message;result.dataset.state=receipt.state;
+   if(receipt.state==='saved'){bar.value=100;changed=true;uploaded++;lastMessage=receipt.message;}
+   else{hadError=true;if(receipt.retryable)failed.push({file,row});}
  }
  if(changed){
   try{
     const res=await fetch(location.href,{cache:'no-store'}), tree=new DOMParser().parseFromString(await res.text(),'text/html');
     const books=tree.querySelector('#books-panel'), count=tree.querySelector('#shelf-count');
     if(res.ok&&books&&count){
-     document.querySelector('#books-panel').replaceWith(books);
-     document.querySelector('#shelf-count').replaceWith(count);
+     document.querySelector('#books-panel')?.replaceWith(books);
+     document.querySelector('#shelf-count')?.replaceWith(count);
     }
   }catch{}
  }
- busy=false;setUploadControls();retry.hidden=!failed.length;
- if(!failed.length){
+ busy=false;setUploadControls();retry.hidden=!failed.length;uploadSummary.textContent='';
+ // Keep prior errors visible after retrying a separate temporary failure.
+ if(!hadError&&!uploadRows.querySelector('[data-state=error]')){
   filesInput.value='';
   document.querySelector('#upload-notice').textContent=uploaded===1&&lastMessage?lastMessage:form.dataset.saved.replace('%s',String(uploaded));
   uploadDialog.close();
  }
 }
 form?.addEventListener('submit',e=>{e.preventDefault();transfer(Array.from(filesInput.files));});
-retry?.addEventListener('click',()=>transfer(failed.slice(),true));
+retry?.addEventListener('click',()=>transfer(failed.slice(),{again:true}));
+if(form&&dropShelf){
+ const fileDrag=e=>e.dataTransfer&&Array.from(e.dataTransfer.types).includes('Files');
+ const clean=()=>{dropShelf.classList.remove('is-drop-target');uploadDialog.classList.remove('is-drop-target');};
+ const targetFor=e=>{
+  if(busy)return null;
+  if(uploadDialog.open)return uploadDialog.contains(e.target)?uploadDialog:null;
+  if(document.querySelector('dialog[open]'))return null;
+  return dropShelf.contains(e.target)?dropShelf:null;
+ };
+ document.addEventListener('dragover',e=>{
+  if(!fileDrag(e))return;
+  e.preventDefault();
+  const target=targetFor(e);
+  e.dataTransfer.dropEffect=target?'copy':'none';
+  dropShelf.classList.toggle('is-drop-target',target===dropShelf);
+  uploadDialog.classList.toggle('is-drop-target',target===uploadDialog);
+ });
+ document.addEventListener('dragleave',e=>{
+  if(!e.relatedTarget&&(e.target===document.documentElement||e.clientX<=0||e.clientY<=0||e.clientX>=innerWidth||e.clientY>=innerHeight))clean();
+ });
+ uploadDialog.addEventListener('close',clean);
+ document.addEventListener('drop',e=>{
+  if(!fileDrag(e))return;
+  e.preventDefault();
+  const target=targetFor(e);clean();
+  if(!target)return;
+  const items=Array.from(e.dataTransfer.items||[]).filter(item=>item.kind==='file');
+  const dropped=items.length?items.map(item=>item.webkitGetAsEntry?.()?.isDirectory?null:item.getAsFile()):Array.from(e.dataTransfer.files);
+  const accepted=dropped.filter(file=>file&&/\.(epub|txt)$/i.test(file.name));
+  if(!uploadDialog.open)uploadDialog.showModal();
+  filesInput.value='';
+  transfer(accepted,{skipped:dropped.length-accepted.length});
+ });
+}
 </script></body></html>

@@ -27,10 +27,17 @@ fs.mkdirSync(path.join(temp,'sessions'));
 const log=fs.openSync(path.join(temp,'php.log'),'w');
 const server=spawn(php,['-d','display_errors=0','-d','session.upload_progress.enabled=0','-d','max_file_uploads=21','-d','upload_max_filesize=100M','-d','post_max_size=205M','-d',`openssl.cafile=${cert}`,'-d',`session.save_path=${temp}/sessions`,'-S',`127.0.0.1:${back}`,'-t',web,path.join(web,'router.php')],{env:{...process.env,PHP_CLI_SERVER_WORKERS:'4'},stdio:['ignore',log,log],detached:true});
 
-let denySetupProbe=false;
+let denySetupProbe=false, holdUploadResponse=null;
 const proxy=https.createServer({key:fs.readFileSync(tlsKey),cert:fs.readFileSync(cert)},(req,res)=>{
  if(denySetupProbe&&req.url.startsWith('/library/install-check-')){res.writeHead(403);res.end();return;}
- const upstream=http.request({host:'127.0.0.1',port:back,path:req.url,method:req.method,headers:req.headers},out=>{res.writeHead(out.statusCode,out.headers);out.pipe(res);});
+ const upstream=http.request({host:'127.0.0.1',port:back,path:req.url,method:req.method,headers:req.headers},async out=>{
+   const hold=holdUploadResponse;
+   if(hold&&req.method==='POST'&&req.url.startsWith('/library/up.php?')){
+     holdUploadResponse=null;hold.arrive(req.url);
+     await hold.gate;
+   }
+   res.writeHead(out.statusCode,out.headers);out.pipe(res);
+ });
  upstream.on('error',()=>{res.writeHead(502);res.end();});req.pipe(upstream);
 });await new Promise(r=>proxy.listen(front,'127.0.0.1',r));
 const cookies=new Map(),results=[];
@@ -531,6 +538,64 @@ try{
      await uploadSheet.getByRole('button',{name:'Upload',exact:true}).click();
      await page.getByRole('heading',{name:'Browser-created folder'}).waitFor();
      await page.getByRole('link',{name:'new-shelf',exact:true}).waitFor();
+     const drop=async (target,names)=>{
+       const handle=await page.evaluateHandle(names=>{
+         const dt=new DataTransfer();
+         for(const name of names)dt.items.add(new File(['Drop upload fixture'],name,{type:'text/plain'}));
+         return dt;
+       },names);
+       await target.dispatchEvent('dragover',{dataTransfer:handle});
+       await target.evaluate(el=>{if(!el.classList.contains('is-drop-target'))throw Error('Target not highlighted');});
+       await target.dispatchEvent('drop',{dataTransfer:handle});
+       await handle.dispose();
+     };
+     const dropTarget=page.locator('#drop-shelf');
+     const dropModal=page.locator('#upload-dialog');
+     let release,seen;
+     const gate=new Promise(resolve=>{release=resolve;}), arrived=new Promise(resolve=>{seen=resolve;});
+     const isWebUpload=u=>u.pathname.endsWith('/up.php');
+     holdUploadResponse={arrive:seen,gate};
+     try {
+       await drop(dropTarget,['drop-list.txt']);
+       const hit=await Promise.race([arrived,delay(5000).then(()=>{throw Error('No dragged upload reached the server');})]);
+       assert.equal(new URL(hit,base).searchParams.get('dir'),'Browser-created folder');
+       await dropModal.getByRole('progressbar',{name:'drop-list.txt'}).waitFor();
+       await dropModal.getByText('Uploading 1 of 1').waitFor();
+       await dropModal.getByText('Sent. Waiting for the server…').waitFor();
+       assert.equal(await dropModal.locator('progress').evaluate(el=>el.value),100);
+     } finally { holdUploadResponse=null;release(); }
+     await page.getByRole('link',{name:'drop-list',exact:true}).waitFor();
+     assert.equal((await opds('alice',{download:'Browser-created folder/drop-list.txt'})).text,'Drop upload fixture');
+     assert.equal((await opds('alice',{download:'drop-list.txt'})).status,404);
+     await page.getByRole('button',{name:'Upload books',exact:true}).click();
+     await drop(dropModal,['drop-dialog.txt','not-a-book.jpg']);
+     await dropModal.getByText('Skipped items: 1. Drop EPUB or TXT files, not folders.').waitFor();
+     await dropModal.getByText('Saved: drop-dialog.txt').waitFor();
+     await dropModal.getByRole('button',{name:'Close'}).click();
+     await page.getByRole('link',{name:'drop-dialog',exact:true}).waitFor();
+     assert.equal((await opds('alice',{download:'Browser-created folder/drop-dialog.txt'})).text,'Drop upload fixture');
+     assert.equal((await opds('alice',{download:'Browser-created folder/not-a-book.jpg'})).status,422);
+     // Do not retry ambiguous gateway results; an explicit 429 is safe to retry.
+     let unknown=0,temporary=0;
+     const outcomes=async route=>{
+       if(route.request().method()!=='POST')return route.continue();
+       if(route.request().postData().includes('unknown-save.txt')){
+         unknown++;return route.fulfill({status:502,contentType:'text/html',body:'bad gateway'});
+       }
+       if(temporary++===0)return route.fulfill({status:429,json:{success:false,message:'The service is busy. Try again later.',results:[]}});
+       return route.continue();
+     };
+     await page.route(isWebUpload,outcomes);
+     await drop(dropTarget,['unknown-save.txt','temporary.txt']);
+     await dropModal.getByText(/No save confirmation.*Check this folder/).waitFor();
+     await dropModal.getByRole('button',{name:'Retry failed'}).click();
+     await dropModal.getByText('Saved: temporary.txt').waitFor();
+     assert.equal(unknown,1);assert.equal(temporary,2);
+     assert(await dropModal.getByText(/No save confirmation.*Check this folder/).isVisible());
+     await dropModal.getByRole('button',{name:'Close'}).click();
+     await page.unroute(isWebUpload,outcomes);
+     assert.equal((await opds('alice',{download:'Browser-created folder/temporary.txt'})).text,'Drop upload fixture');
+     pass('drag from the shelf and upload dialog keeps the current folder and shows progress, skips invalid files, and retries only confirmed temporary failures');
      const longTitle='A very long book filename that should stay on one line even when the reader is using a narrow mobile screen';
      await page.getByRole('button',{name:'Upload books',exact:true}).click();
      await page.locator('#files').setInputFiles({name:longTitle+'.txt',mimeType:'text/plain',buffer:Buffer.from('Long filename example')});
@@ -604,7 +669,7 @@ try{
      await zh.locator('#files').setInputFiles({name:'zh-test.txt',mimeType:'text/plain',buffer:Buffer.from('Browser UI upload')});
      await zh.getByRole('button',{name:'上传',exact:true}).click();
      await zh.getByText('服务器拒绝了上传请求（HTTP 413）。',{exact:false}).waitFor();
-     await zh.getByRole('button',{name:'重试失败项'}).waitFor();
+     await zh.getByRole('button',{name:'重试失败项'}).waitFor({state:'hidden'});
      if(process.env.SCREENSHOT_DIR){
        const demo='reader';
        assert.equal((await activate(demo,cli('invite',demo))).status,303);
