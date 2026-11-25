@@ -327,7 +327,7 @@ function installLibrary(array $fields,string $url,int &$step): string {
         $config=['base_url'=>$url,'title'=>$title,'max_category_depth'=>1,'multiuser'=>true,'share_key'=>bin2hex(random_bytes(32))];
         writeNew($conf.'/config.php',"<?php\nreturn ".var_export($config,true).";\n",$created);
         $secret=bin2hex(random_bytes(32));
-        $record=['state'=>'pending','activation'=>['digest'=>hash('sha256',$secret),'expires'=>time()+86400]];
+        $record=['state'=>'pending','site_admin'=>true,'activation'=>['digest'=>hash('sha256',$secret),'expires'=>time()+86400]];
         writeNew($conf.'/users.json',json_encode(['version'=>1,'records'=>(object)[$fields['username']=>$record]],JSON_THROW_ON_ERROR),$created);
         writeNew($conf.'/shares.json','{"version":1,"records":{}}',$created);
         writeNew($conf.'/libraries.json','{"version":1,"records":{}}',$created);

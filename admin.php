@@ -36,30 +36,21 @@ try {
     if (!accountName($user)) reject('Specify a lowercase username.');
     setAccountScope($user);
     if ($command==='invite'||$command==='reset') {
-        echo stateUpdate('users',function (&$users) use ($user,$command) {
-            $row=$users[$user]??null;
-            if ($command==='reset' && ($row['state']??null)!=='active') reject('Only active accounts can be reset.');
-            if ($command==='invite' && $row!==null && ($row['state']??null)!=='pending') reject('Account already exists.');
-            $books=accountBooks();
-            if ($row===null) {
-                if (accountNameReserved($user)) reject('This username is reserved.');
-                if (accountDirectoryOccupied($books,$user)) reject('Existing library path; refusing to claim it.');
-                if (!@mkdir($books.'/'.$user,0750)) reject('Cannot create the selected directory.',409);
-            } else {
-                directoryUnder($books,$user);
-            }
-            [$activation,$link]=newActivation($user);
-            $users[$user]=array_merge($row??['state'=>'pending'],['activation'=>$activation]);
-            return $link;
-        }).PHP_EOL;
+        echo issueAccountActivation($user,$command).PHP_EOL;
+    } elseif (in_array($command,['grant-site-admin','revoke-site-admin'],true)) {
+        stateUpdate('users',static function (&$users) use ($user,$command) {
+            if (($users[$user]['state']??null)!=='active') reject('Only an active account can be a site administrator.');
+            if ($command==='grant-site-admin') $users[$user]['site_admin']=true;
+            else unset($users[$user]['site_admin']);
+        });
+        echo "Site administrator permission updated.
+";
     } elseif ($command==='disable') {
         withLock('libraries',static function () use ($user) {
             $rows=libraryRecords();
-            foreach (array_unique([personalLibraryId($user),...array_keys($rows)]) as $id) {
-                $library=libraryInfo((string)$id,$rows);
-                if (($library['owner']??null)===$user && empty($library['archived']))
-                    reject('Transfer or archive every library owned by this account before disabling it.');
-            }
+            $library=libraryInfo(personalLibraryId($user),$rows);
+            if (activeAccount($user) && $library && empty($library['archived']))
+                reject('Archive this account’s personal library before disabling it.');
             stateUpdate('users',function (&$users) use ($user) {
             if (!isset($users[$user])) reject('Account not found.');
             $users[$user]['state']='disabled';
@@ -116,7 +107,7 @@ try {
             }
             echo "Copied; original library retained.\n";
         });
-    } else reject('Usage: php admin.php invite|reset|disable|quota|migrate USER [options], library-quota LIBRARY_ID BYTES FILES, rbac-check, or rbac-audit');
+    } else reject('Usage: php admin.php invite|reset|disable|quota|migrate|grant-site-admin|revoke-site-admin USER [options], library-quota LIBRARY_ID BYTES FILES, rbac-check, or rbac-audit');
 } catch (Throwable $e) {
     fwrite(STDERR,$e->getMessage().PHP_EOL);exit(1);
 }

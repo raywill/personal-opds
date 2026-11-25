@@ -65,19 +65,6 @@ $owner=$library['owner']===$viewer;
 <form method="post" action="up.php"><?php hidden($csrf,'library_rename',$dir);?><label><?=tr_html('Library name')?><input name="title" value="<?=h(libraryTitle($library,$viewer))?>" required maxlength="120"></label><button><?=tr_html('Save name')?></button></form>
 </section>
 
-<?php $transferOptions=array_filter(array_keys($library['members']),static fn($member)=>in_array('view',libraryPermissions($library,(string)$member),true)&&activeAccount((string)$member)); if ($transferOptions): ?>
-<section class="settings-section"><h3><?=tr_html('Transfer ownership')?></h3>
-<?php if (($library['transfer']['expires']??0)>time()): ?>
-<p><?=h(sprintf(tr('Waiting for %s to accept ownership.'),$library['transfer']['to']))?></p>
-<form method="post" action="up.php"><?php hidden($csrf,'transfer_cancel',$dir);?><button><?=tr_html('Cancel')?></button></form>
-<?php else: ?>
-<form method="post" action="up.php" data-confirm="<?=tr_html('You will lose access when the new owner accepts. Continue?')?>"><?php hidden($csrf,'transfer_begin',$dir);?>
-<label><?=tr_html('Username')?><select name="member" required>
-<?php foreach ($transferOptions as $member): ?>
-<option value="<?=h((string)$member)?>"><?=h((string)$member)?></option><?php endforeach; ?></select></label>
-<button><?=tr_html('Request transfer')?></button></form>
-<?php endif; ?></section>
-<?php endif; ?>
 <section class="settings-section archive-section"><h3><?=tr_html('Archive library')?></h3><p class="muted"><?=tr_html('Keeps books and members, but disables access and revokes links and tokens.')?></p>
 <form method="post" action="up.php" data-confirm="<?=tr_html('Archive this library? Its upload tokens and anonymous shares will stop working, even after restore.')?>"><?php hidden($csrf,'library_archive',$dir);?><button class="danger"><?=tr_html('Archive library')?></button></form>
 </section></dialog>
@@ -123,6 +110,7 @@ $draftRole=is_string($_POST['role']??null)?$_POST['role']:'';
 <dialog id="invite-member-dialog" class="sheet manage-dialog role-dialog" aria-labelledby="invite-member-title" <?=$inviteError?'data-manage-open':''?>>
 <div class="bar dialog-head"><h2 id="invite-member-title"><?=tr_html('Invite member')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
 <p class="muted"><?=tr_html('Invite an existing account. Access starts after they accept.')?></p>
+<p class="muted"><?=tr_html('No account yet? A site administrator can create one from Account administration.')?></p>
 <?php if ($inviteError): ?><p class="error" role="alert"><?=h($error)?></p><?php endif; ?>
 <form method="post" action="up.php" class="role-form"><?php hidden($csrf,'member_invite',$dir);?>
 <label class="member-name-input"><?=tr_html('Username')?><input name="member" value="<?=h($inviteError?$draftMember:'')?>" maxlength="32" required autocapitalize="none" autofocus></label>

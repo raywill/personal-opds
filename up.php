@@ -59,6 +59,7 @@ if (!$user || !hash_equals($user['password'],$_SESSION['password']??'') ||
     unset($_SESSION['account'],$_SESSION['password'],$_SESSION['activity'],$_SESSION['issued']);
 } else { $_SESSION['activity']=$now; setAccountScope($viewer); }
 $error=''; $notice=''; $permissions=[]; $webLibraries=[]; $allLibraries=[]; $library=null; $dir=''; $activate=''; $activateFor=''; $preview=false; $renameDraft=null;
+$siteAdmin=($user['site_admin']??null)===true; $accountInviteLink=''; $accountInviteName='';
 $action=is_string($_POST['action']??null)?$_POST['action']:'';
 try {
     if (!in_array($method,['GET','HEAD','POST'],true)) reject('Method not allowed.',405);
@@ -67,7 +68,7 @@ try {
     if ($user && $activate==='') {
         $allLibraries=availableLibraries($viewer);
         $webLibraries=array_filter($allLibraries,static fn($row)=>array_intersect(WEB_PERMISSIONS,$row['permissions']));
-        $globalAction=$method==='POST' && in_array($action,['create_library','logout','login','invite_accept','invite_decline','library_restore'],true);
+        $globalAction=$method==='POST' && in_array($action,['logout','login','invite_accept','invite_decline','library_restore'],true);
         $selection=$globalAction?'':($method==='POST'?field('library',$_POST):field('library',$_GET));
         if (!$globalAction && $selection==='' && count($webLibraries)===1 && !isset($_GET['choose'])) $selection=(string)array_key_first($webLibraries);
         // The login redirect never carries a selection. Anonymous OPDS routing is independent.
@@ -114,87 +115,86 @@ try {
             $_SESSION['notice']=tr($action==='library_restore'?'Library restored.':($action==='invite_accept'?'Invitation accepted.':'Invitation declined.'));
             go();
         }
-        if ($action==='create_library') {
-            $newId=libraryCreate(field('title',$_POST),$viewer);
-            setLibraryScope(libraryInfo($newId)); go();
-        }
-        $required=[
-            'upload'=>'web_upload','folder'=>'folder','share'=>'share','revoke'=>'share','rename'=>'organize',
-            'move'=>'organize','delete'=>'delete','agent_setup'=>'agent_upload','agent_revoke'=>'agent_upload',
-            'legacy_token_revoke'=>'settings','member_invite'=>'members','member_edit'=>'members','member_remove'=>'members','member_cancel'=>'members','managed_token_revoke'=>'tokens',
-            'library_rename'=>'settings','library_archive'=>'settings',
-            'transfer_begin'=>'settings','transfer_cancel'=>'settings','transfer_accept'=>'view',
-        ][$action]??null;
-        if ($required===null) reject('Unknown action.');
-        if (!$library) reject('Choose a library first.',403);
-        $signedIn=$_SESSION;
-        $GLOBALS['opdsUploadGuard']=static fn()=>requireLibraryPermission($required,$viewer,$signedIn);
-        ($GLOBALS['opdsUploadGuard'])();
-        if ($action==='upload') {
-            session_write_close();
-            uploadJsonResponse(processUpload(singleFile:true,bearer:false));
-        }
-        $dir=field('dir',$_POST);
-        resolveDestinationDirectory($dir);
-        switch ($action) {
-            case 'folder':
-                $new=field('folder',$_POST); uploadCommit(static fn()=>createCategory($new));
-                if (($_SERVER['HTTP_ACCEPT']??'')==='application/json') jsonResponse(['success'=>true,'message'=>tr('Folder ready.'),'folder'=>$new]);
-                $_SESSION['notice']=tr('Folder ready.'); go($new);
-            case 'share':
-            case 'revoke':
-                uploadCommit(static fn()=>manageShare($dir,$action==='revoke'));
-                noteLibraryAction('share.'.$action,['directory'=>$dir]);
-                $_SESSION['notice']=$action==='revoke'?tr('Share revoked.'):tr('Share link ready.'); go($dir);
-            case 'rename':
-                $renameDraft=['file'=>field('file',$_POST),'name'=>field('new_name',$_POST)];
-                manageBook('rename',$dir,$renameDraft['file'],$renameDraft['name']);
-                $_SESSION['notice']=tr('Book renamed.'); go($dir);
-            case 'move':
-            case 'delete':
-                manageBook($action,$dir,field('file',$_POST),field('destination',$_POST));
-                if ($action==='delete') noteLibraryAction('book.deleted',['directory'=>$dir,'file'=>field('file',$_POST)]);
-                $_SESSION['notice']=$action==='move'?tr('Book moved.'):tr('Book deleted.'); go($dir);
-            case 'agent_setup':
-                reserveRateAttempt('agent-setup',30,300);
-                $dest=field('destination',$_POST);
-                $days=field('days',$_POST);
-                if ($days!==''&&!preg_match('/^\d{1,3}$/D',$days)) reject('Invalid token name or validity period.');
-                $grant=issueAgentToken($library,$viewer,$dest,$days===''?DEFAULT_AGENT_TOKEN_DAYS:(int)$days,field('name',$_POST),field('scope',$_POST)==='library',field('mkdir',$_POST)==='1');
-                jsonResponse(['success'=>true,'setup'=>agentSetup($grant,$library,$dest)]);
-            case 'legacy_token_revoke':
-                uploadCommit(static function () use ($viewer,$library) {
-                    if ($library['legacy']!==$viewer) reject('Library access denied.',403);
-                    stateUpdate('users',static function (&$users) use ($viewer) { unset($users[$viewer]['token']); });
-                });
-                noteLibraryAction('legacy-token.revoked');
-                $_SESSION['notice']=tr('Token revoked.'); go($dir);
-            case 'agent_revoke':
-            case 'managed_token_revoke':
-                revokeAgentToken($library['id'],$viewer,field('token_id',$_POST));
-                $_SESSION['notice']=tr('Token revoked.'); go($dir);
-            case 'member_invite':
-            case 'member_edit':
-            case 'member_remove':
-            case 'member_cancel':
-                $role=in_array($action,['member_invite','member_edit'],true)?field('role',$_POST):null;
-                if (isset($_POST['roles']) || $role==='') reject('Choose one role.');
-                libraryMemberChange($library['id'],$viewer,field('member',$_POST),$action,$role);
-                $_SESSION['notice']=tr(match($action) {
-                    'member_invite'=>'Library invitation sent.', 'member_cancel'=>'Invitation cancelled.',
-                    default=>'Library membership saved.',
-                }); goMembers($dir,$action);
-            case 'library_rename':
-            case 'library_archive':
-                librarySettings($library['id'],$viewer,$action,field('title',$_POST));
-                if ($action==='library_archive') { unset($GLOBALS['opdsLibrary']); go(); }
-                $_SESSION['notice']=tr('Library renamed.'); go($dir);
-            case 'transfer_begin':
-            case 'transfer_cancel':
-            case 'transfer_accept':
-                libraryTransfer($library['id'],$viewer,$action,field('member',$_POST));
-                $_SESSION['notice']=tr('Ownership updated.'); go($dir);
-            default: reject('Unknown action.');
+        if ($action==='account_invite') {
+            if (!$siteAdmin) reject('Site administrator access required.',403);
+            reserveRateAttempt('account-invite',15,150);
+            $accountInviteName=trim(field('username',$_POST));
+            $operation=field('operation',$_POST);
+            if ($operation!=='create'&&$operation!=='renew') reject('Unknown action.');
+            $accountInviteLink=issueAccountActivation($accountInviteName,$operation,$viewer,$signedIn['password']);
+        } else {
+            $required=[
+                'upload'=>'web_upload','folder'=>'folder','share'=>'share','revoke'=>'share','rename'=>'organize',
+                'move'=>'organize','delete'=>'delete','agent_setup'=>'agent_upload','agent_revoke'=>'agent_upload',
+                'legacy_token_revoke'=>'settings','member_invite'=>'members','member_edit'=>'members','member_remove'=>'members','member_cancel'=>'members','managed_token_revoke'=>'tokens',
+                'library_rename'=>'settings','library_archive'=>'settings',
+            ][$action]??null;
+            if ($required===null) reject('Unknown action.');
+            if (!$library) reject('Choose a library first.',403);
+            $signedIn=$_SESSION;
+            $GLOBALS['opdsUploadGuard']=static fn()=>requireLibraryPermission($required,$viewer,$signedIn);
+            ($GLOBALS['opdsUploadGuard'])();
+            if ($action==='upload') {
+                session_write_close();
+                uploadJsonResponse(processUpload(singleFile:true,bearer:false));
+            }
+            $dir=field('dir',$_POST);
+            resolveDestinationDirectory($dir);
+            switch ($action) {
+                case 'folder':
+                    $new=field('folder',$_POST); uploadCommit(static fn()=>createCategory($new));
+                    if (($_SERVER['HTTP_ACCEPT']??'')==='application/json') jsonResponse(['success'=>true,'message'=>tr('Folder ready.'),'folder'=>$new]);
+                    $_SESSION['notice']=tr('Folder ready.'); go($new);
+                case 'share':
+                case 'revoke':
+                    uploadCommit(static fn()=>manageShare($dir,$action==='revoke'));
+                    noteLibraryAction('share.'.$action,['directory'=>$dir]);
+                    $_SESSION['notice']=$action==='revoke'?tr('Share revoked.'):tr('Share link ready.'); go($dir);
+                case 'rename':
+                    $renameDraft=['file'=>field('file',$_POST),'name'=>field('new_name',$_POST)];
+                    manageBook('rename',$dir,$renameDraft['file'],$renameDraft['name']);
+                    $_SESSION['notice']=tr('Book renamed.'); go($dir);
+                case 'move':
+                case 'delete':
+                    manageBook($action,$dir,field('file',$_POST),field('destination',$_POST));
+                    if ($action==='delete') noteLibraryAction('book.deleted',['directory'=>$dir,'file'=>field('file',$_POST)]);
+                    $_SESSION['notice']=$action==='move'?tr('Book moved.'):tr('Book deleted.'); go($dir);
+                case 'agent_setup':
+                    reserveRateAttempt('agent-setup',30,300);
+                    $dest=field('destination',$_POST);
+                    $days=field('days',$_POST);
+                    if ($days!==''&&!preg_match('/^\d{1,3}$/D',$days)) reject('Invalid token name or validity period.');
+                    $grant=issueAgentToken($library,$viewer,$dest,$days===''?DEFAULT_AGENT_TOKEN_DAYS:(int)$days,field('name',$_POST),field('scope',$_POST)==='library',field('mkdir',$_POST)==='1');
+                    jsonResponse(['success'=>true,'setup'=>agentSetup($grant,$library,$dest)]);
+                case 'legacy_token_revoke':
+                    uploadCommit(static function () use ($viewer,$library) {
+                        if ($library['legacy']!==$viewer) reject('Library access denied.',403);
+                        stateUpdate('users',static function (&$users) use ($viewer) { unset($users[$viewer]['token']); });
+                    });
+                    noteLibraryAction('legacy-token.revoked');
+                    $_SESSION['notice']=tr('Token revoked.'); go($dir);
+                case 'agent_revoke':
+                case 'managed_token_revoke':
+                    revokeAgentToken($library['id'],$viewer,field('token_id',$_POST));
+                    $_SESSION['notice']=tr('Token revoked.'); go($dir);
+                case 'member_invite':
+                case 'member_edit':
+                case 'member_remove':
+                case 'member_cancel':
+                    $role=in_array($action,['member_invite','member_edit'],true)?field('role',$_POST):null;
+                    if (isset($_POST['roles']) || $role==='') reject('Choose one role.');
+                    libraryMemberChange($library['id'],$viewer,field('member',$_POST),$action,$role);
+                    $_SESSION['notice']=tr(match($action) {
+                        'member_invite'=>'Library invitation sent.', 'member_cancel'=>'Invitation cancelled.',
+                        default=>'Library membership saved.',
+                    }); goMembers($dir,$action);
+                case 'library_rename':
+                case 'library_archive':
+                    librarySettings($library['id'],$viewer,$action,field('title',$_POST));
+                    if ($action==='library_archive') { unset($GLOBALS['opdsLibrary']); go(); }
+                    $_SESSION['notice']=tr('Library renamed.'); go($dir);
+                default: reject('Unknown action.');
+            }
         }
     }
     if ($library && $activate==='') {
@@ -311,7 +311,7 @@ a{color:var(--accent)}:focus-visible{outline:3px solid #5683f4;outline-offset:3p
 .account summary{display:flex;align-items:center;gap:11px;min-height:44px;padding:4px 13px;border-radius:9px;cursor:pointer;font-weight:720}.account summary:hover,.account[open] summary{background:var(--bg)}
 .account-name{max-width:170px;overflow:hidden;text-overflow:ellipsis}.avatar{display:inline-flex;width:30px;height:30px;align-items:center;justify-content:center;border-radius:50%;background:var(--blue-soft);color:var(--accent);font-size:14px;font-weight:780}
 .account-popover{position:absolute;z-index:3;top:calc(100% + 6px);inset-inline-end:24px;width:min(270px,calc(100vw - 32px));padding:6px;background:white;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 36px #13264024}
-.account-caption{display:block;padding:9px 10px;color:var(--soft);font-size:12px;overflow-wrap:anywhere;border-bottom:1px solid var(--line);margin-bottom:4px}.account-popover .menu-item{width:100%;display:flex;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--ink);text-align:start;padding:9px;border:0;border-radius:7px;background:white;font-size:14px;font-weight:620}.account-popover .menu-item:hover,.account-popover .menu-item:focus-visible{background:var(--blue-soft)}.account-popover .sign-out{color:var(--warn)}.account-popover form{border-top:1px solid var(--line);margin-top:4px;padding-top:4px}
+.account-library{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:7px}.account-library .role-chip{font-size:.72rem}.account-caption{display:block;padding:9px 10px;color:var(--soft);font-size:12px;overflow-wrap:anywhere;border-bottom:1px solid var(--line);margin-bottom:4px}.account-popover .menu-item{width:100%;display:flex;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--ink);text-align:start;padding:9px;border:0;border-radius:7px;background:white;font-size:14px;font-weight:620}.account-popover .menu-item:hover,.account-popover .menu-item:focus-visible{background:var(--blue-soft)}.account-popover .sign-out{color:var(--warn)}.account-popover form{border-top:1px solid var(--line);margin-top:4px;padding-top:4px}
 main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-template-columns:254px minmax(0,1fr);min-height:calc(100vh - 72px)}
 .sidebar{border-inline-end:1px solid var(--line);padding:47px 18px 24px 24px;min-width:0}.shelf-body{min-width:0;padding:39px 24px 52px clamp(32px,5vw,64px)}
 .panel{background:white;border:1px solid var(--line);border-radius:16px;padding:22px;min-width:0}.auth{max-width:440px;margin:44px auto;padding:24px}
@@ -362,11 +362,14 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <details class="account">
 <summary aria-label="<?=tr_html('Account menu')?>"><span class="avatar" aria-hidden="true"><?=h(strtoupper($viewer[0]))?></span><span class="account-name"><?=h($viewer)?></span><?=icon('down')?></summary>
 <div class="account-popover">
-<span class="account-caption"><?=h(sprintf(tr('Signed in as %s'),$viewer))?></span>
+<div class="account-caption"><strong><?=h(sprintf(tr('Signed in as %s'),$viewer))?></strong>
+<?php if ($library): ?>
+<div class="account-library" aria-label="<?=tr_html('Your role in this library')?>"><span><?=h(libraryTitle($library,$viewer))?></span><span class="role-chip <?=$library['owner']===$viewer?'role-owner':''?>"><?=h($library['owner']===$viewer?tr('Owner'):libraryRoleLabel($library['members'][$viewer]??null))?></span></div>
+<?php endif; ?></div>
+<?php if ($siteAdmin): ?><button type="button" class="menu-item" data-dialog="accounts-dialog"><?=icon('plus')?><?=tr_html('Account administration')?></button><?php endif; ?>
 <?php if (isset($permissions['agent_upload'])): ?><button type="button" class="menu-item" data-dialog="tools-dialog"><?=icon('terminal')?><?=tr_html('CLI / API & upload Skill')?></button><?php endif; ?>
 <?php if (isset($permissions['members'])): ?><button type="button" class="menu-item" data-dialog="members-dialog"><?=icon('folder')?><?=tr_html('Members and invitations')?></button><?php endif; ?>
 <?php if (isset($permissions['settings'])): ?><button type="button" class="menu-item" data-dialog="library-settings-dialog"><?=icon('more')?><?=tr_html('Library settings')?></button><?php endif; ?>
-<?php if (ALLOW_LIBRARY_CREATION): ?><button type="button" class="menu-item" data-dialog="create-library-dialog"><?=icon('plus')?><?=tr_html('New library')?></button><?php endif; ?>
 <?php if ($pendingInvites || $archivedLibraries): ?><button type="button" class="menu-item" data-dialog="account-libraries-dialog"><?=icon('folder')?><?=tr_html('Invitations and archived libraries')?><?php if ($pendingInvites): ?> · <?=count($pendingInvites)?><?php endif; ?></button><?php endif; ?>
 <?php if (array_filter($allLibraries,static fn($row)=>in_array('opds',$row['permissions'],true))): ?>
 <button type="button" class="menu-item" data-dialog="reader-dialog"><?=icon('book')?><?=tr_html('OPDS catalog')?></button><?php endif; ?>
@@ -375,10 +378,24 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php endif; ?>
 </header>
 <?php if ($user): ?>
-<dialog id="create-library-dialog" class="sheet" aria-labelledby="new-library-title">
-<div class="bar dialog-head"><h2 id="new-library-title"><?=tr_html('New library')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
-<form method="post" action="up.php"><?php hidden($csrf,'create_library');?><label><?=tr_html('Library name')?><input name="title" required maxlength="120"></label><button class="primary"><?=tr_html('Create')?></button></form>
-</dialog>
+<?php if ($siteAdmin): ?>
+<dialog id="accounts-dialog" class="sheet manage-dialog" aria-labelledby="accounts-title" <?=$action==='account_invite'?'data-manage-open':''?>>
+<div class="bar dialog-head"><h2 id="accounts-title"><?=tr_html('Account administration')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<p class="muted"><?=tr_html('Create an account and send the one-time activation link privately. The recipient sets their own password.')?></p>
+<?php if ($action==='account_invite'&&$error!==''): ?><p class="error" role="alert"><?=h($error)?></p><?php endif; ?>
+<?php if ($accountInviteLink!==''): ?>
+<p class="status" role="status"><?=h(sprintf(tr('Activation link ready for %s. It expires in 24 hours.'),$accountInviteName))?></p>
+<label><?=tr_html('Activation URL')?><input class="share-link" id="account-activation-url" readonly value="<?=h($accountInviteLink)?>"></label>
+<button type="button" class="primary" id="copy-activation" data-copied="<?=tr_html('Copied.')?>" data-manual="<?=tr_html('Select and copy the activation link.')?>"><?=tr_html('Copy activation link')?></button><span id="copy-activation-status" role="status"></span>
+<p class="muted"><?=tr_html('To share a specific library, invite the new account from that library once it has been activated.')?></p>
+<?php else: ?>
+<form method="post" action="up.php"><?php hidden($csrf,'account_invite',$dir);?>
+<label class="member-name-input"><?=tr_html('Username')?><input name="username" value="<?=h($accountInviteName)?>" maxlength="32" required autocapitalize="none"></label>
+<div class="actions"><button class="primary" name="operation" value="create"><?=tr_html('Create account and get link')?></button>
+<button name="operation" value="renew"><?=tr_html('Replace pending activation link')?></button></div>
+</form>
+<?php endif; ?></dialog>
+<?php endif; ?>
 <dialog id="account-libraries-dialog" class="sheet" aria-labelledby="account-libraries-title">
 <div class="bar dialog-head"><h2 id="account-libraries-title"><?=tr_html('Invitations and archived libraries')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
 <?php foreach ($pendingInvites as $id=>$row): $invite=$row['invites'][$viewer]; ?>
@@ -395,9 +412,6 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php foreach ($allLibraries as $id=>$item): if (!in_array('opds',$item['permissions'],true)) continue; ?>
 <label><?=h(libraryTitle($item,$viewer))?><input class="share-link" readonly value="<?=h(BASE_URL.'index.php?'.http_build_query(['library'=>$id]))?>"></label>
 <?php endforeach; ?></dialog>
-<?php endif; ?>
-<?php if ($library && ($library['transfer']['to']??null)===$viewer && $library['transfer']['expires']>time()): ?>
-<form class="status page-message actions" method="post" action="up.php"><?php hidden($csrf,'transfer_accept',$dir);?><span><?=tr_html('You have been invited to own this library.')?></span><button class="primary"><?=tr_html('Accept ownership')?></button></form>
 <?php endif; ?>
 <?php if ($library): ?>
 <?php require __DIR__.'/library-controls.php'; ?>
@@ -428,7 +442,6 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <span class="root-folder-arrow"><?=icon('down')?></span></a>
 <?php endforeach; ?>
 </div><?php endforeach; ?>
-<?php if (ALLOW_LIBRARY_CREATION&&!$webLibraries): ?><button class="button" type="button" data-dialog="create-library-dialog"><?=tr_html('New library')?></button><?php endif; ?>
 </section>
 <?php else:
 $selectedShare=$mine[$dir]??null; $status=$selectedShare?ownerShareStatus($selectedShare):'Not shared';
@@ -656,7 +669,13 @@ tabs.forEach((tab,index)=>{
   activateMemberTab(tabs[next],true);
  });
 });
-for(const dialog of [membersDialog,document.querySelector('#invite-member-dialog'),roleEditor])
+const copyActivation=document.querySelector('#copy-activation');
+copyActivation?.addEventListener('click',async()=>{
+ const input=document.querySelector('#account-activation-url'), status=document.querySelector('#copy-activation-status');
+ try{await navigator.clipboard.writeText(input.value);status.textContent=copyActivation.dataset.copied;}
+ catch{input.focus();input.select();status.textContent=copyActivation.dataset.manual;}
+});
+for(const dialog of [membersDialog,document.querySelector('#invite-member-dialog'),roleEditor,document.querySelector('#accounts-dialog')])
  if(dialog?.hasAttribute('data-manage-open'))dialog.showModal();
 const agentSetupForm=document.querySelector('#agent-setup');
 const agentSetupText=document.querySelector('#agent-setup-text');

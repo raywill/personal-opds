@@ -147,6 +147,42 @@ function newActivation(string $name): array
     $secret=bin2hex(random_bytes(32));
     return [['digest'=>hash('sha256',$secret),'expires'=>time()+ACTIVATION_TTL],BASE_URL.'up.php?'.http_build_query(['account'=>$name,'activate'=>$secret])];
 }
+function issueAccountActivation(string $name,string $mode,?string $actor=null,?string $passwordVersion=null): string
+{
+    if (!accountName($name)) reject('Specify a lowercase username.');
+    if (!in_array($mode,['create','renew','invite','reset'],true)) reject('Unknown action.');
+    $created=null;
+    try {
+        return stateUpdate('users',function (&$users) use ($name,$mode,$actor,$passwordVersion,&$created) {
+            if ($actor!==null) {
+                $admin=$users[$actor]??[];
+                if (($admin['state']??null)!=='active'||($admin['site_admin']??null)!==true ||
+                    !hash_equals($admin['password']??'', $passwordVersion??'')) reject('Site administrator access required.',403);
+                if (!in_array($mode,['create','renew'],true)) reject('Unknown action.');
+            }
+            $row=$users[$name]??null;
+            $state=$row['state']??null;
+            if ($mode==='reset' && $state!=='active') reject('Only active accounts can be reset.');
+            if ($mode==='renew' && $state!=='pending') reject('Only pending accounts can get a new activation link.',409);
+            if ($row!==null && ($mode==='create'||($mode==='invite'&&$state!=='pending')))
+                reject('Account already exists.',409);
+            $books=accountBooks();
+            if ($row===null) {
+                if (accountNameReserved($name)) reject('This username is reserved.');
+                if (accountDirectoryOccupied($books,$name)) reject('Existing library path; refusing to claim it.');
+                if (!@mkdir($books.'/'.$name,0750)) reject('Cannot create the selected directory.',409);
+                $created=$books.'/'.$name;
+            } else directoryUnder($books,$name);
+            [$activation,$link]=newActivation($name);
+            $users[$name]=array_merge($row??['state'=>'pending'],['activation'=>$activation]);
+            return $link;
+        });
+    } catch (Throwable $error) {
+        if ($created!==null) @rmdir($created);
+        throw $error;
+    }
+}
+
 function activateAccount(string $name,string $secret,string $password): void
 {
     if (!accountName($name) || !preg_match('/\A[a-f0-9]{64}\z/D',$secret)) reject('Activation link is invalid or expired.',403);

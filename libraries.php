@@ -19,8 +19,7 @@ const MEMBERSHIP_TTL = 7 * 86400;
 function personalLibraryId(string $username): string { return 'p-'.$username; }
 function libraryIdValid(string $id): bool
 {
-    return preg_match('/\Al-[a-f0-9]{32}\z/D',$id)===1 ||
-        (str_starts_with($id,'p-') && accountName(substr($id,2)));
+    return str_starts_with($id,'p-') && accountName(substr($id,2));
 }
 function libraryRecords(): array
 {
@@ -45,23 +44,14 @@ function libraryInfo(string $id, ?array $rows=null, ?array $users=null): ?array
     if (!libraryIdValid($id)) return null;
     $rows??=libraryRecords();
     $users??=stateRead('users');
-    if (str_starts_with($id,'p-')) {
-        $original=substr($id,2);
-        if (!isset($users[$original])) return null;
-        $default=['owner'=>$original,'title'=>null,'members'=>[],'tokens'=>[]];
-        $row=$rows[$id]??$default;
-        $row['path']=$original;
-        $row['legacy']=$original;
-        $row['quota_bytes']??=$users[$original]['quota_bytes']??5*1024*1024*1024;
-        $row['quota_files']??=$users[$original]['quota_files']??5000;
-    } else {
-        if (!isset($rows[$id])) return null;
-        $row=$rows[$id];
-        $row['path']=$id;
-        $row['legacy']=null;
-        $row['quota_bytes']??=5*1024*1024*1024;
-        $row['quota_files']??=5000;
-    }
+    $owner=substr($id,2);
+    if (!isset($users[$owner])) return null;
+    $row=$rows[$id]??['title'=>null,'members'=>[],'tokens'=>[]];
+    $row['owner']=$owner;
+    $row['path']=$owner;
+    $row['legacy']=$owner;
+    $row['quota_bytes']??=$users[$owner]['quota_bytes']??5*1024*1024*1024;
+    $row['quota_files']??=$users[$owner]['quota_files']??5000;
     $row['id']=$id;
     return $row;
 }
@@ -125,30 +115,6 @@ function libraryAudit(array &$rows,string $event,string $actor,string $id,array 
     $rows['_audit']=array_slice($events,-2000);
 }
 
-function libraryCreate(string $title,string $owner): string
-{
-    $title=validLibraryTitle($title);
-    if (!ALLOW_LIBRARY_CREATION) reject('The site does not allow creating libraries.',403);
-    $created=null;
-    try {
-        return libraryUpdate(function (&$rows) use ($title,$owner,&$created) {
-            if (!activeAccount($owner)) reject(tr('Sign in again.'),401);
-            if (count(array_filter($rows,static fn($row)=>($row['owner']??null)===$owner))>=20)
-                reject('Library limit reached.',507);
-            do { $id='l-'.bin2hex(random_bytes(16)); } while (isset($rows[$id]) || accountDirectoryOccupied(accountBooks(),$id));
-            $root=accountBooks().'/'.$id;
-            if (!mkdir($root,0750)) throw new RuntimeException('Could not initialize library storage.');
-            $created=$root;
-            $rows[$id]=['owner'=>$owner,'title'=>$title,'members'=>[],'tokens'=>[]];
-            libraryAudit($rows,'library.created',$owner,$id);
-            return $id;
-        });
-    } catch (Throwable $e) {
-        if ($created!==null) @rmdir($created);
-        throw $e;
-    }
-}
-
 function libraryMemberChange(string $id,string $actor,string $member,string $action,?string $role=null): void
 {
     if (!accountName($member)||($role!==null&&!isset(LIBRARY_ROLES[$role]))) reject('Invalid username or role.');
@@ -185,13 +151,12 @@ function libraryMemberChange(string $id,string $actor,string $member,string $act
             (!in_array('agent_upload',$nowPermissions,true)||(!empty($token['whole'])&&!in_array('tokens',$nowPermissions,true))))
             $token['revoked']??=time();
         unset($token);
-        if (($row['transfer']['to']??null)===$member && !in_array('view',libraryPermissions($row,$member),true)) unset($row['transfer']);
         $rows[$id]=libraryPersisted($row);
         libraryAudit($rows,'member.changed',$actor,$id,['member'=>$member,'before'=>$previous,'after'=>$role]);
     });
 }
 
-function libraryPersisted(array $row): array { return array_intersect_key($row,array_flip(['owner','title','members','tokens','transfer','invites','archived','quota_bytes','quota_files'])); }
+function libraryPersisted(array $row): array { return array_intersect_key($row,array_flip(['title','members','tokens','invites','archived','quota_bytes','quota_files'])); }
 
 function issueAgentToken(array $library,string $user,string $directory,int $days=DEFAULT_AGENT_TOKEN_DAYS,string $name='',bool $whole=false,bool $mkdir=false): array
 {
@@ -290,38 +255,6 @@ function libraryRoleLabel(mixed $role): string
     return tr(is_string($role)?(LIBRARY_ROLE_LABELS[$role]??'Unknown role'):'Unknown role');
 }
 
-function libraryTransfer(string $id,string $actor,string $action,string $member): void
-{
-    libraryUpdate(function (&$rows) use ($id,$actor,$action,$member) {
-        $row=libraryInfo($id,$rows);
-        if (!$row || !activeAccount($actor)) reject('Library access denied.',403);
-        if ($action==='transfer_accept') {
-            if (($row['transfer']['to']??null)!==$actor || ($row['transfer']['expires']??0)<=time())
-                reject('Ownership invitation is unavailable.',410);
-            if (!isset($row['members'][$actor])) reject('Ownership invitation is unavailable.',410);
-            $former=$row['owner'];
-            $row['owner']=$actor;
-            unset($row['members'][$actor],$row['transfer']);
-            foreach ($row['tokens'] as &$token) if ($token['user']===$former) $token['revoked']??=time();
-            unset($token);
-        } else {
-            if ($row['owner']!==$actor) reject('Library access denied.',403);
-            if ($action==='transfer_cancel') unset($row['transfer']);
-            else {
-                if ($member===$actor || !isset($row['members'][$member]) || !activeAccount($member) ||
-                    !in_array('view',libraryPermissions($row,$member),true))
-                    reject('Choose an active member with web browsing permission.',400);
-                $row['transfer']=['to'=>$member,'expires'=>time()+7*86400];
-            }
-        }
-        if (isset($former) && $row['legacy']===$former) {
-            stateUpdate('users',static function (&$users) use ($former) { unset($users[$former]['token']); });
-        }
-        $rows[$id]=libraryPersisted($row);
-        libraryAudit($rows,$action,$actor,$id,['member'=>$member]);
-    });
-}
-
 function validLibraryTitle(string $title): string
 {
     $title=trim($title);
@@ -332,7 +265,7 @@ function validLibraryTitle(string $title): string
 
 function libraryInvites(string $viewer): array
 {
-    return array_filter(libraryRecords(),static fn($row)=>empty($row['archived'])&&($row['invites'][$viewer]['expires']??0)>time() && isset($row['invites'][$viewer]['role']));
+    return array_filter(libraryRecords(),static fn($row,$id)=>libraryIdValid((string)$id)&&empty($row['archived'])&&($row['invites'][$viewer]['expires']??0)>time()&&isset($row['invites'][$viewer]['role']),ARRAY_FILTER_USE_BOTH);
 }
 
 function libraryAnswerInvite(string $id,string $viewer,bool $accept): void
@@ -355,7 +288,9 @@ function libraryAnswerInvite(string $id,string $viewer,bool $accept): void
 
 function ownedArchivedLibraries(string $viewer): array
 {
-    return array_filter(libraryRecords(),static fn($row)=>!empty($row['archived']) && ($row['owner']??null)===$viewer);
+    $id=personalLibraryId($viewer);
+    $row=libraryInfo($id);
+    return !empty($row['archived'])?[$id=>$row]:[];
 }
 
 function librarySettings(string $id,string $actor,string $action,string $title=''): void
@@ -375,7 +310,6 @@ function librarySettings(string $id,string $actor,string $action,string $title='
             }
             $row['archived']=time();
             $row['tokens']=[]; $row['invites']=[];
-            unset($row['transfer']);
         } else reject('Unknown action.');
         $rows[$id]=libraryPersisted($row);
         libraryAudit($rows,$action,$actor,$id);

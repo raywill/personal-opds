@@ -583,20 +583,35 @@ try{
  assert(preflight.libraries.some(l=>l.id==='p-alice'&&l.active_shares>0&&l.legacy_token));
  pass('upgrade keeps hashed passwords, existing anonymous URL and identity, legacy OPDS and legacy upload token');
 
+ // Test users share the same localhost address across the otherwise independent suites.
+ fs.rmSync(path.join(data,'conf','.rate.json'),{force:true});
  const libraryWeb=(id,params={})=>'up.php?'+new URLSearchParams({library:id,...params});
- const createLib=async title=>{
-   const res=await ui({action:'create_library',title});assert.equal(res.status,303,res.text.slice(0,500));
-   return new URL(res.headers.location).searchParams.get('library');
- };
  const switchUser=async (username,secret=password)=>{
    cookies.clear();
    assert.equal((await ui({action:'login',username,password:secret})).status,303);
  };
  const savedSession=()=>[...cookies.entries()];
  const restoreSession=session=>{cookies.clear();for(const [k,v] of session)cookies.set(k,v);};
+ const thirdUser='casey', librarian='dana';
+ const family='p-dana',tech='p-casey';
+ cookies.clear();
+ assert.equal((await activate(librarian,cli('invite',librarian))).status,303);
+ assert.equal((await activate(thirdUser,cli('invite',thirdUser))).status,303);
+ assert(fs.existsSync(path.join(data,'books',librarian)));
+ assert(fs.existsSync(path.join(data,'books',thirdUser)));
+ await switchUser(thirdUser);
+ const caseySession=savedSession();
+ assert.equal((await ui({action:'member_invite',library:tech,member:'bob',role:'opds_reader'})).status,303);
+ assert.equal((await ui({action:'member_invite',library:tech,member:librarian,role:'reader'})).status,303);
+ await switchUser(librarian);
  const ownerSession=savedSession();
- const family=await createLib('家庭书库'), tech=await createLib('技术读书会');
- assert.match(family,/^l-[a-f0-9]{32}$/);
+ assert(!(await request('up.php')).text.includes('create-library-dialog'));
+ assert((await request('up.php')).text.includes('id="books-panel"'));
+ assert.equal((await ui({action:'create_library',title:'No extra library'})).status,400);
+ assert.equal((await ui({action:'transfer_begin',library:family,member:'bob'})).status,400);
+ assert(!fs.readdirSync(path.join(data,'books')).some(name=>/^l-[0-9a-f]{32}$/.test(name)));
+ assert.equal((await ui({action:'invite_accept',target_library:tech})).status,303);
+ assert.equal((await ui({action:'library_rename',library:family,title:'家庭书库'})).status,303);
  assert((await request('up.php')).text.includes('Choose a library'));
  assert(!(await request('up.php')).text.includes('id="books-panel"'));
  assert.equal((await request(libraryWeb(family))).status,200);
@@ -606,23 +621,17 @@ try{
    return upload(null,dir,[[name,content]],'up.php',{csrf:csrf(page),action:'upload',library:id,...extra});
  };
  assert.equal((await scopedUpload(family,'Legacy upgrade','same.txt','only in shared library')).status,200);
- assert.equal((await opds('alice',{library:family,download:'Legacy upgrade/same.txt'})).text,'only in shared library');
+ assert.equal((await opds(librarian,{library:family,download:'Legacy upgrade/same.txt'})).text,'only in shared library');
  assert.equal((await opds('alice',{download:'Legacy upgrade/same.txt'})).text,'kept in the original library');
  assert.equal((await request(url({s:legacyKey,download:'Legacy upgrade/same.txt',library:family}),{headers:{cookie:''}})).text,'kept in the original library');
- const catalogFamily=await opds('alice',{library:family,feed:'books',category:'Legacy upgrade'});
+ const catalogFamily=await opds(librarian,{library:family,feed:'books',category:'Legacy upgrade'});
  assert.match(catalogFamily.text,new RegExp('library='+family+'&amp;download='));
  assert(!catalogFamily.text.includes('ping.txt'));
  assert.equal((await ui({action:'share',library:family,dir:'Legacy upgrade'})).status,303);
  const modernKey=(await request(libraryWeb(family,{dir:'Legacy upgrade'}))).text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)[1];
  assert.equal((await request(url({s:modernKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'only in shared library');
  assert.equal((await ui({action:'member_invite',library:family,member:'bob',role:'web_upload'})).status,303);
- assert.equal((await ui({action:'member_invite',library:tech,member:'bob',role:'opds_reader'})).status,303);
-
- const thirdUser='casey';
- cookies.clear();
- assert.equal((await activate(thirdUser,cli('invite',thirdUser))).status,303);
- await switchUser(thirdUser);
- const caseySession=savedSession();
+ restoreSession(caseySession);
  assert.equal((await ui({action:'invite_accept',target_library:family})).status,410);
  assert.equal((await request(libraryWeb(family))).status,403);
  await switchUser('bob','new-test-password-123');
@@ -682,7 +691,7 @@ try{
  const bearer=token=>({authorization:'Bearer '+token});
  const verify=token=>request('api.php?action=verify',{headers:bearer(token)});
  assert.equal((await verify(agent.token)).json.directory,'Legacy upgrade');
- assert(!fs.existsSync(path.join(data,'books',family,'Legacy upgrade','agent-only.txt')));
+ assert(!fs.existsSync(path.join(data,'books',librarian,'Legacy upgrade','agent-only.txt')));
  assert.equal((await upload(agent.token,undefined,[['agent-only.txt','agent upload worked']])).status,200);
  assert.equal((await upload(agent.token,undefined,[['agent-only.txt','agent upload worked']])).status,409);
  assert.equal((await ui({action:'folder',library:family,folder:'Another folder'})).status,403);
@@ -712,17 +721,14 @@ try{
  restoreSession(bobSession);
  assert.equal((await ui({action:'invite_accept',target_library:family})).status,303);
  assert.equal((await request(libraryWeb(family,{dir:'Legacy upgrade',download:'same.txt'}))).text,'only in shared library');
+ assert.equal((await ui({action:'library_rename',library:family,title:'Not the owner'})).status,403);
+ assert.equal((await ui({action:'library_archive',library:family})).status,403);
+ assert.equal((await verify(auto.token)).status,200);
  restoreSession(ownerSession);
- assert.equal((await ui({action:'transfer_begin',library:family,member:'bob'})).status,303);
- restoreSession(bobSession);
- assert.equal((await ui({action:'transfer_accept',library:family})).status,303);
- assert.equal((await verify(auto.token)).status,401);
- restoreSession(ownerSession);
- assert.equal((await request(libraryWeb(family))).status,403);
- restoreSession(bobSession);
  assert.equal((await ui({action:'library_rename',library:family,title:'家庭书库 · 周末精选'})).status,303);
  assert((await request('up.php')).text.includes('家庭书库 · 周末精选'));
  assert.equal((await ui({action:'library_archive',library:family})).status,303);
+ assert.equal((await verify(auto.token)).status,401);
  assert.equal((await request(url({s:modernKey}),{headers:{cookie:''}})).status,410);
  assert.equal((await ui({action:'library_restore',target_library:family})).status,303);
  assert.equal((await request(url({s:modernKey}),{headers:{cookie:''}})).status,410);
@@ -730,9 +736,36 @@ try{
  assert.equal((await request(url({s:legacyKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'kept in the original library');
  const audit=JSON.parse(cli('rbac-audit'));
  assert(audit.some(e=>e.event==='member.accepted'&&e.library===family));
- assert(audit.some(e=>e.event==='transfer_accept'&&e.actor==='bob'));
+ assert(audit.some(e=>e.event==='library_archive'&&e.actor===librarian));
  assert(!JSON.stringify(audit).includes(auto.token));
- pass('consensual transfer, revocation without collateral access changes, archive/restore and secret-free audit');
+ pass('one personal library per account, fixed ownership, archive/restore and secret-free audit');
+
+ assert.equal((await ui({action:'account_invite',username:'notallowed',operation:'create'})).status,403);
+ assert(!fs.existsSync(path.join(data,'books','notallowed')));
+ await switchUser('alice');
+ assert((await request('up.php')).text.includes('id="accounts-dialog"'));
+ const webAccount=async (username,operation='create')=>ui({action:'account_invite',username,operation});
+ const readLink=res=>{assert.equal(res.status,200);return res.text.match(/id="account-activation-url" readonly value="([^"]+)"/)[1].replaceAll('&amp;','&');};
+ const first=readLink(await webAccount('ellen'));
+ assert(fs.existsSync(path.join(data,'books','ellen')));
+ assert.equal(readState(path.join(data,'conf','users.json')).records.ellen.state,'pending');
+ assert.equal((await webAccount('ellen')).status,409);
+ assert.equal((await webAccount('alice','renew')).status,409);
+ const second=readLink(await webAccount('ellen','renew'));
+ assert.notEqual(first,second);
+ cookies.clear();
+ assert.equal((await activate('ellen',first)).status,403);
+ assert.equal((await activate('ellen',second)).status,303);
+ assert.equal((await activate('ellen',second)).status,403);
+ assert.equal((await opds('ellen')).status,200);
+ assert.equal(readState(path.join(data,'conf','users.json')).records.ellen.site_admin,undefined);
+ cli('grant-site-admin',librarian);
+ restoreSession(ownerSession);
+ assert((await request('up.php')).text.includes('id="accounts-dialog"'));
+ cli('revoke-site-admin',librarian);
+ assert.equal((await webAccount('notallowed')).status,403);
+ cli('grant-site-admin',librarian);
+ pass('site admin web onboarding, one-time links, renewals and immediate permission revocation');
 
  if(process.env.PLAYWRIGHT_MODULE && process.env.CHROME_BIN){
    const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
@@ -744,7 +777,7 @@ try{
      const page=await ctx.newPage();
      const errors=[]; page.on('pageerror',e=>errors.push(e.message));
      await page.goto(base+'up.php');
-     await page.getByLabel('用户名').fill('bob'); await page.getByLabel('密码',{exact:true}).fill('new-test-password-123');
+     await page.getByLabel('用户名').fill(librarian); await page.getByLabel('密码',{exact:true}).fill(password);
      await page.getByRole('button',{name:'登录',exact:true}).click();
      await page.getByRole('heading',{name:'选择书库',exact:true}).waitFor();
      if(process.env.RBAC_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.RBAC_SCREENSHOT_DIR,'01-选择书库.png')});
@@ -752,6 +785,8 @@ try{
      await page.getByRole('heading',{name:'书库根目录',exact:true}).waitFor();
      await page.getByRole('link',{name:'切换书库'}).waitFor();
      await page.getByLabel('账号菜单').click();
+     await page.getByLabel('你在当前书库的角色').getByText('所有者',{exact:true}).waitFor();
+     assert.equal(await page.getByRole('button',{name:'新建书库',exact:true}).count(),0);
      await page.getByRole('button',{name:'CLI / API 与上传 Skill'}).click();
      const compound=page.locator('#agent-setup');
      await compound.locator('select[name=destination]').selectOption('Legacy upgrade');
@@ -779,7 +814,7 @@ try{
      await edit.locator('input[value=reader]').check();
      assert.equal(await edit.locator('input:checked').count(),1);
      await edit.getByRole('button',{name:'保存角色'}).click();
-     await members.getByText('阅读者',{exact:true}).waitFor();
+     await members.locator('.member-line').filter({hasText:'casey'}).getByText('阅读者',{exact:true}).waitFor();
      await page.setViewportSize({width:390,height:844});
      await members.getByRole('button',{name:'邀请成员'}).click();
      const invite=page.locator('#invite-member-dialog');
@@ -795,6 +830,20 @@ try{
      await members.getByLabel('关闭').click();
      await account.click(); await page.getByRole('button',{name:'书库设置',exact:true}).click();
      await settings.getByRole('button',{name:'归档书库'}).waitFor();
+     assert.equal(await settings.getByText('转让所有权').count(),0);
+     await settings.getByLabel('关闭').click();
+     await page.goto(base+libraryWeb(tech));
+     await account.click();
+     const currentRole=page.getByLabel('你在当前书库的角色');
+     await currentRole.getByText(thirdUser,{exact:true}).waitFor();
+     await currentRole.getByText('阅读者',{exact:true}).waitFor();
+     await page.getByRole('button',{name:'账号管理',exact:true}).click();
+     const accountDialog=page.locator('#accounts-dialog');
+     await accountDialog.getByLabel('用户名').fill('frank');
+     await accountDialog.getByRole('button',{name:'创建账号并生成链接'}).click();
+     await accountDialog.getByRole('button',{name:'复制激活链接'}).click();
+     assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/account=frank&activate=[a-f0-9]{64}$/);
+
      assert.deepEqual(errors,[]);
      pass('Chinese desktop/mobile member tabs, single-role editing and invitations, separate library settings');
    } finally { await browser.close(); }
