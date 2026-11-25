@@ -82,7 +82,7 @@ A single web-accessible library opens directly after sign-in. With two or more, 
 | Manage | Library editor | Read, upload on the web, create folders, rename and move; no delete or public sharing |
 | Manage | Library admin | Manage books, uploads, anonymous shares, ordinary members and upload tokens; no owner controls |
 
-A member has one role per library and may hold different roles in different libraries. In **Library members**, copy the invitation link after sending or from **Invitation history** while it is pending. Only the intended account can sign in and accept; opening or forwarding the link alone grants nothing. Invitations expire after seven days. Use the refresh icon in **Invitation history** to check the latest status without leaving the panel, and the **Members** tab to change a role or revoke access. Rename and archive are under the separate **Library settings** menu, visible to the owner. Administrators can review and revoke member upload tokens under **Connect upload tools**. The site operator does not gain in-app access to books by managing accounts or quotas. The library owner can rename, archive or restore the personal library. Ownership is fixed to the account. The account menu shows the current library and your role there. Archiving stops anonymous subscriptions and Agent tokens, which stay invalid after restore. Files and member roles are retained. Site operators can set per-library quotas with `php admin.php library-quota LIBRARY_ID BYTES MAX_FILES`, inspect recent administration events with `php admin.php rbac-audit`.
+A member has one role per library and may hold different roles in different libraries. In **Library members**, copy the invitation link after sending or from **Invitation history** while it is pending. Only the intended account can sign in and accept; opening or forwarding the link alone grants nothing. Invitations expire after seven days. Use the refresh icon in **Invitation history** to check the latest status without leaving the panel, and the **Members** tab to change a role or revoke access. Rename and archive are under the separate **Library settings** menu, visible to the owner. Administrators can revoke member Agent connections under **Connect Agent → Manage Agent connections**. The site operator does not gain in-app access to books by managing accounts or quotas. The library owner can rename, archive or restore the personal library. Ownership is fixed to the account. The account menu shows the current library and your role there. Archiving stops anonymous subscriptions and Agent tokens, which stay invalid after restore. Files and member roles are retained. Site operators can set per-library quotas with `php admin.php library-quota LIBRARY_ID BYTES MAX_FILES`, inspect recent administration events with `php admin.php rbac-audit`.
 
 ## Books and subscriptions
 
@@ -94,17 +94,9 @@ In the web dashboard, the library root lists its folders above the books stored 
 
 ## AI uploads
 
-In the target library, open the top-right account menu → **Connect upload tools**. Select a destination and click **Copy Agent setup instructions** once. Paste the copied text into an agent that can install skills and run HTTPS requests. It includes the endpoint, library, destination, actual upload-only token, and a verification step that does not upload files. If clipboard access is blocked, the same text is shown for manual copy. The generic `SKILL.md` download contains no secret.
+In the target library, open the top-right account menu → **Connect Agent**. Select a destination and click **Copy complete Agent setup** once. Paste the copied text into an agent that can install skills and run HTTPS requests. It includes the endpoint, library, destination, actual upload-only token, and a verification step that does not upload files. If clipboard access is blocked, the same text is shown for manual copy. There is no separate download or token setup step.
 
 Each credential can be revoked separately. The default binds it to the selected folder for 90 days; token options allow a label and 1–365 days. Owners and admins can additionally issue an entire-library token for themselves, and explicitly opt in to creating missing folders. The app stores token digests only. These credentials do not authenticate reads, web pages or account management.
-
-```sh
-curl --fail-with-body --show-error -H "Authorization: Bearer $OPDS_TOKEN" \
-  -- 'https://your-host/opds/api.php?action=verify'
-
-curl --fail-with-body --show-error -H "Authorization: Bearer $OPDS_TOKEN" \
-  -F 'files[]=@./article.epub' -- 'https://your-host/opds/api.php'
-```
 
 `GET ?action=verify` returns `library_id`, `directory`, `can_create_directory` and `expires_at`. For a fixed token, omit `directory` on upload; it targets the configured folder (empty string means root). An entire-library token may send one existing first-level folder via multipart `directory`; omitted means root. A missing folder is created only when allowed. Invalid paths do not fall back to root. Old tokens still work only in their original personal library and keep their previous directory selection/creation ability until revoked.
 

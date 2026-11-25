@@ -68,6 +68,7 @@ $createdInvitation=$_SESSION['created_invitation']??[];
 unset($_SESSION['created_invitation']);
 try {
     if (!in_array($method,['GET','HEAD','POST'],true)) reject('Method not allowed.',405);
+    if (isset($_GET['skill'])) reject('Standalone Skill download was removed. Use Connect Agent to copy the complete setup.',410);
     $activate=field('activate',$_GET); $activateFor=field('account',$_GET);
     $dir=field('dir',$_GET);
     if ($isInvitation && $activate==='') {
@@ -240,9 +241,6 @@ try {
     }
     if ($library && $activate==='') {
         resolveDestinationDirectory($dir);
-        if (($_GET['skill']??'')==='1' && isset($permissions['agent_upload'])) {
-            $downloadSkill=true;
-        }
         if (isset($_GET['download'])) {
             if (!isset($permissions['download'])) reject('Library access denied.',403);
             managementDownload($dir,field('download',$_GET));
@@ -283,30 +281,6 @@ function libraryHref(string $dir,array $extra=[]): string {
 function hidden(string $csrf,string $action,string $dir=''): void {
     if (currentLibrary()) echo '<input type="hidden" name="library" value="'.h(currentLibrary()['id']).'">';
     echo '<input type="hidden" name="csrf" value="'.h($csrf).'"><input type="hidden" name="action" value="'.h($action).'"><input type="hidden" name="dir" value="'.h($dir).'">';
-}
-$skill=<<<'SKILL'
----
-name: personal-opds-upload
-description: Upload EPUB and TXT to the authenticated user's personal OPDS library.
----
-
-Use the configured OPDS_TOKEN environment variable. Do not print or store it in the skill.
-Upload to the HTTPS URL below using multipart files[]. Omit directory for the configured destination.
-The current token determines the library and folder. Omit directory for a scoped token.
-Only legacy tokens may choose or create another folder within their original personal library. Inspect success and each item in results. Any existing filename in the same directory returns HTTP 409,
-even when the content is identical. Never overwrite. For partial success retry only retryable failures.
-When the connection drops, confirm whether the file landed before reporting the upload as complete.
-Limits: 20 files per API request, 100 MiB per file, 200 MiB combined, subject to user quotas.
-
-    curl --fail-with-body --show-error -H "Authorization: Bearer $OPDS_TOKEN" \
-      -F 'files[]=@./article.epub' -- '__OPDS_UPLOAD_URL__'
-
-SKILL;
-$skill=str_replace("__OPDS_UPLOAD_URL__",str_replace("'","'\"'\"'",PUBLIC_UPLOAD_URL),$skill);
-if (!empty($downloadSkill)) {
-    header('Content-Type: text/markdown; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="SKILL.md"');
-    echo $skill; exit;
 }
 function shareBadge(string $status): string {
     return match($status) { 'Expiring soon'=>'badge pill-warn','Expired','Revoked','Unavailable','Not shared'=>'badge pill-off',default=>'badge' };
@@ -418,7 +392,7 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php if ($library): ?>
 <div class="account-library" aria-label="<?=tr_html('Your role in this library')?>"><span><?=h(libraryTitle($library,$viewer))?></span><span class="role-chip <?=$library['owner']===$viewer?'role-owner':''?>"><?=h($library['owner']===$viewer?tr('Owner'):libraryRoleLabel($library['members'][$viewer]??null))?></span></div>
 <?php endif; ?></div>
-<?php if (isset($permissions['agent_upload'])): ?><button type="button" class="menu-item" data-dialog="tools-dialog"><?=icon('terminal')?><?=tr_html('Connect upload tools')?></button><?php endif; ?>
+<?php if (isset($permissions['agent_upload'])): ?><button type="button" class="menu-item" data-dialog="tools-dialog"><?=icon('terminal')?><?=tr_html('Connect Agent')?></button><?php endif; ?>
 <?php if (isset($permissions['settings'])): ?><button type="button" class="menu-item" data-dialog="library-settings-dialog"><?=icon('more')?><?=tr_html('Library settings')?></button><?php endif; ?>
 <?php if (array_filter($allLibraries,static fn($row)=>in_array('opds',$row['permissions'],true))): ?>
 <button type="button" class="menu-item" data-dialog="reader-dialog"><?=icon('book')?><?=tr_html('Connect e-reader')?></button><?php endif; ?>

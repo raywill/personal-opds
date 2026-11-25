@@ -17,9 +17,8 @@ $owner=$library['owner']===$viewer;
 ?>
 <?php if (isset($permissions['agent_upload'])): ?>
 <dialog id="tools-dialog" class="sheet" aria-labelledby="tools-title">
-<div class="bar dialog-head"><h2 id="tools-title"><?=tr_html('Connect upload tools')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
-<section class="tool-divider"><h3><?=tr_html('One-click Agent setup')?></h3>
-<p class="muted"><?=tr_html('Copy once and paste into your agent. The instruction includes an upload-only token for the selected folder, valid for 90 days.')?></p>
+<div class="bar dialog-head"><h2 id="tools-title"><?=tr_html('Connect Agent')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
+<p class="muted"><?=tr_html('Choose a destination, then paste the complete setup into your agent. It includes the Skill, connection address, and an upload-only token.')?></p>
 <form method="post" action="up.php" id="agent-setup">
 <?php hidden($csrf,'agent_setup',$dir); ?>
 <label><?=tr_html('Upload destination')?><select name="destination">
@@ -32,38 +31,22 @@ $owner=$library['owner']===$viewer;
 <label><?=tr_html('Upload scope')?><select name="scope"><option value="folder"><?=tr_html('Selected folder only')?></option><option value="library"><?=tr_html('Entire library')?></option></select></label>
 <label><input type="checkbox" name="mkdir" value="1"> <?=tr_html('Allow folder creation with an entire-library token')?></label>
 <?php endif; ?></details>
-<button class="primary" data-copied="<?=tr_html('Copied. Paste it into your agent.')?>" data-fallback="<?=tr_html('Copy failed. Select and copy the instructions below.')?>" data-failed="<?=tr_html('Could not prepare the installation instructions. Try again.')?>"><?=tr_html('Copy Agent setup instructions')?></button>
+<button class="primary" data-copied="<?=tr_html('Copied. Paste it into your agent.')?>" data-fallback="<?=tr_html('Copy failed. Select and copy the instructions below.')?>" data-failed="<?=tr_html('Could not prepare the installation instructions. Try again.')?>"><?=tr_html('Copy complete Agent setup')?></button>
 </form>
 <p id="agent-setup-status" role="status"></p>
-<textarea hidden readonly id="agent-setup-text" aria-label="<?=tr_html('Agent setup instructions')?>" lang="en"></textarea></section>
-<details class="tool-divider"><summary><?=tr_html('Terminal command')?></summary>
-<p class="muted"><?=tr_html('Set OPDS_TOKEN to your upload token, then run this command with your file.')?></p>
-<pre><?=h("curl --fail-with-body -H \"Authorization: Bearer \$OPDS_TOKEN\" -F 'files[]=@./book.epub' -- ".escapeshellarg(PUBLIC_UPLOAD_URL))?></pre>
+<textarea hidden readonly id="agent-setup-text" aria-label="<?=tr_html('Agent setup instructions')?>" lang="en"></textarea>
+<?php
+$connections=array_filter($library['tokens'],static fn($item)=>
+    empty($item['revoked'])&&$item['expires']>time()&&($item['user']===$viewer||isset($permissions['tokens'])));
+?>
+<?php if ($connections): ?>
+<details class="tool-divider"><summary><?=tr_html('Manage Agent connections')?></summary>
+<?php foreach ($connections as $id=>$item): ?>
+<div class="token-row bar"><span><?=h(($item['user']===$viewer?'':$item['user'].' · ').(($item['name']??'')!==''?$item['name'].' · ':''))?><?=h(!empty($item['whole'])?tr('Entire library'):($item['dir']?:$libraryName))?> · <?=h(sprintf(tr('Expires %s UTC'),gmdate('Y-m-d',$item['expires'])))?> <small>· <?=h(substr($id,0,8))?></small></span>
+<form method="post" action="up.php" data-confirm="<?=tr_html('Revoke this Agent connection? Uploads using it will stop.')?>"><?php hidden($csrf,$item['user']===$viewer?'agent_revoke':'managed_token_revoke',$dir);?><input type="hidden" name="token_id" value="<?=h($id)?>"><button class="danger"><?=tr_html('Revoke')?></button></form></div>
+<?php endforeach; ?>
 </details>
-<details class="tool-divider"><summary><?=tr_html('API endpoint')?></summary>
-<p class="muted"><?=tr_html('Use your upload token as an Authorization: Bearer header. Upload with multipart POST and the files[] field.')?></p>
-<label><?=tr_html('Upload API URL')?><input class="share-link" readonly value="<?=h(PUBLIC_UPLOAD_URL)?>"></label>
-</details>
-<div class="tool-divider">
-<h3><?=tr_html('Active upload tokens')?></h3>
-<?php if ($owner && $library['legacy']===$viewer && isset($user['token'])): ?>
-<div class="token-row bar"><span><?=tr_html('Legacy personal upload token')?></span>
-<form method="post" action="up.php" data-confirm="<?=tr_html('Revoke this token? Existing scripts using it will stop working.')?>"><?php hidden($csrf,'legacy_token_revoke',$dir);?><button class="danger"><?=tr_html('Revoke')?></button></form></div>
 <?php endif; ?>
-<?php foreach ($library['tokens'] as $id=>$item): if ($item['user']!==$viewer || !empty($item['revoked']) || $item['expires']<=time()) continue; ?>
-<div class="token-row bar"><span><?=h(($item['name']??'')!==''?$item['name'].' · ':'')?><?=h(!empty($item['whole'])?tr('Entire library'):($item['dir']?:$libraryName))?> · <?=h(sprintf(tr('Expires %s UTC'),gmdate('Y-m-d',$item['expires'])))?> <small>· <?=h(substr($id,0,8))?></small></span>
-<form method="post" action="up.php"><?php hidden($csrf,'agent_revoke',$dir);?><input type="hidden" name="token_id" value="<?=h($id)?>"><button class="danger"><?=tr_html('Revoke')?></button></form></div>
-<?php endforeach; ?>
-<a class="button" href="<?=h(libraryHref($dir,['skill'=>'1']))?>"><?=icon('download')?><?=tr_html('Download SKILL.md')?></a>
-</div>
-<?php if (isset($permissions['tokens'])): ?>
-<details class="tool-divider"><summary><?=tr_html('Library members’ upload tokens')?></summary>
-<?php foreach ($library['tokens'] as $id=>$item): if ($item['user']===$viewer || !empty($item['revoked']) || $item['expires']<=time()) continue; ?>
-<div class="token-row bar"><span><?=h($item['user'])?> · <?=h(($item['name']??'')!==''?$item['name'].' · ':'')?><?=h(!empty($item['whole'])?tr('Entire library'):($item['dir']?:$libraryName))?> · <?=h(substr($id,0,8))?></span>
-<form method="post" action="up.php"><?php hidden($csrf,'managed_token_revoke',$dir);?><input type="hidden" name="token_id" value="<?=h($id)?>"><button class="danger"><?=tr_html('Revoke')?></button></form></div>
-<?php endforeach; ?>
-</details><?php endif; ?>
-
 </dialog>
 <?php endif; ?>
 <?php if ($owner): ?>
