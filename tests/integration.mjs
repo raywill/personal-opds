@@ -82,7 +82,7 @@ try{
  const translationKeys=[...dictionary.matchAll(/^  '((?:[^'\\]|\\.)*)' =>/gm)].map(m=>m[1]);
  const uniqueKeys=new Set(translationKeys);
  assert.equal(uniqueKeys.size,translationKeys.length,'Duplicate translation entries');
- for(const source of ['tools/install.template.php','bootstrap.php','up.php','accounts.php','catalogue.php','index.php','api.php','upload-common.php','security.php','libraries.php','library-controls.php']){
+ for(const source of ['tools/install.template.php','bootstrap.php','up.php','accounts.php','catalogue.php','index.php','api.php','upload-common.php','security.php','libraries.php','library-controls.php','preview.php','reader-content.php']){
    for(const [,label] of fs.readFileSync(path.join(project,source),'utf8').matchAll(/\b(?:tr|tr_html|reject|RequestError)\('((?:[^'\\]|\\.)*)'/g))
      assert(uniqueKeys.has(label),`Missing Chinese translation in ${source}: ${label}`);
  }
@@ -647,6 +647,13 @@ try{
      pass('Chinese installer and dashboard: localized labels, count, share preview, move confirmation and proxy upload error');
    }finally{await browser.close();}
  }
+ // The browser suite rotates/revokes the deliberately stale Share shelf URL.
+ // Clean up the same fixture when CI runs just the HTTP tests.
+ if(!process.env.CHROME_BIN||!process.env.PLAYWRIGHT_MODULE){
+   const state=JSON.parse(fs.readFileSync(shares));
+   state.records[fourth.split('-')[0]].expires=Math.floor(Date.now()/1000)-1;
+   fs.writeFileSync(shares,JSON.stringify(state));
+ }
  // RBAC upgrade: build an old-format deployment in place, including a real share
  // from the previous release when its source files are supplied.
  const legacySource=process.env.OPDS_LEGACY_SOURCE;
@@ -783,6 +790,10 @@ try{
  assert(bobFamily.text.includes('This role cannot browse books.'));
  assert(!bobFamily.text.includes('same.txt')&&!bobFamily.text.includes('id="tools-dialog"'));
  assert.equal((await request(libraryWeb(family,{dir:'Legacy upgrade',download:'same.txt'}))).status,403);
+ for(const options of [{},{part:0,version:'none'},{asset:'cover.png',version:'none'}]){
+   const blocked='preview.php?'+new URLSearchParams({library:family,dir:'Legacy upgrade',book:'same.txt',...options});
+   assert.equal((await request(blocked)).status,403);
+ }
  assert.equal((await ui({action:'folder',library:family,folder:'Forbidden folder'})).status,403);
  assert.equal((await ui({action:'agent_setup',library:family,destination:'Legacy upgrade'})).status,403);
  assert.equal((await ui({action:'delete',library:family,dir:'Legacy upgrade',file:'same.txt'})).status,403);
@@ -809,6 +820,10 @@ try{
  restoreSession(bobSession);
  assert(!(await request(libraryWeb(family,{dir:'Legacy upgrade'}))).text.includes('web-only'));
  assert.equal((await request(libraryWeb(family,{dir:'Legacy upgrade',download:'same.txt'}))).status,403);
+ for(const options of [{},{part:0,version:'none'},{asset:'cover.png',version:'none'}]){
+   const blocked='preview.php?'+new URLSearchParams({library:family,dir:'Legacy upgrade',book:'same.txt',...options});
+   assert.equal((await request(blocked)).status,403);
+ }
  assert.equal((await scopedUpload(family,'Legacy upgrade','not-web.txt','no')).status,403);
  function setupConfig(res) {
    assert.equal(res.status,200,res.json?.message);
@@ -1133,6 +1148,108 @@ try{
      assert.deepEqual(errors,[]);
      pass('Chinese desktop/mobile member tabs, single-role editing and invitations, separate library settings');
    } finally { await browser.close(); }
+ }
+ {
+ const dir='Online reader checks', fixture=path.join(temp,'readable.epub');
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j2ZkAAAAASUVORK5CYII=';
+ execFileSync(php,['-r',`
+    $z=new ZipArchive();$z->open($argv[1],ZipArchive::CREATE);
+    $z->addFromString("mimetype","application/epub+zip");$z->setCompressionName("mimetype",ZipArchive::CM_STORE);
+    $z->addFromString("META-INF/container.xml",'<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+    $z->addFromString("book.opf",'<package><metadata/><manifest>
+    <item id="intro" href="read/one.xhtml" media-type="application/xhtml+xml"/>
+    <item id="second" href="read/two.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover" href="cover.png" media-type="image/png"/>
+    <item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>
+    </manifest><spine><itemref idref="intro"/><itemref idref="second"/></spine></package>');
+    $z->addFromString("nav.xhtml",'<html><body><nav epub:type="toc"><ol><li><a href="read/one.xhtml">Opening pages</a></li><li><a href="read/two.xhtml#return-here">Second chapter</a></li></ol></nav></body></html>');
+    $z->addFromString("read/one.xhtml",'<html><body><h2>Opening text</h2><p>First chapter.</p>
+    <a href="two.xhtml#return-here">Go to chapter two</a><img src="../cover.png" alt="Book image" onload="alert(1)">
+    <iframe src="https://example.invalid/frame"></iframe><script>alert(1)</script>
+    <img src="https://example.invalid/image"><a href="https://example.invalid/">External</a></body></html>');
+    $z->addFromString("read/two.xhtml",'<html><body><h2 id="return-here">The second chapter</h2>'.
+    str_repeat('<p>This chapter has enough text to scroll and test saved progress on reload.</p>',60).'</body></html>');
+    $z->addFromString("other.bin",random_bytes(4*1024*1024));$z->setCompressionName("other.bin",ZipArchive::CM_STORE);
+    $z->addFromString("cover.png",base64_decode($argv[2]));$z->close();
+ `,fixture,png]);
+ fs.rmSync(path.join(data,'conf','.rate.json'),{force:true});cookies.clear();
+ assert.equal((await ui({action:'login',username:'alice',password})).status,303);
+ const readerToken=getLegacyToken('alice');
+ const text='回到上次阅读的位置。Welcome to the test book.\n'.repeat(25000);
+ const txtGB=Buffer.from([0xd6,0xd0,0xce,0xc4,0x0a]);
+ assert.equal((await upload(readerToken,dir,[['readable.epub',fs.readFileSync(fixture)],['long.txt',text],['gbk.txt',txtGB]])).status,200);
+ const previewURL=(file,params={})=>'preview.php?'+new URLSearchParams({library:'p-alice',dir,book:file,...params});
+ const shelfURL='up.php?'+new URLSearchParams({library:'p-alice',dir});
+ const getConfig=page=>JSON.parse(page.text.match(/data-config="([^"]+)"/)[1].replace(/&quot;/g,'"').replace(/&amp;/g,'&'));
+ const readerPage=await request(previewURL('readable.epub'));
+ assert.equal(readerPage.status,200,readerPage.text.slice(0,900));
+ assert(!readerPage.text.includes('Opening text')); // no book payload in the HTML shell
+ const readerApi=getConfig(readerPage).url;
+ const first=await request(readerApi+'&part=0');
+ assert.equal(first.status,200,first.text);assert(first.json.html.includes('Opening text'));
+ assert(!/The second chapter|example\.invalid|onload=|<script|<iframe/.test(first.json.html));
+ assert(first.text.length<2500);assert(fs.statSync(fixture).size>4*1024*1024);
+ assert.equal((await request(readerApi+'&part=1')).json.count,2);
+ assert.equal((await request(readerApi+'&toc=1')).json.toc[1][1],'return-here');
+ assert.equal((await request(readerApi+'&asset=cover.png')).headers['content-type'],'image/png');
+ assert.equal((await request(readerApi+'&asset=other.bin')).status,404);
+ const signedInReader=savedSession();
+ assert.equal((await request(readerApi+'&part=0',{headers:{cookie:''}})).status,401);
+ assert.equal((await request(readerApi+'&asset=cover.png',{headers:{cookie:'',...auth('alice',password)}})).status,401);
+ restoreSession(signedInReader);
+ assert.equal((await request(previewURL('../private.txt'))).status,400);
+ assert.equal((await request(previewURL('readable.epub',{version:'bad',part:0}))).status,409);
+ assert.match((await request(shelfURL)).text,/class="book-name" href="preview\.php/);
+ const txtApi=getConfig(await request(previewURL('long.txt'))).url;
+ const utf=await request(txtApi+'&part=0');assert.equal(utf.status,200,utf.text.slice(0,400));
+ assert(utf.json.total>1000000&&utf.json.next<26000);
+ assert(Buffer.from(utf.json.bytes,'base64').toString().startsWith('回到上次阅读的位置'));
+ assert.equal((await request(txtApi+'&part='+utf.json.next+'&encoding=utf-8')).json.offset,utf.json.next);
+ const gb=await request(getConfig(await request(previewURL('gbk.txt'))).url+'&part=0');
+ assert.equal(gb.json.encoding,'gb18030');assert.equal(new TextDecoder('gb18030').decode(Buffer.from(gb.json.bytes,'base64')),'中文\n');
+ pass('online reader authorization on every request, bounded first chapter/segment, protected EPUB images and TOC, UTF-8/GBK');
+
+ if(process.env.PLAYWRIGHT_MODULE && process.env.CHROME_BIN){
+   const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+   const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+   try {
+     const ctx=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:1200,height:800}});
+     for(const cookie of cookies.values()){
+         const [name,...v]=cookie.split('=');await ctx.addCookies([{name,value:v.join('='),url:base,secure:true}]);
+     }
+     const web=await ctx.newPage();const fetched=[];const errors=[];
+     web.on('request',req=>fetched.push(req.url()));web.on('pageerror',err=>errors.push(err.message));
+     await web.goto(base+shelfURL);
+     await web.getByRole('link',{name:'readable',exact:true}).click();
+     await web.getByText('Opening text',{exact:true}).waitFor();
+     assert.equal(fetched.filter(u=>u.includes('&part=')).length,1);
+     assert(!fetched.some(u=>u.includes('example.invalid')||u.includes('&toc=')));
+     await web.getByRole('button',{name:'Reading controls'}).click();
+     await web.getByRole('button',{name:'Contents'}).click();
+     await web.getByRole('button',{name:'Second chapter'}).click();
+     await web.getByText('The second chapter',{exact:true}).waitFor();
+     await web.locator('#viewport').evaluate(v=>v.scrollTop=2200);await web.waitForTimeout(240);
+     await web.reload();await web.getByText('The second chapter',{exact:true}).waitFor();
+     assert((await web.locator('#viewport').evaluate(v=>v.scrollTop))>1500);
+     await web.getByRole('button',{name:'Reading controls'}).click();
+     await web.getByRole('button',{name:'Reading settings'}).click();
+     await web.getByLabel('Theme').selectOption('warm');
+     await web.getByLabel('Reading mode').selectOption('page');
+     await web.getByRole('button',{name:'Close',exact:true}).click();
+     await web.reload();await web.getByText('The second chapter',{exact:true}).waitFor();
+     assert.equal(await web.locator('html').getAttribute('data-theme'),'warm');
+     assert.equal(await web.locator('#reader').getAttribute('data-mode'),'page');
+     await web.getByRole('link',{name:'Back to library'}).click();
+     await web.getByRole('link',{name:'readable',exact:true}).waitFor();
+     await web.setViewportSize({width:390,height:844});
+     await web.getByRole('link',{name:'long',exact:true}).click();
+     await web.locator('.plain-text').waitFor();
+     assert((await web.locator('.plain-text').textContent()).includes('回到上次阅读的位置'));
+     assert.equal(await web.evaluate(()=>document.documentElement.scrollWidth),390);
+     assert.deepEqual(errors,[]);
+     pass('desktop/mobile reader entry, TOC navigation, reload resumes the chapter and scroll position, and themes persist');
+   } finally { await browser.close(); }
+ }
  }
  {
  // Move the real PHP application without changing config.php or private data.

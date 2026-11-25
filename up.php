@@ -576,10 +576,11 @@ if ($preview) {
    <?php endforeach; ?>
   <?php foreach ($pageFiles as $name=>$size):
     $download=libraryHref($dir,['download'=>$name]);
+    $read='preview.php?'.http_build_query(['library'=>$library['id'],'dir'=>$dir,'book'=>$name],'','&',PHP_QUERY_RFC3986);
     $format=strtolower(pathinfo($name,PATHINFO_EXTENSION)); $title=pathinfo($name,PATHINFO_FILENAME); ?>
   <li class="book">
    <span aria-hidden="true" class="book-icon <?=$format==='txt'?'txt':''?>"><?=h(strtoupper($format))?></span>
-   <div class="book-info"><?php if (isset($permissions['download'])): ?><a class="book-name" href="<?=h($download)?>" title="<?=h($name)?>"><?=h($title)?></a><?php else: ?><span class="book-name" title="<?=h($name)?>"><?=h($title)?></span><?php endif; ?><small><?=h(fileSizeLabel($size))?></small></div>
+   <div class="book-info"><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><small><?=h(fileSizeLabel($size))?></small></div>
    <?php if (isset($permissions['download'])): ?><a class="button icon-button" href="<?=h($download)?>" title="<?=tr_html('Download')?>" aria-label="<?=h(sprintf(tr('Download %s'),$name))?>"><?=icon('download')?></a><?php else: ?><span></span><?php endif; ?>
    <?php if (isset($permissions['organize'])||isset($permissions['delete'])): ?><details class="book-menu">
     <summary class="button icon-button" aria-label="<?=h(sprintf(tr('More actions for %s'),$name))?>"><?=icon('more')?></summary>

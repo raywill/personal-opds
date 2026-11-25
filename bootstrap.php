@@ -37,7 +37,7 @@ function publicAppBase(string $configured): string
         // SCRIPT_NAME is the web server's public path to the PHP entry point,
         // not PATH_INFO, the underlying filesystem path, or a proxy header.
         $script=$_SERVER['SCRIPT_NAME']??'';
-        if (!is_string($script)||!preg_match('~\A((?:/[a-zA-Z0-9._-]+)*/)(?:up|api|index)\.php\z~D',$script,$parts))
+        if (!is_string($script)||!preg_match('~\A((?:/[a-zA-Z0-9._-]+)*/)(?:up|api|index|preview)\.php\z~D',$script,$parts))
             bootstrapFailure(tr('Cannot determine the public application path.'));
         $path=$parts[1];
     }
