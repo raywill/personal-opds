@@ -73,6 +73,15 @@ const getToken=async()=>{const r=await ui({action:'token'}); assert.equal(r.stat
 try{
  // Exercise owner combinations even when this runner cannot chown files.
  const template=fs.readFileSync(path.join(project,'tools','install.template.php'),'utf8');
+ const dictionary=fs.readFileSync(path.join(project,'i18n.php'),'utf8');
+ const translationKeys=[...dictionary.matchAll(/^  '((?:[^'\\]|\\.)*)' =>/gm)].map(m=>m[1]);
+ const uniqueKeys=new Set(translationKeys);
+ assert.equal(uniqueKeys.size,translationKeys.length,'Duplicate translation entries');
+ for(const source of ['tools/install.template.php','bootstrap.php','up.php','accounts.php','catalogue.php','index.php','api.php','upload-common.php','security.php']){
+   for(const [,label] of fs.readFileSync(path.join(project,source),'utf8').matchAll(/\b(?:tr|tr_html|reject|RequestError)\('((?:[^'\\]|\\.)*)'/g))
+     assert(uniqueKeys.has(label),`Missing Chinese translation in ${source}: ${label}`);
+ }
+ pass('Chinese dictionary has no duplicate keys or missing literal labels and public errors');
  const extract=(name,next)=>template.slice(template.indexOf('function '+name+'('),template.indexOf('function '+next+'('));
  const example='/home/wwwroot/www.reactshare.cn/personal-opds';
  const permissionNonOwner=JSON.parse(execFileSync(php,['-r',
@@ -100,6 +109,11 @@ try{
  r=await setupPost(1,'next');assert.equal(r.status,200,r.text);assert.equal(r.json.step,2);
  r=await setupPost(2,'next',{...settings,data_dir:path.join(web,'data')});assert.equal(r.status,400);assert.equal(r.json.step,2);
  const locationStep=await request();assert(!locationStep.text.includes(base));
+ const zhSetup=await request('install.php',{headers:{'accept-language':'zh-CN'}});
+ assert(zhSetup.text.includes('lang="zh-CN"'));assert(zhSetup.text.includes('设置书库与存储'));assert(zhSetup.text.includes('私有数据根目录'));
+ const badStorage=await post('install.php',{csrf:setup,step:2,action:'next',...settings,data_dir:path.join(web,'data')},{'accept':'application/json','accept-language':'zh-CN'});
+ assert.equal(badStorage.status,400);assert(badStorage.json.message.includes('网站根目录'));
+
  assert(!locationStep.text.includes('name="base_url"'));assert(locationStep.text.includes('Site name'));
  r=await setupPost(2,'next',{...settings,title:''});assert.equal(r.status,400);assert.equal(r.json.step,2);
  assert(r.json.message.includes('Invalid site name'));
@@ -232,7 +246,7 @@ try{
 
 
  r=await ui({action:'share',dir:'Share shelf'});assert.equal(r.status,303,r.text);
- r=await request('up.php?dir=Share+shelf&preview=1');assert(r.text.includes('titles visible'));
+ r=await request('up.php?dir=Share+shelf&preview=1');assert(r.text.includes('Books in this subscription:'));
  const key=r.text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)?.[1]; assert(key,r.text); assert(/[A-Z]/.test(key.slice(9)) && /[0-9]/.test(key.slice(9)));
  assert.equal((await request(url({s:key.toLowerCase(),download:'Share shelf/same.txt'}))).text,'Alice shared content');
  assert.equal((await request(url({s:key,download:'private.txt'}))).status,404);
@@ -379,6 +393,49 @@ try{
      page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Revoke',exact:true}).click();
      await page.getByRole('status').getByText('Share revoked.').waitFor();assert.deepEqual(errors,[]);
      pass('desktop and mobile browser UI: sign in, upload, live library refresh, share and revoke');
+     await page.close();
+     const zh=await browser.newPage({locale:'zh-CN',ignoreHTTPSErrors:true});
+     await zh.goto(base+'up.php');
+     await zh.getByText('登录后可管理书籍并分享目录。').waitFor();
+     await zh.getByLabel('用户名').fill('alice');await zh.getByLabel('密码',{exact:true}).fill(password);
+     await zh.getByRole('button',{name:'登录',exact:true}).click();
+     await zh.getByRole('heading',{name:'书库根目录'}).waitFor();
+     await zh.getByText('上传到：书库根目录').waitFor();
+     const tools=zh.locator('header.top details.tools');
+     assert.equal(await tools.locator('summary').innerText(),'CLI / API 与上传 Skill');
+     await tools.locator('summary').click();
+     await tools.getByRole('link',{name:'下载 SKILL.md'}).waitFor();
+     await zh.keyboard.press('Escape');assert.equal(await tools.getAttribute('open'),null);
+
+     await zh.getByRole('link',{name:/Share shelf/}).first().click();
+     await zh.getByRole('heading',{name:'目录订阅'}).waitFor();
+     await zh.setViewportSize({width:390,height:844});
+     await tools.locator('summary').click();
+     await tools.getByRole('link',{name:'下载 SKILL.md'}).waitFor();
+     const toolBounds=await tools.locator('.tools-popover').boundingBox();
+     assert(toolBounds.x>=0 && toolBounds.x+toolBounds.width<=390);
+     zh.once('dialog',d=>d.accept());
+     await tools.getByRole('button',{name:'生成上传令牌'}).click();
+     assert.equal((await tools.locator('input.share-link').inputValue()).length,64);
+     await zh.keyboard.press('Escape');
+
+     await zh.getByRole('button',{name:'创建分享',exact:true}).click();
+     await zh.getByText(/到期时间：.*（UTC）/).waitFor();
+     await zh.getByRole('link',{name:'预览',exact:true}).click();
+     await zh.getByText(/只读预览 · 此订阅可查看 [0-9]+ 本书/).waitFor();
+     await zh.getByRole('button',{name:'移动',exact:true}).first().click();
+     let warning='';
+     zh.once('dialog',d=>{warning=d.message();return d.dismiss();});
+     await zh.locator('#move-dialog .primary').click();
+     assert.equal(warning,'移动这本书会改变订阅者可见的内容。继续吗？');
+     await zh.getByRole('button',{name:'关闭',exact:true}).click();
+     await zh.route('**/up.php',route=>route.fulfill({status:413,contentType:'text/plain',body:'proxy limit'}));
+     await zh.locator('#files').setInputFiles({name:'zh-test.txt',mimeType:'text/plain',buffer:Buffer.from('Browser UI upload')});
+     await zh.getByRole('button',{name:'上传',exact:true}).click();
+     await zh.getByText('服务器拒绝了上传请求（HTTP 413）。',{exact:false}).waitFor();
+     await zh.getByRole('button',{name:'重试失败项'}).waitFor();
+     await zh.close();
+     pass('Chinese installer and dashboard: localized labels, count, share preview, move confirmation and proxy upload error');
    }finally{await browser.close();}
  }
  console.log(`Passed ${results.length} integration suites.`);

@@ -11,6 +11,7 @@ function bootstrapFailure(string $message): never
     if (defined('OPDS_JSON_BOOTSTRAP')) {
         echo json_encode(['success' => false, 'message' => $message, 'results' => []], JSON_UNESCAPED_UNICODE);
     } else {
+        if (PHP_SAPI!=='cli') header('Content-Type: text/plain; charset=UTF-8');
         echo $message;
     }
     exit;
@@ -37,14 +38,14 @@ if (!is_array($settings) || ($settings['max_category_depth'] ?? 0) !== 1) {
     bootstrapFailure(tr('Only one category level is enabled in this release.'));
 }
 if (($settings['multiuser']??false)!==true || !is_string($settings['share_key']??null)) {
-    bootstrapFailure('This release requires a new private multiuser installation.');
+    bootstrapFailure(tr('This release requires a new private multiuser installation.'));
 }
 if (PHP_SAPI!=='cli') {
     $doc=realpath((string)($_SERVER['DOCUMENT_ROOT']??''));
     foreach ($locations as $location) {
         $real=realpath($location);
         if ($doc===false || $real===false || $real===$doc || str_starts_with($real,rtrim($doc,'/').'/'))
-            bootstrapFailure('Library data must be outside the web root.');
+            bootstrapFailure(tr('Library data must be outside the web root.'));
     }
 }
 define('SHARE_KEY', $settings['share_key']);

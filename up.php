@@ -176,12 +176,23 @@ function fileSizeLabel(int $size): string {
 <title><?=h(LIBRARY_TITLE)?> · Personal OPDS</title>
 <style nonce="<?=h($nonce)?>">
 :root{color-scheme:light;--ink:#17292d;--soft:#4d666b;--line:#dbe7e7;--paper:#fff;--bg:#f0f7f6;--accent:#076e64;--mint:#daf4eb;--warn:#9d263a}*{box-sizing:border-box}[hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,sans-serif}a{color:var(--accent)}header.top{background:#0c3437;color:#fff;padding:16px max(20px,calc((100vw - 1240px)/2));display:flex;justify-content:space-between;align-items:center;gap:12px}.top strong{display:block;font-size:1.1rem}.top small{color:#9cd8ce;letter-spacing:.12em;text-transform:uppercase}.top form{display:flex;gap:10px;align-items:center}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,sans-serif}a{color:var(--accent)}header.top{background:#0c3437;color:#fff;padding:16px max(20px,calc((100vw - 1240px)/2));display:flex;justify-content:space-between;align-items:center;gap:12px}.top strong{display:block;font-size:1.1rem}.top small{color:#9cd8ce;letter-spacing:.12em;text-transform:uppercase}.top .logout,.top-actions{display:flex;gap:10px;align-items:center}.top{position:relative}.top-actions{flex-wrap:wrap;justify-content:flex-end}.tools summary{list-style:none}.tools summary::-webkit-details-marker{display:none}.tools-popover{position:absolute;z-index:2;top:calc(100% + 6px);inset-inline-end:max(12px,calc((100vw - 1240px)/2));width:min(410px,calc(100vw - 24px));max-height:min(70vh,550px);overflow:auto;color:var(--ink)}.tools-popover form{margin-bottom:12px}.tools-popover textarea{display:block}
 main{max-width:1280px;margin:auto;padding:28px 20px 60px}.layout{display:grid;grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:20px}.panel{border:1px solid var(--line);border-radius:19px;background:var(--paper);padding:22px;box-shadow:0 8px 25px #193d3b0a;min-width:0}.side{align-self:start}.side a{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:9px;border-radius:10px;text-decoration:none;overflow-wrap:anywhere}.side a[aria-current]{background:var(--mint);font-weight:720}.auth{max-width:460px;margin:45px auto}.stack>*+*{margin-top:16px}.bar,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar{justify-content:space-between}.muted,small{color:var(--soft)}h1,h2,h3,p{margin:0 0 12px}h1{font-size:clamp(1.65rem,4vw,2.42rem);letter-spacing:-.04em;overflow-wrap:anywhere}h2{font-size:1.13rem}.eyebrow{font-size:.73rem;color:var(--accent);letter-spacing:.14em;font-weight:800;text-transform:uppercase}.badge{font-size:.74rem;background:var(--mint);color:#105c51;border-radius:100px;padding:3px 9px;white-space:nowrap}.status,.error{padding:11px 13px;border-radius:10px;margin-bottom:12px;background:var(--mint)}.error{background:#fae9ed;color:var(--warn)}button,.button{font:inherit;font-size:.9rem;font-weight:680;background:#edf5f4;color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:7px 11px;cursor:pointer;text-decoration:none;display:inline-block}.primary{background:var(--accent);color:white;border-color:var(--accent)}button.danger{color:var(--warn)}button:disabled{opacity:.5}input,select,textarea{max-width:100%;font:inherit;border:1px solid #aec5c6;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin-bottom:10px;font-weight:600}.auth input{width:100%}.book{padding:10px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}.book strong{flex:1}.book form{display:inline-flex;gap:6px;align-items:center}.book select{max-width:180px}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:130px}.upload{border:1px dashed #82b5ad;border-radius:13px;background:#f6fbfa;padding:14px}progress{max-width:120px}.folder-form{margin-top:14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px}.folder-form input{min-width:0;width:100%}.upload h2{margin-bottom:8px}.upload input[type=file]{display:block;width:100%;margin-top:5px}.upload input::file-selector-button{border:0;padding:6px 10px;border-radius:6px;background:var(--mint);color:var(--ink);font:inherit;margin-right:8px}.upload progress{accent-color:var(--accent)}.actions{margin-top:6px}.book .actions{margin-top:0}.pagination{margin-top:12px}.pill-warn{background:#fff1d8;color:#793e00}.pill-off{background:#edf1f3;color:#4d5d68}.code-short{font:700 .9rem ui-monospace,monospace;white-space:nowrap}.dialog-close{margin-left:auto}dialog{width:min(440px,calc(100% - 24px));border:1px solid var(--line);border-radius:16px;padding:22px;color:var(--ink)}dialog::backdrop{background:#0c343783}dialog select{width:100%}summary{cursor:pointer;font-weight:650}
-@media(max-width:680px){main{padding:14px 10px}.layout{grid-template-columns:1fr;gap:10px}.panel{padding:15px}.folders{display:flex;overflow:auto;gap:4px;padding-bottom:4px}.folders a{white-space:nowrap}.folder-form{display:flex;gap:5px}.folder-form input{min-width:0;flex:1}}
+@media(max-width:680px){.top{gap:8px;flex-wrap:wrap}.top-actions{margin-inline-start:auto}.top .logout{gap:6px}main{padding:14px 10px}.layout{grid-template-columns:1fr;gap:10px}.panel{padding:15px}.folders{display:flex;overflow:auto;gap:4px;padding-bottom:4px}.folders a{white-space:nowrap}.folder-form{display:flex;gap:5px}.folder-form input{min-width:0;flex:1}}
 </style></head><body>
 <header class="top"><div><small>Personal OPDS</small><strong><?=h(LIBRARY_TITLE)?></strong></div>
-<?php if ($user): ?><form action="up.php" method="post"><?php hidden($csrf,'logout');?><span><?=h($viewer)?></span><button><?=tr_html('Sign out')?></button></form><?php endif;?></header>
+<?php if ($user): ?><div class="top-actions">
+<details class="tools" <?=$token!==''?'open':''?>><summary class="button"><?=tr_html('CLI / API & upload Skill')?></summary>
+<div class="panel tools-popover">
+<p class="muted"><?=tr_html('The token is shown once. Keep it private. Generating one replaces any previous token.')?></p>
+<form action="up.php" method="post" data-confirm="<?=tr_html('Generate a new upload token and invalidate the old one?')?>"><?php hidden($csrf,'token',$dir);?><button><?=tr_html('Generate upload token')?></button></form>
+<?php if ($token!==''): ?><label><?=tr_html('Upload token')?><input class="share-link" readonly value="<?=h($token)?>"></label><?php endif;?>
+<p class="muted"><?=tr_html('SKILL.md is written in English for your AI assistant. It does not include your token.')?></p>
+<label>SKILL.md<textarea readonly lang="en"><?=h($skill)?></textarea></label>
+<a href="up.php?skill=1"><?=tr_html('Download SKILL.md')?></a>
+</div></details>
+<form action="up.php" method="post" class="logout"><?php hidden($csrf,'logout');?><span><?=h($viewer)?></span><button><?=tr_html('Sign out')?></button></form>
+</div><?php endif;?></header>
 <main>
 <?php if ($notice!==''): ?><p role="status" class="status"><?=h($notice)?></p><?php endif;?>
 <?php if ($error!==''): ?><p role="alert" class="error"><?=h($error)?></p><?php endif;?>
@@ -190,7 +201,7 @@ main{max-width:1280px;margin:auto;padding:28px 20px 60px}.layout{display:grid;gr
 <?php if ($activate!==''): ?><h1><?=tr_html('Set your password')?></h1><p class="muted"><?=h(sprintf(tr('Set a password for %s. Use the same password in your OPDS reader.'),$activateFor))?></p>
 <form method="post" action="up.php"><?php hidden($csrf,'activate');?><input type="hidden" name="activate" value="<?=h($activate)?>"><input type="hidden" name="account" value="<?=h($activateFor)?>">
 <label><?=tr_html('New password')?><input type="password" name="password" required autocomplete="new-password"></label><label><?=tr_html('Confirm password')?><input type="password" name="confirm" required autocomplete="new-password"></label><button class="primary"><?=tr_html('Set password')?></button></form>
-<?php else: ?><h1><?=tr_html('Your reading room')?></h1><p class="muted"><?=tr_html('Sign in to organize your books and share a shelf.')?></p>
+<?php else: ?><h1><?=tr_html('Your reading room')?></h1><p class="muted"><?=tr_html('Sign in to manage your books and share folders.')?></p>
 <form action="up.php" method="post"><?php hidden($csrf,'login');?><label><?=tr_html('Username')?><input name="username" required autocomplete="username" autocapitalize="none"></label><label><?=tr_html('Password')?><input type="password" name="password" required autocomplete="current-password"></label><button class="primary"><?=tr_html('Sign in')?></button></form>
 <?php endif;?></section>
 <?php else:
@@ -213,7 +224,7 @@ if ($preview) {
     } finally { unset($GLOBALS['shareCategory']); }
 }
 ?>
-<div class="layout"><aside class="panel side"><h2><?=tr_html('Folders')?></h2><nav class="folders" aria-label="Library folders">
+<div class="layout"><aside class="panel side"><h2><?=tr_html('Folders')?></h2><nav class="folders" aria-label="<?=tr_html('Library folders')?>">
 <?php foreach (['',...$directories] as $item): $row=$mine[$item]??null; ?>
 <a href="<?=h(libraryHref($item))?>" <?=$item===$dir?'aria-current="page"':''?>><?=h($item===''?tr('Library root'):$item)?><?php if ($row): ?><span class="<?=shareBadge($statuses[$item])?>"><?=h(tr($statuses[$item]))?></span><?php endif;?></a>
 <?php endforeach;?></nav>
@@ -222,54 +233,53 @@ if ($preview) {
 <div><p class="eyebrow"><?=tr_html('Your library')?></p><div class="bar"><h1><?=h($dir===''?tr('Library root'):$dir)?></h1><a class="button" href="index.php"><?=tr_html('OPDS catalog')?></a></div>
 </div>
 <?php if ($dir!==''): ?>
-<section aria-label="Subscription" class="upload"><div class="bar"><h2><?=tr_html('Subscription share')?></h2><?php if ($selectedShare): ?><small>Expires <?=h(gmdate('Y-m-d',$selectedShare['expires']))?> UTC</small><?php endif;?></div>
+<section aria-label="<?=tr_html('Subscription share')?>" class="upload"><div class="bar"><h2><?=tr_html('Subscription share')?></h2><?php if ($selectedShare): ?><small><?=h(sprintf(tr('Expires %s UTC'),gmdate('Y-m-d',$selectedShare['expires'])))?></small><?php endif;?></div>
 <?php if ($active): $shareId=$selectedShare['id'].'-'.shareCode($selectedShare['id'],$selectedShare['salt']); $shareUrl=publicShareUrl($shareId); ?>
 <p><span class="<?=shareBadge($status)?>"><?=h(tr($status))?></span> <code class="code-short"><?=h($shareId)?></code></p>
 <input class="share-link" id="share-url" readonly value="<?=h($shareUrl)?>" aria-label="<?=tr_html('Subscription URL')?>">
 <?php else: ?><p><span class="<?=shareBadge($status)?>"><?=h(tr($status))?></span></p><?php endif; ?>
 <div class="actions">
 <a class="button" href="<?=h(libraryHref($dir,['preview'=>$preview?'0':'1']))?>"><?=tr_html($preview?'Close preview':'Preview')?></a>
-<?php if ($active): ?><button type="button" id="copy-share"><?=tr_html('Copy URL')?></button><span id="copy-status" role="status"></span><?php endif;?>
+<?php if ($active): ?><button type="button" id="copy-share" data-copied="<?=tr_html('Copied')?>" data-copy-failed="<?=tr_html('Copy failed. Select and copy the link manually.')?>"><?=tr_html('Copy URL')?></button><span id="copy-status" role="status"></span><?php endif;?>
 <form action="up.php" method="post" <?=$active?'data-confirm="'.tr_html('Replace this link? The old link stops working immediately.').'"':''?>><?php hidden($csrf,'share',$dir);?><button class="primary"><?=tr_html($active?'Replace link':'Create share')?></button></form>
 <?php if ($active): ?><form action="up.php" method="post" data-confirm="<?=tr_html('Revoke this share? Subscribers will immediately lose access.')?>"><?php hidden($csrf,'revoke',$dir);?><button class="danger"><?=tr_html('Revoke')?></button></form><?php endif;?>
 </div>
-<?php if ($preview): ?><p class="muted">Read-only preview · <?=count($previewBooks)?> titles visible in the subscription</p><ul><?php foreach (array_slice($previewBooks,0,100) as $book): ?><li><?=h($book['title'])?></li><?php endforeach;?></ul><?php endif;?>
+<?php if ($preview): ?><p class="muted"><?=h(sprintf(tr('Read-only preview · Books in this subscription: %s'),number_format(count($previewBooks))))?></p><ul><?php foreach (array_slice($previewBooks,0,100) as $book): ?><li><?=h($book['title'])?></li><?php endforeach;?></ul><?php endif;?>
 </section>
 <?php endif;?>
 <section class="upload"><h2><?=tr_html('Upload books')?></h2>
-<form id="upload" method="post" enctype="multipart/form-data" action="up.php"><?php hidden($csrf,'upload');?><input type="hidden" name="directory" value="<?=h($dir)?>">
-<label>To <?=h($dir===''?tr('Library root'):$dir)?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
+<form id="upload" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown; check the library before retrying.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown; check the library before retrying.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" method="post" enctype="multipart/form-data" action="up.php"><?php hidden($csrf,'upload');?><input type="hidden" name="directory" value="<?=h($dir)?>">
+<label><?=h(sprintf(tr('Upload to: %s'),$dir===''?tr('Library root'):$dir))?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
 <button class="primary"><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
 </form><div id="queue" aria-live="polite"></div></section>
-<section id="books-panel"><div class="bar"><h2><?=tr_html('Books')?></h2><small><?=number_format($fileCount)?> <?=tr_html('Books')?></small></div><?php if (!$files): ?><p class="muted"><?=tr_html('No books here yet. Upload an EPUB or TXT to get started.')?></p><?php endif;?>
+<section id="books-panel"><div class="bar"><h2><?=tr_html('Books')?></h2><small><?=h(sprintf(tr('Total books: %s'),number_format($fileCount)))?></small></div><?php if (!$files): ?><p class="muted"><?=tr_html('No books here yet. Upload an EPUB or TXT to get started.')?></p><?php endif;?>
 <?php foreach ($pageFiles as $name=>$size): ?>
 <div class="book bar"><strong><?=h($name)?> <small><?=h(fileSizeLabel($size))?></small></strong><div class="actions">
 <a class="button" href="<?=h(libraryHref($dir,['download'=>$name]))?>"><?=tr_html('Download')?></a>
 <?php if ($directories): ?><button type="button" data-book-move="<?=h($name)?>"><?=tr_html('Move')?></button><?php endif;?>
 <form action="up.php" method="post" data-confirm="<?=$active?tr_html('Delete this book? Subscribers will no longer be able to download it.'):tr_html('Delete this book?')?>"><?php hidden($csrf,'delete',$dir);?><input type="hidden" name="file" value="<?=h($name)?>"><button class="danger"><?=tr_html('Delete')?></button></form>
 </div></div><?php endforeach;?>
-<?php if ($pages>1): ?><nav class="bar pagination" aria-label="Pagination"><?php if($page>1):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page-1]))?>"><?=tr_html('Previous')?></a><?php endif;?><small><?=$page?> / <?=$pages?></small><?php if($page<$pages):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page+1]))?>"><?=tr_html('Next')?></a><?php endif;?></nav><?php endif;?>
+<?php if ($pages>1): ?><nav class="bar pagination" aria-label="<?=tr_html('Pagination')?>"><?php if($page>1):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page-1]))?>"><?=tr_html('Previous')?></a><?php endif;?><small><?=$page?> / <?=$pages?></small><?php if($page<$pages):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page+1]))?>"><?=tr_html('Next')?></a><?php endif;?></nav><?php endif;?>
 </section>
-<?php if ($directories): ?><dialog id="move-dialog"><form method="post" action="up.php" data-move="<?=$active?'1':'0'?>"><?php hidden($csrf,'move',$dir);?>
+<?php if ($directories): ?><dialog id="move-dialog"><form method="post" action="up.php" data-move="<?=$active?'1':'0'?>" data-shared-warning="<?=tr_html('Moving this book changes what subscribers can see. Continue?')?>"><?php hidden($csrf,'move',$dir);?>
 <div class="bar"><h2><?=tr_html('Move')?></h2><button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button></div><p id="moving-book"></p>
 <input type="hidden" name="file"><label><?=tr_html('Move destination')?><select name="destination">
 <?php foreach (['',...$directories] as $dest): if($dest===$dir)continue;?><option value="<?=h($dest)?>" data-shared="<?=in_array($statuses[$dest]??'',['Shared','Expiring soon'],true)?'1':'0'?>"><?=h($dest===''?tr('Library root'):$dest)?></option><?php endforeach;?>
 </select></label><button class="primary"><?=tr_html('Move')?></button></form></dialog><?php endif;?>
 
-<details <?=$token!==''?'open':''?>><summary><?=tr_html('CLI / API & upload Skill')?></summary>
-<p class="muted"><?=tr_html('The token is shown once. Keep it private. Generating one replaces any previous token.')?></p>
-<form action="up.php" method="post" data-confirm="<?=tr_html('Generate a new upload token and invalidate the old one?')?>"><?php hidden($csrf,'token',$dir);?><button><?=tr_html('Generate upload token')?></button></form>
-<?php if ($token!==''): ?><label><?=tr_html('Upload token')?><input class="share-link" readonly value="<?=h($token)?>"></label><?php endif;?>
-<label>SKILL.md<textarea readonly><?=h($skill)?></textarea></label>
-<a href="up.php?skill=1"><?=tr_html('Download SKILL.md')?></a>
-</details></section></div>
+</section></div>
 <?php endif;?>
 </main>
 <script nonce="<?=h($nonce)?>">
 document.addEventListener('submit',e=>{
  const f=e.target;if(!f.matches('form[data-confirm],form[data-move]'))return;
- const message=f.dataset.confirm || ((f.dataset.move==='1'||f.elements.destination.selectedOptions[0]?.dataset.shared==='1')?'Moving this book changes what subscribers can see. Continue?':'');
+ const message=f.dataset.confirm || ((f.dataset.move==='1'||f.elements.destination.selectedOptions[0]?.dataset.shared==='1')?f.dataset.sharedWarning:'');
  if(message&&!confirm(message))e.preventDefault();
+});
+const toolsMenu=document.querySelector('details.tools');
+document.addEventListener('click',e=>{if(toolsMenu?.open&&!toolsMenu.contains(e.target))toolsMenu.open=false;});
+document.addEventListener('keydown',e=>{
+ if(e.key==='Escape'&&toolsMenu?.open){toolsMenu.open=false;toolsMenu.querySelector('summary').focus();}
 });
 const dialog=document.querySelector('#move-dialog');
 document.addEventListener('click',e=>{
@@ -279,7 +289,7 @@ document.addEventListener('click',e=>{
 });
 dialog?.querySelector('.dialog-close').addEventListener('click',()=>dialog.close());
 const copy=document.querySelector('#copy-share');
-copy?.addEventListener('click',async()=>{const url=document.querySelector('#share-url'); try{await navigator.clipboard.writeText(url.value);document.querySelector('#copy-status').textContent='Copied';}catch{url.select();}});
+copy?.addEventListener('click',async()=>{const url=document.querySelector('#share-url'); try{await navigator.clipboard.writeText(url.value);document.querySelector('#copy-status').textContent=copy.dataset.copied;}catch{url.select();document.querySelector('#copy-status').textContent=copy.dataset.copyFailed;}});
 const form=document.querySelector('#upload'), retry=document.querySelector('#retry');let failed=[],busy=false;
 async function transfer(files) {
  if(busy||!files.length)return;busy=true;form.querySelector('button').disabled=true;retry.hidden=true;failed=[];
@@ -291,8 +301,9 @@ async function transfer(files) {
    const [ok,msg]=await new Promise(resolve=>{
      const x=new XMLHttpRequest();x.open('POST','up.php');x.timeout=180000;
      x.upload.onprogress=e=>{if(e.lengthComputable)bar.value=e.loaded/e.total*100;};
-     x.onerror=x.ontimeout=()=>resolve([false,'Connection interrupted']);
-     x.onload=()=>{try{const j=JSON.parse(x.responseText);resolve([x.status===200&&j.success,j.message]);}catch{resolve([false,'Server rejected the upload (HTTP '+x.status+')']);}};x.send(data);
+     x.onerror=()=>resolve([false,form.dataset.interrupted]);
+     x.ontimeout=()=>resolve([false,form.dataset.timeout]);
+     x.onload=()=>{try{const j=JSON.parse(x.responseText);resolve([x.status===200&&j.success,j.message]);}catch{resolve([false,form.dataset.rejected.replace('%s',String(x.status))]);}};x.send(data);
    });
    result.textContent=' '+msg; if(!ok)failed.push(file);else{bar.value=100;changed=true;}
  }
