@@ -86,17 +86,13 @@ A single web-accessible library opens directly after sign-in. With two or more, 
 
 A member has one role per library and may hold different roles in different libraries. In **Library members**, copy the invitation link after sending or from **Invitation history** while it is pending. Only the intended account can sign in and accept; opening or forwarding the link alone grants nothing. Invitations expire after seven days. Use the refresh icon in **Invitation history** to check the latest status without leaving the panel, and the **Members** tab to change a role or revoke access. Rename and archive are under the separate **Library settings** menu, visible to the owner. Administrators can revoke member Agent connections under **Connect Agent → Manage Agent connections**. The site operator does not gain in-app access to books by managing accounts or quotas. The library owner can rename, archive or restore the personal library. Ownership is fixed to the account. The account menu shows the current library and your role there. Archiving stops anonymous subscriptions and Agent tokens, which stay invalid after restore. Files and member roles are retained. Site operators can set per-library quotas with `php admin.php library-quota LIBRARY_ID BYTES MAX_FILES`, inspect recent administration events with `php admin.php rbac-audit`.
 
-### Optional: shorter URLs for e-readers
+### Advanced settings: optional short links
 
-If installed under `/opds/` on Nginx, add the following to the site's HTTPS `server { ... }` block, outside the `location` blocks and before any catch-all server-level rewrite:
+Sign in as the **site administrator**, open the top-right account menu, and choose **Advanced settings → Network and links → Link format**. Choose original links (the default), short reader links, or short reader and anonymous share links. For example, on a site installed at `/opds/`, the personal library `p-alice` becomes `/opds/alice`, and the anonymous share entry can become `/opds/s/12345678-AB12`.
 
-```nginx
-rewrite "^/opds/([a-z0-9][a-z0-9_-]{0,31})$" /opds/index.php?library=p-$1? last;
-```
+Copy the generated rules into the site's HTTPS Nginx `server { ... }` block, outside any `location` and before a catch-all server-level rewrite. If you already use the same reader rule, keep just one copy. Keep the existing PHP handler and its standard FastCGI `REQUEST_URI $request_uri` setting. Run `nginx -t` and reload Nginx, then click **Test rewrite** and **Save link format**. The browser tests the selected routes on this site without using a real account password or share link. The app never edits Nginx.
 
-The rule works for every username: `https://your-host/opds/alice` opens the library `p-alice`. Nginx rewrites internally without a 301/302 and discards any incoming query string. The existing PHP handler must still serve `/opds/index.php`. OPDS sign-in and library permissions apply as usual. The original URLs and anonymous subscriptions keep working.
-
-Run `nginx -t && nginx -s reload`. Check the short URL with no credentials (expect `401`), then with your OPDS credentials (expect `200` and an OPDS response).
+This changes the addresses shown in **Connect e-reader** and **Copy URL**. Authentication, permissions, share codes, expiry and revocation are unchanged. Existing original links and all feed, search and download links continue to use the PHP endpoint. To stop issuing short links, select original links again. Keep the Nginx rules until previously distributed short links are no longer needed. If you move the app to a different site address or mount path, it issues original links until you verify the new rewrite.
 
 ### Private books and folders
 
@@ -173,7 +169,7 @@ php tools/build.php
 PHP_BINARY=php node tests/integration.mjs
 ```
 
-The Node 20+ integration test uses OpenSSL CLI, a temporary private data directory, and a trusted local HTTPS proxy. Environment variables `PLAYWRIGHT_MODULE` and `CHROME_BIN` additionally enable desktop/mobile browser tests. Set `OPDS_TEST_WEBKIT=1` with Playwright WebKit installed to also test the chapter drawer with an iPhone-sized touch profile. Optionally set `SCREENSHOT_DIR` or `RBAC_SCREENSHOT_DIR` to a writable directory for UI screenshots. Set `OPDS_LEGACY_SOURCE` to an unpacked copy of the previous release to test creating a share on the actual old code, then upgrading and using the exact same URL. Test with a physical e-reader before rolling the new URL out to other people. Never deploy the test router.
+The Node 20+ integration test uses OpenSSL CLI, a temporary private data directory, and a trusted local HTTPS proxy. Environment variables `PLAYWRIGHT_MODULE` and `CHROME_BIN` additionally enable desktop/mobile browser tests. Set `OPDS_TEST_WEBKIT=1` with Playwright WebKit installed to also test the chapter drawer with an iPhone-sized touch profile. Set `NGINX_BIN` to run the emitted rewrite rules in a temporary Nginx instance. Optionally set `SCREENSHOT_DIR`, `RBAC_SCREENSHOT_DIR`, or `ADVANCED_SCREENSHOT_DIR` to a writable directory for UI screenshots. Set `OPDS_LEGACY_SOURCE` to an unpacked copy of the previous release to test creating a share on the actual old code, then upgrading and using the exact same URL. Test with a physical e-reader before rolling the new URL out to other people. Never deploy the test router.
 
 Apache License 2.0.
 

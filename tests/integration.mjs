@@ -22,15 +22,22 @@ async function port(){const s=net.createServer();await new Promise(r=>s.listen(0
 const back=await port(),front=await port(),base=`https://localhost:${front}/library/`;
 // Only the test TLS terminator sets HTTPS. The application does not trust a
 // client-provided forwarding header; production code is otherwise unchanged.
-fs.writeFileSync(path.join(web,'router.php'),`<?php $_SERVER['HTTPS']='on'; return false;`);
+fs.writeFileSync(path.join(web,'router.php'),`<?php $_SERVER['HTTPS']='on'; if(isset($_SERVER['HTTP_X_TEST_ORIGINAL_URI'])) $_SERVER['REQUEST_URI']=$_SERVER['HTTP_X_TEST_ORIGINAL_URI']; return false;`);
 fs.mkdirSync(path.join(temp,'sessions'));
 const log=fs.openSync(path.join(temp,'php.log'),'w');
 const server=spawn(php,['-d','display_errors=0','-d','session.upload_progress.enabled=0','-d','max_file_uploads=21','-d','upload_max_filesize=100M','-d','post_max_size=205M','-d',`openssl.cafile=${cert}`,'-d',`session.save_path=${temp}/sessions`,'-S',`127.0.0.1:${back}`,'-t',web,path.join(web,'router.php')],{env:{...process.env,PHP_CLI_SERVER_WORKERS:'4'},stdio:['ignore',log,log],detached:true});
 
-let denySetupProbe=false, holdUploadResponse=null;
+let denySetupProbe=false, holdUploadResponse=null, rewriteMode='original', nginxPort, nginxServer;
 const proxy=https.createServer({key:fs.readFileSync(tlsKey),cert:fs.readFileSync(cert)},(req,res)=>{
  if(denySetupProbe&&req.url.startsWith('/library/install-check-')){res.writeHead(403);res.end();return;}
- const upstream=http.request({host:'127.0.0.1',port:back,path:req.url,method:req.method,headers:req.headers},async out=>{
+ const headers={...req.headers};
+ delete headers['x-test-original-uri'];
+ const original=req.url, pathname=original.split('?')[0];
+ const reader=pathname.match(/^\/library\/([a-z0-9][a-z0-9_-]{0,31})$/);
+ const share=pathname.match(/^\/library\/s\/([1-9]{8}-[A-Za-z0-9]{4})$/);
+ const route=rewriteMode!=='original'&&reader?'library=p-'+reader[1]:rewriteMode==='reader-share'&&share?'s='+share[1]:'';
+ if(route&&!nginxPort)headers['x-test-original-uri']=original;
+ const upstream=http.request({host:'127.0.0.1',port:route&&nginxPort?nginxPort:back,path:route&&!nginxPort?'/library/index.php?'+route:original,method:req.method,headers},async out=>{
    const hold=holdUploadResponse;
    if(hold&&req.method==='POST'&&req.url.startsWith('/library/up.php?')){
      holdUploadResponse=null;hold.arrive(req.url);
@@ -89,7 +96,7 @@ try{
  const translationKeys=[...dictionary.matchAll(/^  '((?:[^'\\]|\\.)*)' =>/gm)].map(m=>m[1]);
  const uniqueKeys=new Set(translationKeys);
  assert.equal(uniqueKeys.size,translationKeys.length,'Duplicate translation entries');
- for(const source of ['tools/install.template.php','bootstrap.php','up.php','accounts.php','catalogue.php','index.php','api.php','upload-common.php','security.php','libraries.php','privacy.php','library-controls.php','preview.php','reader-content.php']){
+ for(const source of ['tools/install.template.php','bootstrap.php','up.php','accounts.php','catalogue.php','index.php','api.php','upload-common.php','security.php','libraries.php','privacy.php','library-controls.php','advanced-settings.php','site-link-settings.php','preview.php','reader-content.php']){
    for(const [,label] of fs.readFileSync(path.join(project,source),'utf8').matchAll(/\b(?:tr|tr_html|reject|RequestError)\('((?:[^'\\]|\\.)*)'/g))
      assert(uniqueKeys.has(label),`Missing Chinese translation in ${source}: ${label}`);
  }
@@ -762,6 +769,101 @@ try{
  const preflight=JSON.parse(cli('rbac-check'));
  assert(preflight.libraries.some(l=>l.id==='p-alice'&&l.active_shares>0&&l.legacy_token));
  pass('upgrade keeps hashed passwords, existing anonymous URL and identity, legacy OPDS and legacy upload token');
+ {
+  const settingsPage='advanced-settings.php';
+  const adminCookie=cookies.get('OPDS_LIBRARY');
+  const fresh=await request(settingsPage);
+  assert.equal(fresh.status,200);
+  assert(fresh.text.includes('Active: Original links'));
+  assert((await request('up.php')).text.includes('<hr class="account-separator"><a class="menu-item" href="advanced-settings.php">'));
+  assert.equal((await request(settingsPage,{headers:{cookie:''}})).status,403);
+  cookies.set('OPDS_LIBRARY',adminCookie);
+  const adminCsrf=csrf(fresh), readerProbe='opds-link-test?opds_rewrite_check=1', shareProbe='s/12345678-AB12?opds_rewrite_check=1';
+  const probe=(address,kind,token=adminCsrf)=>request(address,{method:'POST',headers:{'x-opds-rewrite-test':kind,'x-opds-rewrite-csrf':token}});
+  const save=(link_mode,token=adminCsrf)=>post(settingsPage,{csrf:token,link_mode});
+  assert.equal((await save('reader')).status,422);
+  assert.equal((await save('original','wrong')).status,403);
+  assert.equal((await save('invalid')).status,400);
+  assert((await probe(readerProbe,'reader')).status>=400);
+  assert.equal((await probe('index.php?library=p-opds-link-test','reader')).status,422);
+  // Exercise the emitted rules in real Nginx when available, not a hand-written fixture.
+  if(process.env.NGINX_BIN){
+    const rules=(await save('reader-share')).text.match(/<pre id="nginx-rules" tabindex="0">([\s\S]*?)<\/pre>/)[1].replaceAll('&quot;','"');
+    nginxPort=await port();
+    const cfg=path.join(temp,'opds-nginx.conf');
+    const nginxTemps=['client_body','proxy','fastcgi','uwsgi','scgi'].map(k=>k+'_temp_path '+temp+'/'+k+';').join(' ');
+    fs.writeFileSync(cfg,'pid '+temp+'/nginx.pid; error_log '+temp+'/nginx.log; events {} http { access_log off; '+nginxTemps+' server { listen 127.0.0.1:'+nginxPort+'; '+rules+' location / { proxy_set_header X-Test-Original-Uri $request_uri; proxy_pass http://127.0.0.1:'+back+'; } } }');
+    execFileSync(process.env.NGINX_BIN,['-t','-p',temp,'-c',cfg],{stdio:'pipe'});
+    nginxServer=spawn(process.env.NGINX_BIN,['-g','daemon off;','-p',temp,'-c',cfg],{stdio:'ignore'});
+    for(let i=0;i<50;i++){
+      if(await new Promise(resolve=>{const socket=net.connect(nginxPort,'127.0.0.1');socket.once('connect',()=>{socket.end();resolve(true);});socket.once('error',()=>resolve(false));}))break;
+      await delay(30);
+    }
+  }
+  rewriteMode='reader';
+  assert.equal((await probe(readerProbe,'reader','wrong')).status,403);
+  assert.equal((await probe(readerProbe,'reader')).status,204);
+  assert.equal((await save('reader-share')).status,422);
+  assert.equal((await save('reader')).status,303);
+  assert((await request('up.php')).text.includes('value="'+base+'alice"'));
+  assert((await request('up.php?dir=Legacy+upgrade')).text.includes(base+'index.php?s='+legacyKey));
+  assert.equal((await request('alice',{headers:{cookie:''}})).status,401);
+  assert.equal((await request('alice?library=p-invalid',{headers:auth('alice',password)})).status,200);
+  rewriteMode='reader-share';
+  const browserEnv=process.env.PLAYWRIGHT_MODULE&&process.env.CHROME_BIN;
+  if(browserEnv){
+    const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+    const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+    try{
+      for(const width of [1180,375]){
+        const ctx=await browser.newContext({viewport:{width,height:800},ignoreHTTPSErrors:true,locale:'zh-CN',extraHTTPHeaders:{'Accept-Language':'zh-CN'},...(width===375?{isMobile:true,hasTouch:true}:{})});
+        await ctx.addCookies([{name:'OPDS_LIBRARY',value:adminCookie.split('=')[1],url:base,secure:true}]);
+        const page=await ctx.newPage();
+        await page.goto(base+'up.php');
+        await page.getByLabel('账号菜单').click();
+        await page.getByRole('link',{name:'高级设置'}).click();
+        await page.getByRole('heading',{name:'高级设置'}).waitFor();
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+        const search=page.getByRole('searchbox',{name:'搜索设置'});
+        await search.fill('不存在的设置');await page.getByText('没有匹配的设置。').waitFor();
+        await search.fill('nginx');await page.getByRole('heading',{name:'链接格式'}).waitFor();
+        if(width===375){
+          await page.locator('input[value=reader-share]').check();
+          if(process.env.ADVANCED_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.ADVANCED_SCREENSHOT_DIR,'advanced-mobile.png'),fullPage:true});
+          const submit=page.getByRole('button',{name:'保存链接格式'});
+          assert(await submit.isDisabled());
+          rewriteMode='reader';
+          await page.getByRole('button',{name:'测试改写'}).click();
+          await page.getByText('分享地址改写未通过。请检查 Nginx 规则并重载。').waitFor();
+          assert(await submit.isDisabled());
+          rewriteMode='reader-share';
+          await page.getByRole('button',{name:'测试改写'}).click();
+          await page.getByText('改写验证通过。').waitFor();assert(await submit.isEnabled());
+          await submit.click();await page.getByText('链接格式已保存。').waitFor();
+        } else if(process.env.ADVANCED_SCREENSHOT_DIR) {
+          await page.locator('input[value=reader-share]').check();
+          await page.screenshot({path:path.join(process.env.ADVANCED_SCREENSHOT_DIR,'advanced-desktop.png'),fullPage:true});
+        }
+        await ctx.close();
+      }
+    }finally{await browser.close();}
+  } else {
+    assert.equal((await probe(shareProbe,'share')).status,204);
+    assert.equal((await save('reader-share')).status,303);
+  }
+  assert((await request('up.php?dir=Legacy+upgrade')).text.includes(base+'s/'+legacyKey));
+  const shortShare=await request('s/'+legacyKey.toLowerCase(),{headers:{cookie:''}});
+  assert.equal(shortShare.status,200);
+  assert(shortShare.text.includes(base+'index.php?s='+legacyKey));
+  assert.equal((await request(url({s:legacyKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'kept in the original library');
+  assert.equal((await save('original')).status,303);
+  assert((await request('up.php?dir=Legacy+upgrade')).text.includes(base+'index.php?s='+legacyKey));
+  assert.equal((await request('s/'+legacyKey,{headers:{cookie:''}})).status,200);
+  rewriteMode='original';
+  cookies.set('OPDS_LIBRARY',adminCookie);
+  pass('site-admin link settings, same-origin rewrite checks, optional Nginx, and existing links');
+ }
+
 
  // Test users share the same localhost address across the otherwise independent suites.
  fs.rmSync(path.join(data,'conf','.rate.json'),{force:true});
@@ -785,6 +887,9 @@ try{
  assert.equal((await ui({action:'member_invite',library:tech,member:librarian,role:'reader'})).status,303);
  await switchUser(librarian);
  const ownerSession=savedSession();
+ assert.equal((await request('advanced-settings.php')).status,403);
+ assert.equal((await post('advanced-settings.php',{csrf:csrf(await request('up.php')),link_mode:'original'})).status,403);
+ assert(!(await request('up.php')).text.includes('href="advanced-settings.php"'));
  assert(!(await request('up.php')).text.includes('create-library-dialog'));
  assert((await request('up.php')).text.includes('id="books-panel"'));
  assert.equal((await ui({action:'create_library',title:'No extra library'})).status,400);
@@ -1738,6 +1843,8 @@ try{
  }
  {
  // Move the real PHP application without changing config.php or private data.
+ // A previously verified short-link mode belongs only to the old mount.
+ fs.writeFileSync(path.join(data,'conf','site-links.json'),JSON.stringify({version:1,records:{mode:'reader-share',base}}),{mode:0o600});
  fs.rmSync(path.join(data,'conf','.rate.json'),{force:true});
  const relocated=path.join(web,'opds');
  fs.renameSync(app,relocated);
@@ -1751,6 +1858,8 @@ try{
  assert.equal(loginMoved.headers.location,moved+'up.php');
  const shelf=await request(moved+'up.php');
  assert(shelf.text.includes('My personal library'));
+ assert(shelf.text.includes(moved+'index.php?library=p-alice'));
+ assert((await request(moved+'advanced-settings.php')).text.includes('Active: Original links'));
  const xml=await request(moved+'index.php',{headers:{...auth('alice',password),host:'untrusted.example','x-forwarded-host':'untrusted.example','x-forwarded-prefix':'/wrong'}});
  assert.equal(xml.status,200); assert(xml.text.includes(moved+'index.php')); assert(!xml.text.includes('untrusted.example'));
  assert.equal((await request(moved+url({s:legacyKey,download:'Legacy upgrade/same.txt'}),{headers:{cookie:''}})).text,'kept in the original library');
@@ -1784,6 +1893,7 @@ try{
  throw e;
 } finally {
  proxy.closeAllConnections();await new Promise(r=>proxy.close(r));
+ nginxServer?.kill();
  try{process.kill(-server.pid,'SIGTERM');}catch{}
  fs.closeSync(log);fs.chmodSync(dataParent,0o700);fs.rmSync(temp,{recursive:true,force:true});
 }

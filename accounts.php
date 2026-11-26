@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__.'/libraries.php';
 require_once __DIR__.'/privacy.php';
+require_once __DIR__.'/site-link-settings.php';
 
 final class AccountStorageError extends RuntimeException {}
 
@@ -294,7 +295,7 @@ function shareStatus(array $share): string
     if ($share['expires']<=time()) return 'Expired';
     return $share['expires']-time()<14*86400?'Expiring soon':'Shared';
 }
-function publicShareUrl(string $key): string { return BASE_URL.'index.php?s='.$key; }
+function publicShareUrl(string $key): string { return shareSetupUrl($key); }
 
 function manageShare(string $category,bool $revoke): void
 {

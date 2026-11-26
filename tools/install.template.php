@@ -154,7 +154,7 @@ function storageLayout(string $webRoot,string $dataDir): array {
 function payloadFiles(string $root): array {
     $decoded=gzdecode(base64_decode(PAYLOAD,true) ?: '');
     $payload=$decoded===false ? null : json_decode($decoded,true,16,JSON_THROW_ON_ERROR);
-    if (!is_array($payload) || array_keys($payload)!==['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','privacy.php','agent-skill.php','library-controls.php','catalogue.php','preview.php','reader-content.php','reader.js','reader.css','admin.php','LICENSE','NOTICE']) stopInstall(tr('The installation payload is damaged.'));
+    if (!is_array($payload) || array_keys($payload)!==['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','privacy.php','agent-skill.php','library-controls.php','advanced-settings.php','site-link-settings.php','catalogue.php','preview.php','reader-content.php','reader.js','reader.css','admin.php','LICENSE','NOTICE']) stopInstall(tr('The installation payload is damaged.'));
     $files=[];
     foreach ($payload as $name=>$entry) {
         $content=base64_decode($entry['content'],true);

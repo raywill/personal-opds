@@ -306,6 +306,7 @@ function icon(string $name): string {
         'download'=>'<path d="M12 3v13m-4-4 4 4 4-4M4 16v4h16v-4"/>',
         'link'=>'<path d="M10 13a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1m2 6a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/>',
         'more'=>'<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>',
+        'settings'=>'<circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/>',
         'terminal'=>'<path d="M4 5h16v14H4zM7 9l3 3-3 3m6 0h4"/>',
         'logout'=>'<path d="M10 5H4v14h6m5-11 5 4-5 4m5-4H9"/>',
     ];
@@ -357,7 +358,7 @@ a{color:var(--accent)}:focus-visible{outline:3px solid #5683f4;outline-offset:3p
 .account summary{display:flex;align-items:center;gap:11px;min-height:44px;padding:4px 13px;border-radius:9px;cursor:pointer;font-weight:720}.account summary:hover,.account[open] summary{background:var(--bg)}
 .account-name{max-width:170px;overflow:hidden;text-overflow:ellipsis}.avatar{display:inline-flex;width:30px;height:30px;align-items:center;justify-content:center;border-radius:50%;background:var(--blue-soft);color:var(--accent);font-size:14px;font-weight:780}
 .account-popover{position:absolute;z-index:3;top:calc(100% + 6px);inset-inline-end:24px;width:min(270px,calc(100vw - 32px));padding:6px;background:white;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 36px #13264024}
-.account-library{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:7px}.account-library .role-chip{font-size:.72rem}.account-caption{display:block;padding:9px 10px;color:var(--soft);font-size:12px;overflow-wrap:anywhere;border-bottom:1px solid var(--line);margin-bottom:4px}.account-popover .menu-item{width:100%;display:flex;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--ink);text-align:start;padding:9px;border:0;border-radius:7px;background:white;font-size:14px;font-weight:620}.account-popover .menu-item:hover,.account-popover .menu-item:focus-visible{background:var(--blue-soft)}.account-popover .sign-out{color:var(--warn)}.account-popover form{border-top:1px solid var(--line);margin-top:4px;padding-top:4px}
+.account-library{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:7px}.account-library .role-chip{font-size:.72rem}.account-caption{display:block;padding:9px 10px;color:var(--soft);font-size:12px;overflow-wrap:anywhere;border-bottom:1px solid var(--line);margin-bottom:4px}.account-popover .menu-item{width:100%;display:flex;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--ink);text-align:start;padding:9px;border:0;border-radius:7px;background:white;font-size:14px;font-weight:620}.account-popover .menu-item:hover,.account-popover .menu-item:focus-visible{background:var(--blue-soft)}.account-separator{border:0;border-top:1px solid var(--line);margin:4px 3px}.account-popover .sign-out{color:var(--warn)}.account-popover form{border-top:1px solid var(--line);margin-top:4px;padding-top:4px}
 main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-template-columns:254px minmax(0,1fr);min-height:calc(100vh - 72px)}
 .layout.single-pane{grid-template-columns:minmax(0,1fr)}.contribution-panel{max-width:36rem;margin-bottom:18px}.contribution-panel p{overflow-wrap:anywhere}
 .sidebar{border-inline-end:1px solid var(--line);padding:47px 18px 24px 24px;min-width:0}.shelf-body{min-width:0;padding:39px 24px 52px clamp(32px,5vw,64px)}
@@ -444,6 +445,7 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php if ($siteAdmin): ?><button type="button" class="menu-item" data-dialog="accounts-dialog"><?=icon('plus')?><?=tr_html('Site accounts')?></button><?php endif; ?>
 <?php if (isset($permissions['members'])): ?><button type="button" class="menu-item" data-dialog="members-dialog"><?=icon('folder')?><?=tr_html('Library members')?></button><?php endif; ?>
 <?php if ($pendingInvites || $archivedLibraries): ?><button type="button" class="menu-item" data-dialog="account-libraries-dialog"><?=icon('folder')?><?=tr_html('Invitations and archived libraries')?><?php if ($pendingInvites): ?> · <?=count($pendingInvites)?><?php endif; ?></button><?php endif; ?>
+<?php if ($siteAdmin): ?><hr class="account-separator"><a class="menu-item" href="advanced-settings.php"><?=icon('settings')?><?=tr_html('Advanced settings')?></a><?php endif; ?>
 <form action="up.php" method="post"><?php hidden($csrf,'logout');?><button class="menu-item sign-out"><?=icon('logout')?><?=tr_html('Sign out')?></button></form>
 </div></details>
 <?php endif; ?>
@@ -497,7 +499,7 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <div class="bar dialog-head"><h2 id="reader-title"><?=tr_html('Connect e-reader')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
 <p class="muted"><?=tr_html('Add the OPDS address to your reader and sign in with your account.')?></p>
 <?php foreach ($allLibraries as $id=>$item): if (!in_array('opds',$item['permissions'],true)) continue; ?>
-<div class="copy-row"><label><?=h(libraryTitle($item,$viewer))?><input class="share-link" readonly value="<?=h(BASE_URL.'index.php?'.http_build_query(['library'=>$id]))?>"></label>
+<div class="copy-row"><label><?=h(libraryTitle($item,$viewer))?><input class="share-link" readonly value="<?=h(readerSetupUrl((string)$id))?>"></label>
 <button type="button" data-copy-url><?=icon('link')?><?=tr_html('Copy OPDS address')?></button><small role="status" class="copy-result" data-copied="<?=tr_html('Copied.')?>" data-manual="<?=tr_html('Copy failed. Select and copy the link manually.')?>"></small></div>
 <?php endforeach; ?></dialog>
 <?php endif; ?>

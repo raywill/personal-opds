@@ -63,6 +63,7 @@ function linkNode(DOMDocument $doc, DOMElement $parent, string $rel, string $url
     $parent->appendChild($node);
 }
 try {
+    if (($_SERVER['REQUEST_METHOD']??'GET')==='POST'&&isset($_SERVER['HTTP_X_OPDS_REWRITE_TEST'])) handleSiteLinkProbe();
     if (!in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['GET','HEAD'], true)) { header('Allow: GET, HEAD'); reject(tr('Method not allowed.'),405); }
     requireUploadHttps();
     if (isset($_GET['s'])) {
