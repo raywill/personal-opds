@@ -857,7 +857,9 @@ try{
  assert.equal((await request(url({library:tech}),{headers:auth('bob','new-test-password-123')})).status,200);
  assert.equal((await request(url({library:family}),{headers:auth('bob','new-test-password-123')})).status,403);
  const bobFamily=await request(libraryWeb(family,{dir:'Legacy upgrade'}));
- assert(bobFamily.text.includes('This role cannot browse books.'));
+ assert(bobFamily.text.includes('id="web-contribution-title"'));
+ assert(bobFamily.text.includes('Upload to: 家庭书库 / Legacy upgrade'));
+ assert(!bobFamily.text.includes('This role cannot browse books.')&&!bobFamily.text.includes('id="books-panel"'));
  assert(!bobFamily.text.includes('same.txt')&&!bobFamily.text.includes('id="tools-dialog"'));
  assert.equal((await request(libraryWeb(family,{dir:'Legacy upgrade',download:'same.txt'}))).status,403);
  for(const options of [{},{part:0,version:'none'},{asset:'cover.png',version:'none'}]){
@@ -895,6 +897,10 @@ try{
    assert.equal((await request(blocked)).status,403);
  }
  assert.equal((await scopedUpload(family,'Legacy upgrade','not-web.txt','no')).status,403);
+ const agentLanding=await request(libraryWeb(family));
+ assert(agentLanding.text.includes('id="agent-contribution-button"')&&agentLanding.text.includes('id="tools-dialog"'));
+ assert(!agentLanding.text.includes('class="sidebar"')&&!agentLanding.text.includes('id="books-panel"')
+   &&!agentLanding.text.includes('id="folder-list"')&&!agentLanding.text.includes('id="upload-dialog"'));
  function setupConfig(res) {
    assert.equal(res.status,200,res.json?.message);
    return JSON.parse(res.json.setup.match(/```json\n(.*?)\n```/s)[1]);
@@ -974,6 +980,71 @@ try{
  restoreSession(bobSession);
  assert.equal((await ui({action:'invite_accept',target_library:family})).status,303);
  assert.equal((await request(libraryWeb(family,{dir:'Legacy upgrade',download:'same.txt'}))).text,'only in shared library');
+ if (process.env.CHROME_BIN && process.env.PLAYWRIGHT_MODULE) {
+   const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+   const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+   const openAs=async (session,viewport,mobile=false)=>{
+     const ctx=await browser.newContext({viewport,isMobile:mobile,hasTouch:mobile,ignoreHTTPSErrors:true});
+     await ctx.addCookies(session.map(([,cookie])=>{
+       const [name,...value]=cookie.split('=');return {name,value:value.join('='),url:base,secure:true};
+     }));
+     return ctx.newPage();
+   };
+   try {
+     const contents=libraryWeb(family,{dir:'Legacy upgrade'});
+     for (const mobile of [false,true]) {
+       const viewport=mobile?{width:375,height:740}:{width:1150,height:800};
+       const reader=await openAs(bobSession,viewport,mobile);
+       const owner=await openAs(ownerSession,viewport,mobile);
+       await reader.goto(base+contents);
+       await owner.goto(base+contents);
+       const book=page=>page.locator('.book').filter({has:page.getByRole('link',{name:'same',exact:true})});
+       const row=book(reader), ownRow=book(owner);
+       assert.equal(await row.locator('.book-menu').count(),0);
+       const download=row.getByRole('link',{name:'Download same.txt'});
+       const rowBox=await row.boundingBox(), downloadBox=await download.boundingBox();
+       assert(Math.abs(rowBox.x+rowBox.width-downloadBox.x-downloadBox.width)<2,'No reserved column after Download');
+       assert((await row.locator('.book-info').boundingBox()).width>(await ownRow.locator('.book-info').boundingBox()).width+25);
+       assert(await ownRow.locator('summary').isVisible());
+       await reader.goto(base+libraryWeb(family));
+       const folder=reader.locator('.shelf-folder').filter({hasText:'Editor folder'});
+       assert.equal(await folder.locator('.book-menu').count(),0);
+       assert((await folder.locator('.shelf-folder-detail').boundingBox()).width<30,'Folder arrow takes only its own width');
+       assert(await reader.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+       await owner.goto(base+libraryWeb(tech));
+       assert.equal(await owner.locator('.folder-trigger,.sidebar,#folder-list').count(),0,'No folder controls in a read-only library without folders');
+       await reader.context().close(); await owner.context().close();
+     }
+     const contributor=await openAs(bobSession,{width:375,height:740},true);
+     const changeRole=async role=>{
+       restoreSession(ownerSession);
+       assert.equal((await ui({action:'member_edit',library:family,member:'bob',role})).status,303);
+       restoreSession(bobSession);
+     };
+     await changeRole('web_upload');
+     await contributor.goto(base+libraryWeb(family));
+     await contributor.getByRole('button',{name:'Choose folder'}).tap();
+     await Promise.all([
+       contributor.waitForURL(url=>url.searchParams.get('dir')==='Legacy upgrade'),
+       contributor.locator('#folder-list').getByRole('link',{name:'Legacy upgrade'}).tap(),
+     ]);
+     const webPanel=contributor.locator('.contribution-panel');
+     await webPanel.getByText('Upload to: 家庭书库 / Legacy upgrade',{exact:true}).waitFor();
+     assert.equal(await contributor.locator('.book').count(),0);
+     await webPanel.getByRole('button',{name:'Upload books'}).tap();
+     assert(await contributor.locator('#upload-dialog').isVisible());
+     await changeRole('agent_upload');
+     await contributor.goto(base+libraryWeb(family));
+     assert.equal(await contributor.locator('.folder-trigger,.sidebar,.shelf-list,#upload-dialog').count(),0);
+     const connect=contributor.locator('#agent-contribution-button');
+     await connect.tap();
+     assert(await contributor.locator('#tools-dialog').getByRole('button',{name:'Copy complete Agent setup'}).isVisible());
+     await contributor.locator('#tools-dialog').getByRole('button',{name:'Close'}).tap();
+     await contributor.waitForFunction(()=>document.activeElement?.id==='agent-contribution-button');
+     await changeRole('reader');
+   } finally {await browser.close();}
+   pass('role-adaptive desktop and mobile shelf layout, upload and Agent entry points');
+ }
  assert.equal((await ui({action:'library_rename',library:family,title:'Not the owner'})).status,403);
  assert.equal((await ui({action:'library_archive',library:family})).status,403);
  assert.equal((await verify(auto.token)).status,200);

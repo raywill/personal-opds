@@ -359,6 +359,7 @@ a{color:var(--accent)}:focus-visible{outline:3px solid #5683f4;outline-offset:3p
 .account-popover{position:absolute;z-index:3;top:calc(100% + 6px);inset-inline-end:24px;width:min(270px,calc(100vw - 32px));padding:6px;background:white;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 36px #13264024}
 .account-library{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:7px}.account-library .role-chip{font-size:.72rem}.account-caption{display:block;padding:9px 10px;color:var(--soft);font-size:12px;overflow-wrap:anywhere;border-bottom:1px solid var(--line);margin-bottom:4px}.account-popover .menu-item{width:100%;display:flex;align-items:center;justify-content:flex-start;gap:10px;text-decoration:none;color:var(--ink);text-align:start;padding:9px;border:0;border-radius:7px;background:white;font-size:14px;font-weight:620}.account-popover .menu-item:hover,.account-popover .menu-item:focus-visible{background:var(--blue-soft)}.account-popover .sign-out{color:var(--warn)}.account-popover form{border-top:1px solid var(--line);margin-top:4px;padding-top:4px}
 main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-template-columns:254px minmax(0,1fr);min-height:calc(100vh - 72px)}
+.layout.single-pane{grid-template-columns:minmax(0,1fr)}.contribution-panel{max-width:36rem;margin-bottom:18px}.contribution-panel p{overflow-wrap:anywhere}
 .sidebar{border-inline-end:1px solid var(--line);padding:47px 18px 24px 24px;min-width:0}.shelf-body{min-width:0;padding:39px 24px 52px clamp(32px,5vw,64px)}
 .panel{background:white;border:1px solid var(--line);border-radius:16px;padding:22px;min-width:0}.auth{max-width:440px;margin:44px auto;padding:24px}
 .side-title{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:0 2px 13px}.side-title h2{margin:0;color:var(--soft);font-size:13px;font-weight:700}
@@ -370,16 +371,16 @@ main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-temp
 .pill-trigger{display:inline-flex;align-items:center;gap:7px;white-space:normal;border:0;border-radius:100px;font-size:.8rem;padding:7px 11px;min-height:36px;background:#edf2f7;color:var(--soft)}.pill-trigger.live{color:var(--green);background:var(--mint)}.pill-trigger.live:hover{background:#d9eee3}.pill-trigger time{font-weight:inherit}
 .badge{display:inline-block;font-size:.76rem;background:var(--mint);color:var(--green);border-radius:100px;padding:4px 8px;white-space:nowrap}.pill-warn{background:#fff1d8;color:#793e00}.pill-off{background:#edf2f7;color:var(--soft)}
 .root-folder-arrow{transform:rotate(-90deg);display:flex;color:var(--soft)}
-.shelf-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line);--row-grid:38px minmax(0,1fr) 42px 42px;--row-gap:12px}
+.shelf-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line);--row-icon:38px;--row-action:42px;--row-gap:12px}
 .book,.shelf-folder{position:relative;border-bottom:1px solid var(--line)}
-.book,.shelf-folder>a{display:grid;grid-template-columns:var(--row-grid);gap:var(--row-gap);align-items:center;min-height:64px;padding:8px 0}
+.book,.shelf-folder>a{display:flex;gap:var(--row-gap);align-items:center;min-height:64px;padding:8px 0}
 .shelf-folder>a{color:var(--ink);text-decoration:none}.shelf-folder>a:hover{background:var(--bg)}
-.shelf-folder-icon{display:grid;place-items:center;width:100%;height:38px;color:var(--accent)}
-.shelf-folder-name,.book-name{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.shelf-folder-name{font-size:.95rem;font-weight:720}.shelf-folder-detail{grid-column:3 / 5;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding-inline-end:8px}
-.book-icon{display:grid;place-items:center;width:38px;height:46px;border-radius:7px;background:var(--blue-soft);color:#234cac;font-size:.7rem;font-weight:790;letter-spacing:.02em}.book-icon.txt{background:#eaf2ec;color:#285e4b}
-[data-folder-menu]{display:flex;align-items:center;gap:6px}[data-folder-menu]>a{flex:1;min-width:0}
+.shelf-folder-icon{display:grid;place-items:center;flex:0 0 var(--row-icon);height:38px;color:var(--accent)}
+.shelf-folder-name,.book-name{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.shelf-folder-name{flex:1;font-size:.95rem;font-weight:720}.shelf-folder-detail{display:flex;align-items:center;gap:6px}.shelf-folder-detail .badge{max-width:8rem;white-space:normal;text-align:center}.shelf-folder-detail .root-folder-arrow{flex:none}
+.book-icon{display:grid;place-items:center;flex:0 0 var(--row-icon);height:46px;border-radius:7px;background:var(--blue-soft);color:#234cac;font-size:.7rem;font-weight:790;letter-spacing:.02em}.book-icon.txt{background:#eaf2ec;color:#285e4b}
+[data-folder-menu]{display:flex;align-items:center;gap:var(--row-gap)}[data-folder-menu]>a{flex:1;min-width:0}.shelf-list .icon-button{width:var(--row-action);flex:none}
 .privacy-lock{display:inline-flex;align-items:center;flex:none;color:var(--soft)}.privacy-lock .icon{width:15px;height:15px}
-.book-title-line,.visibility-note{display:flex;align-items:center;gap:6px;min-width:0}.book-info{min-width:0}
+.book-title-line,.visibility-note{display:flex;align-items:center;gap:6px;min-width:0}.book-info{flex:1;min-width:0}
 .book-name{color:var(--ink);text-decoration:none;font-size:.95rem;font-weight:720;line-height:1.35}.book-name:hover{text-decoration:underline}.book-info small{display:block;font-size:.78rem;margin-top:2px}.book-menu{position:relative}
 .book-actions{display:grid;gap:4px;position:absolute;z-index:2;inset-inline-end:0;top:calc(100% + 4px);min-width:130px;padding:5px;background:white;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #13264024}.book-actions button{width:100%;text-align:start}.empty{padding:30px 10px;text-align:center}.empty p{margin:0}.pagination{padding:12px 0}
 h1,h2,h3,p{margin:0 0 10px}h2{font-size:1.06rem}.bar,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar{justify-content:space-between}.bar h2{margin:0}.muted,small{color:var(--soft)}
@@ -391,7 +392,7 @@ button,.button{min-height:40px;font:inherit;font-size:.89rem;font-weight:680;bac
 input,select,textarea{max-width:100%;font:inherit;border:1px solid #acbfd9;padding:8px;border-radius:8px;background:white;color:var(--ink)}label{display:block;margin:12px 0;font-weight:650}.auth input{width:100%}.share-link,textarea{width:100%;font-family:ui-monospace,monospace}textarea{min-height:116px}.dialog-close{margin-inline-start:auto}.rename-name{display:flex;align-items:center;gap:8px;margin-bottom:10px}.rename-name input{min-width:0;flex:1}.rename-name span{color:var(--soft);flex:none}
 dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1px solid var(--line);border-radius:16px;padding:18px;color:var(--ink);box-shadow:0 16px 64px #182c4a30}dialog::backdrop{background:#172b4470}dialog h2{font-size:1.23rem}dialog select{width:100%}.folder-form{margin-top:12px}.folder-form input{min-width:0;flex:1}.dialog-head{margin-bottom:10px}.upload-target{color:var(--soft);background:var(--bg);padding:.65rem .8rem;border-radius:8px;overflow-wrap:anywhere}.upload-form input[type=file]{display:block;width:100%;margin-top:5px}.upload-form input::file-selector-button{border:0;padding:6px 10px;border-radius:6px;background:var(--blue-soft);color:var(--ink);font:inherit;margin-right:8px}.upload-form progress{accent-color:var(--accent)}progress{max-width:94px}.queue p{overflow-wrap:anywhere}.queue{margin-top:10px}.subscription-preview{margin-top:12px}.subscription-preview ul{max-height:180px;overflow:auto;padding-inline-start:20px}
 .share-summary{margin:7px 0 10px;color:var(--soft)}.share-summary time{white-space:nowrap}.share-secondary{border-top:1px solid var(--line);padding-top:9px;margin-top:12px}.share-secondary .button,.share-secondary button{border-color:transparent}.tool-divider{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
-@media(max-width:760px){.top{min-height:60px;padding:0 16px}.account-name{display:none}.account summary{padding:4px 9px}.account-popover{inset-inline-end:16px}.layout{display:block;min-height:calc(100vh - 60px)}.sidebar{display:none}.shelf-body{padding:17px 16px 40px}.page-message{margin:10px 16px 0}.auth{margin:32px 14px}.folder-trigger{display:inline-flex;align-items:center;gap:7px;margin-bottom:3px;border:0;padding:4px 10px}.shelf-head{padding-bottom:14px}.shelf-path{font-size:1.0625rem}.shelf-meta{margin-top:6px}.shelf-heading-row{gap:8px}.shelf-list{--row-grid:34px minmax(0,1fr) 34px 32px;--row-gap:8px}.shelf-folder-detail{padding-inline-end:0}.shelf-folder-detail .badge{white-space:normal;line-height:1.2;text-align:center}.book-icon{width:34px;height:42px}.book .icon-button{width:100%;min-height:40px}.sheet{margin:auto 0 0;width:100%;max-width:none;max-height:88%;border-radius:18px 18px 0 0;padding:14px 16px max(20px,env(safe-area-inset-bottom));}}
+@media(max-width:760px){.top{min-height:60px;padding:0 16px}.account-name{display:none}.account summary{padding:4px 9px}.account-popover{inset-inline-end:16px}.layout{display:block;min-height:calc(100vh - 60px)}.sidebar{display:none}.shelf-body{padding:17px 16px 40px}.page-message{margin:10px 16px 0}.auth{margin:32px 14px}.folder-trigger{display:inline-flex;align-items:center;gap:7px;margin-bottom:3px;border:0;padding:4px 10px}.shelf-head{padding-bottom:14px}.shelf-path{font-size:1.0625rem}.shelf-meta{margin-top:6px}.shelf-heading-row{gap:8px}.shelf-list{--row-icon:34px;--row-action:40px;--row-gap:8px}.shelf-folder-detail .badge{max-width:5.5rem;line-height:1.2}.book-icon{height:42px}.sheet{margin:auto 0 0;width:100%;max-width:none;max-height:88%;border-radius:18px 18px 0 0;padding:14px 16px max(20px,env(safe-area-inset-bottom));}}
 .brand-area{display:flex;align-items:center;gap:12px;min-width:0}.switcher{overflow-wrap:anywhere;line-height:1.2}
 .library-picker{width:min(910px,calc(100% - 36px));margin:clamp(24px,6vw,76px) auto}.library-picker h1{font-size:clamp(26px,5vw,44px);letter-spacing:-.045em}.library-picker h2{margin-top:24px}.library-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,235px),1fr));gap:12px}.library-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;color:var(--ink);text-decoration:none}.library-card:hover{border-color:var(--accent);background:var(--blue-soft)}.library-card strong,.library-card small{display:block;overflow-wrap:anywhere}.library-card small{margin-top:4px}.member-row,.token-row{padding:10px 0;border-top:1px solid var(--line)}.member-row summary{cursor:pointer}.member-row p,.token-row p{overflow-wrap:anywhere}
 @media(max-width:480px){.brand-area .brand>span:last-child{display:none}.brand-area{gap:8px}.switcher{min-height:36px}}
@@ -558,6 +559,12 @@ $pageFiles=array_slice($files,($page-1)*40,40,true);
 natcasesort($directories);
 $directories=array_values($directories);
 $shelfName=$dir===''?$libraryName:$dir;
+$canViewBooks=isset($permissions['view']);
+$webContribution=!$canViewBooks&&isset($permissions['web_upload']);
+$agentContribution=!$canViewBooks&&!$webContribution&&isset($permissions['agent_upload']);
+$showFolderNav=!$agentContribution&&($directories||isset($permissions['folder']));
+$listedFolders=!$agentContribution&&$dir===''?$directories:[];
+$uploadTarget=$libraryName.($dir===''?'':' / '.$dir);
 $expiry=$selectedShare?gmdate('Y-m-d',$selectedShare['expires']):'';
 $previewBooks=[];
 if ($preview) {
@@ -568,39 +575,51 @@ if ($preview) {
     } finally { unset($GLOBALS['shareCategory']); }
 }
 ?>
-<div class="layout shelf">
-<aside class="sidebar">
+<div class="layout shelf<?=$showFolderNav?'':' single-pane'?>">
+<?php if ($showFolderNav): ?><aside class="sidebar">
  <div class="side-title"><h2><?=tr_html('Folders')?></h2><?php if (isset($permissions['folder'])): ?><button type="button" class="icon-button" data-dialog="folder-list" data-focus-folder aria-label="<?=tr_html('New folder')?>"><?=icon('plus')?></button><?php endif; ?></div>
  <?php folderNav($directories,$dir,$statuses,$libraryName); ?>
-</aside>
+</aside><?php endif; ?>
 <div class="shelf-body<?=isset($permissions['web_upload'])?' drop-shelf':''?>"<?=isset($permissions['web_upload'])?' id="drop-shelf"':''?>>
  <?php if (isset($permissions['web_upload'])): ?><p class="drop-caption" aria-hidden="true"><span><?=tr_html('Drop to upload to this folder')?></span></p><?php endif; ?>
  <div class="shelf-head">
-  <button class="folder-trigger" type="button" data-dialog="folder-list" aria-label="<?=tr_html('Choose folder')?>"><?=icon('folder')?><?=tr_html('Folders')?><?=icon('down')?></button>
+  <?php if ($showFolderNav): ?><button class="folder-trigger" type="button" data-dialog="folder-list" aria-label="<?=tr_html('Choose folder')?>"><?=icon('folder')?><?=tr_html('Folders')?><?=icon('down')?></button><?php endif; ?>
   <div class="shelf-heading-row">
    <div>
     <?php if ($pendingInvites): ?><div class="shelf-invites"><button type="button" class="button" data-dialog="account-libraries-dialog"><?=tr_html('Review library invitations')?> · <?=count($pendingInvites)?></button></div><?php endif; ?>
-    <?php if ($dir!==''): ?>
+    <?php if ($dir!=='' && !$agentContribution): ?>
     <nav class="shelf-path" aria-label="<?=tr_html('Library location')?>">
      <a href="<?=h(libraryHref(''))?>"><?=h($libraryName)?></a><span class="separator" aria-hidden="true">/</span><h1 aria-current="page"><?=h($shelfName)?></h1>
     </nav>
     <?php else: ?>
-    <div class="shelf-path"><h1><?=h($shelfName)?></h1></div>
+    <div class="shelf-path"><h1><?=h($libraryName)?></h1></div>
     <?php endif; ?>
    </div>
-   <?php if (isset($permissions['web_upload'])): ?><button class="primary upload-launch" type="button" data-dialog="upload-dialog" aria-label="<?=tr_html('Upload books')?>"><?=icon('upload')?><?=tr_html('Upload')?></button><?php endif; ?>
+   <?php if ($canViewBooks && isset($permissions['web_upload'])): ?><button class="primary upload-launch" type="button" data-dialog="upload-dialog" aria-label="<?=tr_html('Upload books')?>"><?=icon('upload')?><?=tr_html('Upload')?></button><?php endif; ?>
   </div>
-  <div class="shelf-meta">
+  <?php if ($canViewBooks || $currentPrivate || ($dir!=='' && ($isOwner||isset($permissions['share'])))): ?><div class="shelf-meta">
    <?php if (isset($permissions['view'])): ?><span id="shelf-count"><?=h(sprintf(tr('%s books'),number_format($fileCount)))?></span><?php endif; ?>
    <?php if ($currentPrivate): ?><span class="visibility-note"><?=privacyBadge()?><?=tr_html('Only me')?></span><?php endif; ?>
    <?php if ($dir!=='' && $isOwner): folderPrivacyMenu($csrf,$dir,$mine); endif; ?>
    <?php if ($dir!=='' && !$currentPrivate && isset($permissions['share'])): ?>
    <button class="pill-trigger <?=$active?'live':''?>" type="button" data-dialog="share-dialog" aria-label="<?=tr_html('Manage subscription sharing')?>" aria-describedby="share-current-status"><?=icon('link')?><span id="share-current-status"><span><?=h(tr($status))?></span><?php if ($active): ?> · <time datetime="<?=h($expiry)?>"><?=h(sprintf(tr('Expires %s'),$expiry))?></time><?php endif; ?></span><?=icon('down')?></button>
    <?php endif; ?>
-  </div>
+  </div><?php endif; ?>
  </div>
  <p role="status" class="status shelf-notice" id="upload-notice"></p>
- <?php $listedFolders=$dir===''?$directories:[]; $canViewBooks=isset($permissions['view']); ?>
+ <?php if ($webContribution): ?>
+ <section class="panel contribution-panel" aria-labelledby="web-contribution-title">
+  <h2 id="web-contribution-title"><?=tr_html('Upload books')?></h2>
+  <p class="muted"><?=h(sprintf(tr('Upload to: %s'),$uploadTarget))?></p>
+  <button class="primary upload-launch" type="button" data-dialog="upload-dialog"><?=icon('upload')?><?=tr_html('Upload books')?></button>
+ </section>
+ <?php elseif ($agentContribution): ?>
+ <section class="panel contribution-panel" aria-labelledby="agent-contribution-title">
+  <h2 id="agent-contribution-title"><?=tr_html('Agent uploads')?></h2>
+  <p class="muted"><?=tr_html('Connect an Agent to upload books to this library.')?></p>
+  <button class="primary" type="button" data-dialog="tools-dialog" id="agent-contribution-button"><?=icon('terminal')?><?=tr_html('Connect Agent')?></button>
+ </section>
+ <?php endif; ?>
  <?php if ($canViewBooks || $listedFolders): ?>
  <div <?=$canViewBooks?'id="books-panel"':''?>>
   <?php if ($listedFolders || $pageFiles): ?>
@@ -619,7 +638,7 @@ if ($preview) {
   <li class="book">
    <span aria-hidden="true" class="book-icon <?=$format==='txt'?'txt':''?>"><?=h(strtoupper($format))?></span>
    <div class="book-info"><div class="book-title-line"><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><?php if ($currentPrivate || $bookPrivate) echo privacyBadge($currentPrivate); ?></div><small><?=h(fileSizeLabel($size))?></small></div>
-   <?php if (isset($permissions['download'])): ?><a class="button icon-button" href="<?=h($download)?>" title="<?=tr_html('Download')?>" aria-label="<?=h(sprintf(tr('Download %s'),$name))?>"><?=icon('download')?></a><?php else: ?><span></span><?php endif; ?>
+   <?php if (isset($permissions['download'])): ?><a class="button icon-button" href="<?=h($download)?>" title="<?=tr_html('Download')?>" aria-label="<?=h(sprintf(tr('Download %s'),$name))?>"><?=icon('download')?></a><?php endif; ?>
    <?php if (isset($permissions['organize'])||isset($permissions['delete'])): ?><details class="book-menu">
     <summary class="button icon-button" aria-label="<?=h(sprintf(tr('More actions for %s'),$name))?>"><?=icon('more')?></summary>
     <div class="book-actions">
@@ -638,14 +657,14 @@ if ($preview) {
   <?php if ($pages>1): ?><nav class="bar pagination" aria-label="<?=tr_html('Pagination')?>"><?php if($page>1):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page-1]))?>"><?=tr_html('Previous')?></a><?php endif;?><small><?=$page?> / <?=$pages?></small><?php if($page<$pages):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page+1]))?>"><?=tr_html('Next')?></a><?php endif;?></nav><?php endif;?>
  </div>
  <?php endif; ?>
- <?php if (!$canViewBooks): ?><div class="panel"><p><?=tr_html('This role cannot browse books.')?></p></div><?php endif; ?>
+ <?php if (!$canViewBooks && !$webContribution && !$agentContribution): ?><div class="panel"><p><?=tr_html('This role cannot browse books.')?></p></div><?php endif; ?>
 </div>
 </div>
-<dialog id="folder-list" class="sheet" aria-labelledby="folder-dialog-title">
+<?php if ($showFolderNav): ?><dialog id="folder-list" class="sheet" aria-labelledby="folder-dialog-title">
  <div class="bar dialog-head"><h2 id="folder-dialog-title"><?=tr_html('Folders')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
  <?php folderNav($directories,$dir,$statuses,$libraryName); ?>
  <?php if (isset($permissions['folder'])): ?><form class="folder-form actions" method="post" action="up.php"><?php hidden($csrf,'folder',$dir);?><input name="folder" aria-label="<?=tr_html('New folder name')?>" placeholder="<?=tr_html('New folder name')?>" required maxlength="240"><button class="primary"><?=tr_html('New folder')?></button></form><?php endif; ?>
-</dialog>
+</dialog><?php endif; ?>
 <?php if ($dir!=='' && !$currentPrivate && isset($permissions['share'])): ?>
 <dialog id="share-dialog" class="sheet" aria-labelledby="share-dialog-title" <?=$preview?'data-show':''?>>
  <div class="bar dialog-head"><h2 id="share-dialog-title"><?=tr_html('Subscription share')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
@@ -666,7 +685,7 @@ if ($preview) {
 <?php endif;?>
 <?php if (isset($permissions['web_upload'])): ?><dialog id="upload-dialog" class="sheet" aria-labelledby="upload-dialog-title">
  <div class="bar dialog-head"><h2 id="upload-dialog-title"><?=tr_html('Upload books')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
- <p id="upload-target" class="upload-target"><?=h(sprintf(tr('Upload to: %s'),$libraryName.($dir===''?'':' / '.$dir)))?></p>
+ <p id="upload-target" class="upload-target"><?=h(sprintf(tr('Upload to: %s'),$uploadTarget))?></p>
  <form id="upload" aria-describedby="upload-target" class="upload-form" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" data-working="<?=tr_html('Uploading %s of %s')?>" data-processing="<?=tr_html('Sent. Waiting for the server…')?>" data-unknown="<?=tr_html('No save confirmation (HTTP %s).')?>" data-check="<?=tr_html(isset($permissions['view'])?'Check this folder before retrying.':'Ask the library owner to check this folder before retrying.')?>" data-drop-invalid="<?=tr_html('Skipped items: %s. Drop EPUB or TXT files, not folders.')?>" method="post" enctype="multipart/form-data" action="<?=h(libraryHref($dir))?>">
  <input type="hidden" name="csrf" value="<?=h($csrf)?>"><input type="hidden" name="action" value="upload">
  <label><?=tr_html('Choose EPUB or TXT files')?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
@@ -711,6 +730,7 @@ document.addEventListener('submit',e=>{
 const accountMenu=document.querySelector('details.account');
 const accountButton=accountMenu?.querySelector('summary');
 const toolsDialog=document.querySelector('#tools-dialog');
+let toolsTrigger;
 const shareDialog=document.querySelector('#share-dialog');
 const uploadDialog=document.querySelector('#upload-dialog');
 const moveDialog=document.querySelector('#move-dialog');
@@ -725,7 +745,7 @@ document.addEventListener('click',e=>{
  const open=e.target.closest('[data-dialog]');
  if(open){
   const target=document.getElementById(open.dataset.dialog);
-  if(target){target.showModal();if(open.hasAttribute('data-member'))target.dispatchEvent(new CustomEvent('edit-member',{detail:open.dataset}));}
+  if(target){if(target===toolsDialog)toolsTrigger=open;target.showModal();if(open.hasAttribute('data-member'))target.dispatchEvent(new CustomEvent('edit-member',{detail:open.dataset}));}
   if(target&&accountMenu&&accountMenu.contains(open))accountMenu.open=false;
   if(open.hasAttribute('data-focus-folder'))target?.querySelector('[name=folder]')?.focus();
  }
@@ -851,7 +871,10 @@ agentSetupForm?.addEventListener('submit',async e=>{
 toolsDialog?.addEventListener('close',()=>{
  if(agentSetupText?.value) location.reload();
 });
-toolsDialog?.addEventListener('close',()=>accountButton?.focus());
+toolsDialog?.addEventListener('close',()=>{
+ if(toolsTrigger&&!accountMenu?.contains(toolsTrigger))toolsTrigger.focus();
+ else accountButton?.focus();
+});
 uploadDialog?.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
 const copy=document.querySelector('#copy-share');
 copy?.addEventListener('click',async()=>{const url=document.querySelector('#share-url'); try{await navigator.clipboard.writeText(url.value);document.querySelector('#copy-status').textContent=copy.dataset.copied;}catch{url.select();document.querySelector('#copy-status').textContent=copy.dataset.copyFailed;}});
