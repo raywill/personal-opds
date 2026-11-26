@@ -327,6 +327,7 @@ try{
        await page.goto(base+shelf(directory));
        const row=page.locator('.book').filter({hasText:'Linked QA'});
        assert.equal(await row.getByRole('link',{name:'豆瓣图书详情（在新标签页打开）'}).getAttribute('href'),canonical);
+       assert.equal(await row.locator('.book-source').innerText(),'豆');
        assert.equal(await page.locator('.book').filter({hasText:'Plain QA'}).locator('.book-source').count(),0);
        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
      } finally {await browser.close();}
