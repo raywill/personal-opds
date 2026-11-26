@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'Use a Douban book detail URL, or leave it blank.' => '请使用豆瓣图书详情页地址，或不填写。',
+  'Douban links must match the uploaded file positions.' => '豆瓣链接的序号必须对应上传的文件。',
+  'Douban' => '豆瓣',
+  'Douban book details (opens in a new tab)' => '豆瓣图书详情（在新标签页打开）',
   'Advanced settings' => '高级设置',
   'The request did not reach the expected rewrite.' => '请求未按预期改写。',
   'Test the selected rewrite before saving.' => '请先测试所选的改写规则，再保存。',

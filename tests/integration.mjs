@@ -296,6 +296,55 @@ try{
  r=await upload(null,undefined,[['browser.txt','Browser upload']],browserLocation,{action:'upload',csrf:csrf(page)});assert.equal(r.status,200,r.text);
  r=await request('up.php?dir='+encodeURIComponent('中文 阅读')+'&download=browser.txt');assert.equal(r.text,'Browser upload');
  pass('root, concurrent auto-creation, duplicate-name conflict even for identical bytes, partial success and browser download');
+ {
+   const canonical='https://book.douban.com/subject/1234567/';
+   const directory='Metadata fixtures';
+   const shelf=dir=>'up.php?'+new URLSearchParams({dir});
+   const setup=await ui({action:'agent_setup'});
+   assert.equal(setup.status,200);
+   assert(setup.json.setup.includes('douban_url[0]'));
+   const agent=JSON.parse(setup.json.setup.match(/```json\n(.*?)\n```/s)[1]);
+   assert.equal((await upload(agent.token,directory,[['wrong-index.txt','A']],undefined,{'douban_url[1]':canonical})).status,400);
+   const batch=await upload(agent.token,directory,[['Plain QA.txt','P'],['Linked QA.txt','L'],['Invalid QA.txt','I']],undefined,
+     {'douban_url[1]':canonical+'?utm_source=example#details','douban_url[2]':'https://book.douban.com.example/subject/7654321/'});
+   assert.equal(batch.status,422);
+   assert.deepEqual(batch.json.results.map(i=>i.status),[200,200,400]);
+   const shelfHtml=(await request(shelf(directory))).text;
+   assert.equal((shelfHtml.match(/class="book-source"/g)||[]).length,1);
+   assert(shelfHtml.includes('href="'+canonical+'" target="_blank" rel="noopener noreferrer"'));
+   assert(!shelfHtml.includes('utm_source=example')&&!shelfHtml.includes('Invalid QA'));
+   assert.equal((await upload(agent.token,directory,[['Linked QA.txt','new']],undefined,{'douban_url[0]':'https://book.douban.com/subject/87654321/'})).status,409);
+   const afterConflict=(await request(shelf(directory))).text;
+   assert(afterConflict.includes(canonical)&&!afterConflict.includes('87654321'));
+   assert(!(await opds('alice',{category:directory,feed:'books'})).text.includes('douban.com'));
+   if(process.env.CHROME_BIN&&process.env.PLAYWRIGHT_MODULE){
+     const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+     const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+     try{
+       const ctx=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true,ignoreHTTPSErrors:true,locale:'zh-CN'});
+       await ctx.addCookies([{name:'OPDS_LIBRARY',value:cookies.get('OPDS_LIBRARY').split('=')[1],url:base,secure:true}]);
+       const page=await ctx.newPage();
+       await page.goto(base+shelf(directory));
+       const row=page.locator('.book').filter({hasText:'Linked QA'});
+       assert.equal(await row.getByRole('link',{name:'豆瓣图书详情（在新标签页打开）'}).getAttribute('href'),canonical);
+       assert.equal(await page.locator('.book').filter({hasText:'Plain QA'}).locator('.book-source').count(),0);
+       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+     } finally {await browser.close();}
+   }
+   assert.equal((await ui({action:'rename',dir:directory,file:'Linked QA.txt',new_name:'Renamed QA'})).status,303);
+   assert((await request(shelf(directory))).text.includes(canonical));
+   assert.equal((await ui({action:'move',dir:directory,file:'Renamed QA.txt',destination:''})).status,303);
+   assert((await request(shelf(''))).text.includes(canonical));
+   assert(!(await request(shelf(directory))).text.includes(canonical));
+   assert.equal((await ui({action:'delete',file:'Renamed QA.txt'})).status,303);
+   assert.equal((await upload(agent.token,'',[['Renamed QA.txt','replacement']])).status,200);
+   assert(!(await request(shelf(''))).text.includes(canonical));
+   assert.equal((await ui({action:'delete',file:'Renamed QA.txt'})).status,303);
+   assert.equal((await ui({action:'delete',dir:directory,file:'Plain QA.txt'})).status,303);
+   fs.rmSync(path.join(data,'books','alice',directory),{recursive:true});
+   pass('per-file Agent Douban links, quiet mobile UI, no overwrite, and metadata follows rename and move');
+ }
+
  const epub=path.join(temp,'book.epub');
  execFileSync(php,['-r',`$z=new ZipArchive();$z->open($argv[1],ZipArchive::CREATE);
  $z->addFromString("mimetype","application/epub+zip");$z->setCompressionName("mimetype",ZipArchive::CM_STORE);

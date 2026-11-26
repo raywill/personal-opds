@@ -370,6 +370,61 @@ function enforceAccountQuota(int $incoming, ?array &$quota=null): void
     if ($quota['bytes']+$incoming>$quota['max_bytes']||$quota['files']>=$quota['max_files'])
         reject('Your library quota is full.',507);
 }
+function canonicalDoubanUrl(string $value): ?string
+{
+    if (strlen($value)>2048 || preg_match('~[\x00-\x20\x7f]~',$value)
+        || !preg_match('~\Ahttps://book[.]douban[.]com/subject/([1-9][0-9]{0,19})/?(?:[?#].*)?\z~iD',$value,$match)) return null;
+    return 'https://book.douban.com/subject/'.$match[1].'/';
+}
+
+function doubanSidecar(string $path): string
+{
+    return dirname($path).'/.opds-douban-'.hash('sha256',basename($path));
+}
+
+function doubanBookIdentity(string $path): ?array
+{
+    clearstatcache(true,$path);
+    $st=@lstat($path);
+    return $st&&($st['mode']&0170000)===0100000 ? [$st['dev'],$st['ino'],$st['mtime'],$st['size']] : null;
+}
+
+// Sidecars stay beside books in private storage, and only visible rows read
+// their own sidecars. The identity prevents a stranded entry following a replacement.
+function bookDoubanUrl(string $path): ?string
+{
+    $sidecar=doubanSidecar($path);
+    $st=@lstat($sidecar);
+    if (!$st || ($st['mode']&0170077)!==0100000 || $st['nlink']!==1 || $st['size']>1024) return null;
+    $raw=@file_get_contents($sidecar,false,null,0,1024);
+    $data=is_string($raw)?json_decode($raw,true):null;
+    $identity=doubanBookIdentity($path);
+    if (!$identity||!is_array($data)||($data['identity']??null)!==$identity||!is_string($data['url']??null)) return null;
+    return canonicalDoubanUrl($data['url']);
+}
+
+function clearBookDoubanUrl(string $path): void
+{
+    $sidecar=doubanSidecar($path);
+    if ((file_exists($sidecar)||is_link($sidecar))&&!@unlink($sidecar))
+        error_log('OPDS: could not clean up a book metadata entry.');
+}
+
+function saveBookDoubanUrl(string $path, ?string $url): void
+{
+    if ($url===null) { clearBookDoubanUrl($path); return; }
+    $identity=doubanBookIdentity($path);
+    if (!$identity) throw new RuntimeException('Cannot identify the uploaded book.');
+    $temp=dirname($path).'/.opds-meta-'.bin2hex(random_bytes(16));
+    try {
+        $file=fopen($temp,'xb');
+        if (!$file) throw new RuntimeException('Cannot stage book metadata.');
+        try { writeAll($file,json_encode(['identity'=>$identity,'url'=>$url],JSON_THROW_ON_ERROR)); }
+        finally { fclose($file); }
+        if (!rename($temp,doubanSidecar($path))) throw new RuntimeException('Cannot publish book metadata.');
+    } finally { if (is_file($temp)) @unlink($temp); }
+}
+
 function managedBook(string $category,string $name): string
 {
     safeFilename($name); requireVisibleBook($category,$name);
@@ -387,6 +442,7 @@ function manageBook(string $action,string $category,string $name,string $to): vo
         $rules=privacyRules(); $oldKey=bookRuleKey($category,$name);
         if ($action==='delete') {
             if (!unlink($source)) reject('Could not delete the book.',409);
+            clearBookDoubanUrl($source);
             // Leave the rule in place if the cleanup cannot be persisted.
             if (isset($rules[$oldKey])) { unset($rules[$oldKey]); storePrivacyRules($rules); }
             return;
@@ -414,11 +470,16 @@ function manageBook(string $action,string $category,string $name,string $to): vo
             $rules[$newKey]=true;
             storePrivacyRules($rules);
         }
+        $douban=bookDoubanUrl($source);
         if (!@link($source,$target)) reject($action==='move'?'Could not move; check for an existing book with the same name.':'Could not rename the book.',409);
+        try { saveBookDoubanUrl($target,$douban); }
+        catch (Throwable $error) { @unlink($target); throw $error; }
         if (!@unlink($source)) {
             @unlink($target);
+            clearBookDoubanUrl($target);
             reject('Could not remove the original book.',409);
         }
+        clearBookDoubanUrl($source);
         if (isset($rules[$oldKey])) { unset($rules[$oldKey]); storePrivacyRules($rules); }
     }));
 }

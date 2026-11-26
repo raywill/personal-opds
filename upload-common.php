@@ -130,7 +130,7 @@ function uploadCommit(callable $commit): mixed
     });
 }
 
-function saveUpload(string $tmpPath, string $filename, string $directoryName,?array &$quota): void
+function saveUpload(string $tmpPath, string $filename, string $directoryName,?array &$quota,?string $douban=null): void
 {
     $filename = safeFilename($filename);
     if (!is_uploaded_file($tmpPath)) {
@@ -166,12 +166,14 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName,?ar
             throw new RuntimeException('Destination changed during upload.');
         }
         // Same-directory hard link: atomic creation, never overwrites target.
-        uploadCommit(static function () use ($temp,$target,$filename) {
+        uploadCommit(static function () use ($temp,$target,$filename,$douban) {
             if (!@link($temp, $target)) {
                 if (file_exists($target) || is_link($target))
                     reject(tr('File already exists; not overwritten: ') . $filename, 409);
                 throw new RuntimeException('Cannot create final hard link.');
             }
+            try { saveBookDoubanUrl($target,$douban); }
+            catch (Throwable $error) { @unlink($target); throw $error; }
         });
     } finally {
         if (!@unlink($temp)) {
@@ -181,7 +183,7 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName,?ar
     $quota['bytes']+=$size; $quota['files']++;
 }
 
-function receiveUploads(string $directory, bool $singleFile,bool $create): array
+function receiveUploads(string $directory, bool $singleFile,bool $create,array $doubanUrls=[]): array
 {
     // PHP silently truncates excess uploads BEFORE user code runs. One extra
     // parser slot lets the application reject more than MAX_FILES safely.
@@ -197,6 +199,8 @@ function receiveUploads(string $directory, bool $singleFile,bool $create): array
         reject($singleFile ? tr('Each progress request accepts only one file.') : tr('Select between 1 and 20 files.'));
     }
     $expected = range(0, $count - 1);
+    if (array_diff(array_keys($doubanUrls),$expected)) reject('Douban links must match the uploaded file positions.');
+
     foreach (['name', 'tmp_name', 'error', 'size'] as $key) {
         if (!isset($files[$key]) || !is_array($files[$key]) || array_keys($files[$key]) !== $expected) {
             reject(tr('Invalid upload data structure.'));
@@ -243,7 +247,12 @@ function receiveUploads(string $directory, bool $singleFile,bool $create): array
                     default => 400,
                 });
             }
-            saveUpload($files['tmp_name'][$i], $files['name'][$i], $directory,$quota);
+            $douban=null;
+            if (isset($doubanUrls[$i]) && $doubanUrls[$i]!=='') {
+                $douban=is_string($doubanUrls[$i])?canonicalDoubanUrl($doubanUrls[$i]):null;
+                if ($douban===null) reject('Use a Douban book detail URL, or leave it blank.');
+            }
+            saveUpload($files['tmp_name'][$i], $files['name'][$i], $directory,$quota,$douban);
             $messages[] = ['name' => $files['name'][$i], 'success' => true,
                 'text' => tr('Saved: ') . $files['name'][$i], 'status' => 200, 'already_exists'=>false];
         } catch (Throwable $e) {
@@ -274,10 +283,12 @@ function processUpload(bool $singleFile, bool $bearer, array $scope=[], string $
 {
     requireMultipart();
     foreach (array_keys($_POST) as $field) {
-        if (!in_array($field, $bearer ? ['directory'] : ['csrf', 'action'], true)) {
+        if (!in_array($field, $bearer ? ['directory','douban_url'] : ['csrf', 'action'], true)) {
             reject(tr('The upload contains unsupported form fields.'));
         }
     }
+    $doubanUrls=$bearer?($_POST['douban_url']??[]):[];
+    if (!is_array($doubanUrls)||count($doubanUrls)>MAX_FILES) reject('Douban links must match the uploaded file positions.');
     $directory = $bearer ? ($_POST['directory'] ?? '') : $pageDirectory;
     if (!is_string($directory)) {
         reject(tr('Invalid destination directory.'));
@@ -289,9 +300,9 @@ function processUpload(bool $singleFile, bool $bearer, array $scope=[], string $
         $directory=$scope['dir'];
     }
     reserveRateAttempt('upload', 120, 600);
-    return withBookWrite(function () use ($directory,$singleFile,$bearer,$fixed,$scope) {
+    return withBookWrite(function () use ($directory,$singleFile,$bearer,$fixed,$scope,$doubanUrls) {
         $slot=acquireUploadSlot();
-        try { return receiveUploads($directory,$singleFile,$bearer&&!$fixed&&!empty($scope['mkdir'])); }
+        try { return receiveUploads($directory,$singleFile,$bearer&&!$fixed&&!empty($scope['mkdir']),$doubanUrls); }
         finally { fclose($slot); }
     });
 }

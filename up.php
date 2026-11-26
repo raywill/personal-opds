@@ -382,7 +382,7 @@ main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-temp
 [data-folder-menu]{display:flex;align-items:center;gap:var(--row-gap)}[data-folder-menu]>a{flex:1;min-width:0}.shelf-list .icon-button{width:var(--row-action);flex:none}
 .privacy-lock{display:inline-flex;align-items:center;flex:none;color:var(--soft)}.privacy-lock .icon{width:15px;height:15px}
 .book-title-line,.visibility-note{display:flex;align-items:center;gap:6px;min-width:0}.book-info{flex:1;min-width:0}
-.book-name{color:var(--ink);text-decoration:none;font-size:.95rem;font-weight:720;line-height:1.35}.book-name:hover{text-decoration:underline}.book-info small{display:block;font-size:.78rem;margin-top:2px}.book-menu{position:relative}
+.book-name{color:var(--ink);text-decoration:none;font-size:.95rem;font-weight:720;line-height:1.35}.book-name:hover{text-decoration:underline}.book-info small{display:flex;align-items:center;gap:8px;font-size:.78rem;margin-top:2px}.book-source{color:inherit;text-decoration:none;white-space:nowrap}.book-source:hover,.book-source:focus-visible{color:var(--accent);text-decoration:underline}.book-menu{position:relative}
 .book-actions{display:grid;gap:4px;position:absolute;z-index:2;inset-inline-end:0;top:calc(100% + 4px);min-width:130px;padding:5px;background:white;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #13264024}.book-actions button{width:100%;text-align:start}.empty{padding:30px 10px;text-align:center}.empty p{margin:0}.pagination{padding:12px 0}
 h1,h2,h3,p{margin:0 0 10px}h2{font-size:1.06rem}.bar,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar{justify-content:space-between}.bar h2{margin:0}.muted,small{color:var(--soft)}
 .status,.error{padding:9px 12px;border-radius:9px;margin-bottom:12px;background:var(--mint);overflow-wrap:anywhere}.error{background:#fae9ed;color:var(--warn)}.shelf-notice:empty{display:none}
@@ -550,7 +550,8 @@ $selectedShare=$mine[$dir]??null; $status=$selectedShare?ownerShareStatus($selec
 $active=in_array($status,['Shared','Expiring soon'],true);
 $isOwner=canSeePrivateBooks();
 $currentPrivate=folderPrivate($dir);
-$files=isset($permissions['view'])?listBookFiles(resolveDestinationDirectory($dir),$dir):[];
+$bookDirectory=isset($permissions['view'])?resolveDestinationDirectory($dir):null;
+$files=$bookDirectory!==null?listBookFiles($bookDirectory,$dir):[];
 $statuses=array_map('ownerShareStatus',$mine);
 ksort($files,SORT_NATURAL|SORT_FLAG_CASE);
 $fileCount=count($files);
@@ -636,10 +637,11 @@ if ($preview) {
     $download=libraryHref($dir,['download'=>$name]);
     $read='preview.php?'.http_build_query(['library'=>$library['id'],'dir'=>$dir,'book'=>$name],'','&',PHP_QUERY_RFC3986);
     $bookPrivate=isset(privacyRules()[bookRuleKey($dir,$name)]);
+    $douban=bookDoubanUrl($bookDirectory.'/'.$name);
     $format=strtolower(pathinfo($name,PATHINFO_EXTENSION)); $title=pathinfo($name,PATHINFO_FILENAME); ?>
   <li class="book">
    <span aria-hidden="true" class="book-icon <?=$format==='txt'?'txt':''?>"><?=h(strtoupper($format))?></span>
-   <div class="book-info"><div class="book-title-line"><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><?php if ($currentPrivate || $bookPrivate) echo privacyBadge($currentPrivate); ?></div><small><?=h(fileSizeLabel($size))?></small></div>
+   <div class="book-info"><div class="book-title-line"><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><?php if ($currentPrivate || $bookPrivate) echo privacyBadge($currentPrivate); ?></div><small><span><?=h(fileSizeLabel($size))?></span><?php if ($douban!==null): ?><a class="book-source" href="<?=h($douban)?>" target="_blank" rel="noopener noreferrer" aria-label="<?=tr_html('Douban book details (opens in a new tab)')?>"><?=tr_html('Douban')?> <span aria-hidden="true">↗</span></a><?php endif; ?></small></div>
    <?php if (isset($permissions['download'])): ?><a class="button icon-button" href="<?=h($download)?>" title="<?=tr_html('Download')?>" aria-label="<?=h(sprintf(tr('Download %s'),$name))?>"><?=icon('download')?></a><?php endif; ?>
    <?php if (isset($permissions['organize'])||isset($permissions['delete'])): ?><details class="book-menu">
     <summary class="button icon-button" aria-label="<?=h(sprintf(tr('More actions for %s'),$name))?>"><?=icon('more')?></summary>
