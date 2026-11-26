@@ -98,6 +98,14 @@ The rule works for every username: `https://your-host/opds/alice` opens the libr
 
 Run `nginx -t && nginx -s reload`. Check the short URL with no credentials (expect `401`), then with your OPDS credentials (expect `200` and an OPDS response).
 
+### Private books and folders
+
+In a library you own, choose **⋯ → Make private** on any book or folder. The lock is visible only to you. A private folder protects its contents; an individually private book stays private if you later unlock its folder. Renaming or moving a private book in the app does not expose it. If you move a book out of a private folder, it stays private. To restore the library’s normal access rules, choose **Restore normal visibility** and confirm. Privileged library members and site administrators are not treated as the owner. The owner can still browse, read, download and manage private books in the web app and read them through their authenticated OPDS feed.
+
+Private content is omitted from other members' feeds, listings, counts, downloads, and searches. Agent tokens, including the owner's, do not see private folders and cannot upload to them or replace a private book. Making a folder private permanently revokes its existing anonymous subscriptions; the old link returns HTTP 403 with a permission message. Direct requests for private content are also denied with HTTP 403. A guessed name can therefore distinguish an access denial from an unused name, without exposing the contents. Making an individual book private leaves its folder subscription active and removes only the book. Previous downloads cannot be recalled.
+
+Visibility is application access control, not disk encryption. Back up the entire private data directory, including `conf/privacy-*.json` and `conf/shares.json`, together with the books. Use the app to rename or move private books; if you reorganize files directly on disk, keep their path-based privacy rules in sync. Do not revert to a build that does not enforce these rules while serving a library with private content.
+
 ## Books and subscriptions
 
 Use the folder sidebar to select the library root, an existing folder, or create a folder. Folders are only one level deep and can have spaces and Unicode names. Upload EPUB or TXT, and download, move, or delete individual files. Web uploads show each file's progress separately from its save confirmation. Confirmed temporary failures can be retried; if saving is unconfirmed, check the destination before uploading again. Moves and deletions affect what subscribers can next see. Already downloaded copies cannot be recalled.
@@ -119,7 +127,7 @@ Limits: 20 files per request, 100 MiB per file, 200 MiB combined, and the target
 ## Upgrade an existing multiuser installation
 
 1. Schedule a short maintenance window and pause uploads and other writes. Back up the entire private `opds-data/` tree and current application files, including local `paths.php`. Keep the original HTTPS URL and directory. Do not run `install.php` again.
-2. If the deployed app is a Git checkout, fetch `multiuser` and fast-forward it; preserve untracked `paths.php` and local settings. If the app was copied from the standalone installer, update the PHP application files from the branch (including the new `libraries.php`, `library-controls.php` and `agent-skill.php`); preserve `paths.php` and the existing private data. Never replace the live config with example data.
+2. If the deployed app is a Git checkout, fetch `multiuser` and fast-forward it; preserve untracked `paths.php` and local settings. If the app was copied from the standalone installer, update the PHP application files from the branch (including `libraries.php`, `library-controls.php`, `privacy.php` and `agent-skill.php`); preserve `paths.php` and the existing private data. Never replace the live config with example data.
 3. In the updated app directory, run `php admin.php rbac-check` as the PHP service account. This read-only preflight reports the library/owner mapping, book counts and bytes, quotas, and active shares, without printing credentials. Exit code 2 means unresolved storage or link identity issues. Investigate them before allowing writes; unknown folders are not automatically adopted.
 4. Test the old OPDS and upload URLs and at least one previously issued anonymous subscription, including a download without credentials. Only then reopen writes. Existing libraries retain their physical folders, share key, expiry, revocation and hidden folder identities. There is no book copy or account reset; the private RBAC JSON is initialized on first management write on an old site. No new PHP extension or database service is needed.
 

@@ -203,7 +203,8 @@ function agentTokenNeedsAdmin(array $token): bool
 
 function agentFolderNames(): array
 {
-    $names=array_map('strval',array_keys(libraryDirectories()));
+    $names=array_map('strval',array_keys(array_filter(libraryDirectories(),
+        static fn($folder)=>!folderPrivate((string)$folder),ARRAY_FILTER_USE_KEY)));
     $names=array_values(array_filter($names,'validCategory'));
     sort($names,SORT_NATURAL|SORT_FLAG_CASE);
     return $names;
@@ -392,7 +393,7 @@ function libraryPreflight(): array
         }
         if (!isset($users[$row['owner']])) $errors[]=['library'=>$id,'issue'=>'owner account missing'];
         setLibraryScope($row);
-        $folders=libraryDirectories();
+        $folders=libraryDirectories(includePrivate:true);
         $files=0; $bytes=0;
         foreach ([$dir,...array_values($folders)] as $folder) {
             $books=listBookFiles($folder); $files+=count($books); $bytes+=array_sum($books);

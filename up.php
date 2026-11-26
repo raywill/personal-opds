@@ -46,11 +46,13 @@ function managementDownload(string $dir,string $name): never {
     header("Content-Disposition: attachment; filename*=UTF-8''".rawurlencode($name));
     header('Content-Length: '.$stat['size']);
     session_write_close();
+    unlockBookRead();
     if ($_SERVER['REQUEST_METHOD']!=='HEAD') fpassthru($f);
     fclose($f); exit;
 }
 $method=$_SERVER['REQUEST_METHOD'];
 $viewer=$user?$_SESSION['account']:'';
+if ($user) $GLOBALS['opdsInteractiveViewer']=$viewer;
 $error=''; $notice=''; $permissions=[]; $webLibraries=[]; $allLibraries=[]; $library=null; $dir=''; $activate=''; $activateFor=''; $preview=false; $renameDraft=null;
 $siteAdmin=($user['site_admin']??null)===true; $accountInviteLink=''; $accountInviteName=''; $accountNotice='';
 $action=is_string($_POST['action']??null)?$_POST['action']:'';
@@ -158,7 +160,7 @@ try {
         } else {
             $required=[
                 'upload'=>'web_upload','folder'=>'folder','share'=>'share','revoke'=>'share','rename'=>'organize',
-                'move'=>'organize','delete'=>'delete','agent_setup'=>'agent_upload','agent_revoke'=>'agent_upload',
+                'move'=>'organize','delete'=>'delete','privacy'=>'settings','agent_setup'=>'agent_upload','agent_revoke'=>'agent_upload',
                 'legacy_token_revoke'=>'settings','member_invite'=>'members','member_edit'=>'members','member_remove'=>'members','member_cancel'=>'members','managed_token_revoke'=>'tokens',
                 'library_rename'=>'settings','library_archive'=>'settings',
             ][$action]??null;
@@ -172,17 +174,26 @@ try {
                 uploadJsonResponse(processUpload(singleFile:true,bearer:false,pageDirectory:$dir));
             }
             $dir=field('dir',$_POST);
-            resolveDestinationDirectory($dir);
+            if (in_array($action,['folder','share','revoke','privacy','rename','move','delete','agent_setup'],true)) resolveDestinationDirectory($dir);
             switch ($action) {
                 case 'folder':
-                    $new=field('folder',$_POST); uploadCommit(static fn()=>createCategory($new));
+                    $new=field('folder',$_POST);
+                    withBookWrite(static fn()=>uploadCommit(static function () use ($dir,$new) {
+                        requireVisibleFolder($dir);
+                        return createCategory($new);
+                    }));
                     if (($_SERVER['HTTP_ACCEPT']??'')==='application/json') jsonResponse(['success'=>true,'message'=>tr('Folder ready.'),'folder'=>$new]);
                     $_SESSION['notice']='Folder ready.'; go($new);
                 case 'share':
                 case 'revoke':
-                    uploadCommit(static fn()=>manageShare($dir,$action==='revoke'));
+                    withBookWrite(static fn()=>uploadCommit(static fn()=>manageShare($dir,$action==='revoke')));
                     noteLibraryAction('share.'.$action,['directory'=>$dir]);
                     $_SESSION['notice']=$action==='revoke'?'Share revoked.':'Share link ready.'; go($dir);
+                case 'privacy':
+                    $mode=field('visibility',$_POST);
+                    if (!in_array($mode,['private','normal'],true)) reject('Invalid input.');
+                    managePrivacy(field('kind',$_POST),$dir,field('entry',$_POST),$mode==='private',field('confirmed',$_POST)==='1');
+                    $_SESSION['notice']=$mode==='private'?'Visibility changed to Only me.':'Normal visibility restored.'; go($dir);
                 case 'rename':
                     $renameDraft=['file'=>field('file',$_POST),'name'=>field('new_name',$_POST)];
                     manageBook('rename',$dir,$renameDraft['file'],$renameDraft['name']);
@@ -194,6 +205,7 @@ try {
                     $_SESSION['notice']=$action==='move'?'Book moved.':'Book deleted.'; go($dir);
                 case 'agent_setup':
                     reserveRateAttempt('agent-setup',30,300);
+                    lockBookRead();
                     $grant=issueAgentToken($library['id'],$viewer);
                     jsonResponse(['success'=>true,'setup'=>agentSetup($grant,currentLibrary())]);
                 case 'legacy_token_revoke':
@@ -229,12 +241,13 @@ try {
         }
     }
     if ($library && $activate==='') {
+        lockBookRead();
         resolveDestinationDirectory($dir);
         if (isset($_GET['download'])) {
             if (!isset($permissions['download'])) reject('Library access denied.',403);
             managementDownload($dir,field('download',$_GET));
         }
-        $preview=isset($permissions['share'])&&($_GET['preview']??'')==='1'&&$dir!=='';
+        $preview=isset($permissions['share'])&&($_GET['preview']??'')==='1'&&$dir!==''&&!folderPrivate($dir);
     }
 } catch (Throwable $e) {
     if ($action==='agent_setup') jsonResponse(['success'=>false,'message'=>publicError($e)],$e instanceof RequestError?$e->getCode():500);
@@ -244,7 +257,8 @@ try {
     if ($action==='upload') jsonResponse(['success'=>false,'message'=>publicError($e),'results'=>[]],$status);
     http_response_code($status);
     $error=publicError($e);
-    if ($library) { try { resolveDestinationDirectory($dir); } catch (Throwable) { $dir=''; } }
+    if (in_array($status,[403,404],true)) $renameDraft=null;
+    if ($library) { try { lockBookRead(); resolveDestinationDirectory($dir); } catch (Throwable) { $dir=''; } }
 }
 $notice=tr($_SESSION['notice']??''); unset($_SESSION['notice']);
 if ($siteAdmin && isset($_GET['accounts']) && isset($_SESSION['disabled_account_notice'])) {
@@ -257,10 +271,11 @@ $pendingInvites=$user?libraryInvites($viewer):[];
 $archivedLibraries=$user?ownedArchivedLibraries($viewer):[];
 $csrf=$_SESSION['csrf'];
 session_write_close();
+if ($library) lockBookRead();
 $directories=$library?array_map('strval',array_keys(libraryDirectories())):[];
 $mine=[];
 if ($library && (isset($permissions['view'])||isset($permissions['share']))) foreach (stateRead('shares') as $id=>$row) {
-    if (shareLibraryId($row)===$library['id']) $mine[$row['category']]=['id'=>(string)$id]+$row;
+    if (shareLibraryId($row)===$library['id'] && !folderPrivate($row['category'])) $mine[$row['category']]=['id'=>(string)$id]+$row;
 }
 function ownerShareStatus(array $share): string {
     try { $id=categoryIdentity(resolveDestinationDirectory($share['category'])); }
@@ -279,6 +294,7 @@ function shareBadge(string $status): string {
 }
 function icon(string $name): string {
     $paths=[
+        'lock'=>'<rect x="6" y="10" width="12" height="10" rx="2"/><path d="M9 10V7a3 3 0 0 1 6 0v3m-3 4v2"/>',
         'book'=>'<path d="M12 6v14M4 5h5a3 3 0 0 1 3 2 3 3 0 0 1 3-2h5v14h-5a3 3 0 0 0-3 2 3 3 0 0 0-3-2H4z"/>',
         'folder'=>'<path d="M3 19V6h6l2 2h10v11z"/>',
         'home'=>'<path d="m3 10 9-7 9 7M6 9v11h12V9"/>',
@@ -295,11 +311,30 @@ function icon(string $name): string {
     ];
     return '<svg aria-hidden="true" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'.$paths[$name].'</svg>';
 }
+function privacyBadge(bool $inherited=false): string {
+    $label=tr_html($inherited?'Private through the parent folder.':'Only me');
+    return '<span class="privacy-lock" title="'.$label.'" role="img" aria-label="'.$label.'">'.icon('lock').'</span>';
+}
+function privacyAction(string $csrf,string $kind,string $dir,string $entry,bool $private,int $impact=0): void {
+    $message=$private?tr('Restore normal visibility? Members and active parent subscriptions may see this item.'):
+        ($impact?sprintf(tr('Make this folder private? This revokes %d active subscription link(s).'),$impact):'');
+    echo '<form method="post" action="up.php"'.($message!==''?' data-privacy-confirm="'.h($message).'"':'').'>';
+    hidden($csrf,'privacy',$dir);
+    echo '<input type="hidden" name="kind" value="'.h($kind).'"><input type="hidden" name="entry" value="'.h($entry).
+        '"><input type="hidden" name="confirmed" value="0"><input type="hidden" name="visibility" value="'.($private?'normal':'private').
+        '"><button>'.tr_html($private?'Restore normal visibility':'Make private').'</button></form>';
+}
+function folderPrivacyMenu(string $csrf,string $folder,array $shares): void {
+    echo '<details class="book-menu"><summary class="button icon-button" aria-label="'.
+        h(sprintf(tr('More actions for %s'),$folder)).'">'.icon('more').'</summary><div class="book-actions">';
+    privacyAction($csrf,'folder','',$folder,folderPrivate($folder),privacyShareImpact($folder,$shares));
+    echo '</div></details>';
+}
 function folderNav(array $directories,string $dir,array $statuses,string $libraryName): void {
     echo '<nav class="folders" aria-label="'.tr_html('Library folders').'">';
     foreach (['',...$directories] as $item) {
         $badge=isset($statuses[$item])?'<span class="'.shareBadge($statuses[$item]).'">'.h(tr($statuses[$item])).'</span>':'';
-        echo '<a href="'.h(libraryHref($item)).'"'.($item===$dir?' aria-current="page"':'').'><span class="folder-name">'.icon($item===''?'home':'folder').h($item===''?$libraryName:$item).'</span>'.$badge.'</a>';
+        echo '<a href="'.h(libraryHref($item)).'"'.($item===$dir?' aria-current="page"':'').'><span class="folder-name">'.icon($item===''?'home':'folder').h($item===''?$libraryName:$item).'</span>'.(folderPrivate($item)?privacyBadge():'').$badge.'</a>';
     }
     echo '</nav>';
 }
@@ -342,6 +377,9 @@ main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-temp
 .shelf-folder-icon{display:grid;place-items:center;width:100%;height:38px;color:var(--accent)}
 .shelf-folder-name,.book-name{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.shelf-folder-name{font-size:.95rem;font-weight:720}.shelf-folder-detail{grid-column:3 / 5;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding-inline-end:8px}
 .book-icon{display:grid;place-items:center;width:38px;height:46px;border-radius:7px;background:var(--blue-soft);color:#234cac;font-size:.7rem;font-weight:790;letter-spacing:.02em}.book-icon.txt{background:#eaf2ec;color:#285e4b}
+[data-folder-menu]{display:flex;align-items:center;gap:6px}[data-folder-menu]>a{flex:1;min-width:0}
+.privacy-lock{display:inline-flex;align-items:center;flex:none;color:var(--soft)}.privacy-lock .icon{width:15px;height:15px}
+.book-title-line,.visibility-note{display:flex;align-items:center;gap:6px;min-width:0}.book-info{min-width:0}
 .book-name{color:var(--ink);text-decoration:none;font-size:.95rem;font-weight:720;line-height:1.35}.book-name:hover{text-decoration:underline}.book-info small{display:block;font-size:.78rem;margin-top:2px}.book-menu{position:relative}
 .book-actions{display:grid;gap:4px;position:absolute;z-index:2;inset-inline-end:0;top:calc(100% + 4px);min-width:130px;padding:5px;background:white;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #13264024}.book-actions button{width:100%;text-align:start}.empty{padding:30px 10px;text-align:center}.empty p{margin:0}.pagination{padding:12px 0}
 h1,h2,h3,p{margin:0 0 10px}h2{font-size:1.06rem}.bar,.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar{justify-content:space-between}.bar h2{margin:0}.muted,small{color:var(--soft)}
@@ -507,7 +545,9 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 <?php else:
 $selectedShare=$mine[$dir]??null; $status=$selectedShare?ownerShareStatus($selectedShare):'Not shared';
 $active=in_array($status,['Shared','Expiring soon'],true);
-$files=isset($permissions['view'])?listBookFiles(resolveDestinationDirectory($dir)):[];
+$isOwner=canSeePrivateBooks();
+$currentPrivate=folderPrivate($dir);
+$files=isset($permissions['view'])?listBookFiles(resolveDestinationDirectory($dir),$dir):[];
 $statuses=array_map('ownerShareStatus',$mine);
 ksort($files,SORT_NATURAL|SORT_FLAG_CASE);
 $fileCount=count($files);
@@ -552,7 +592,9 @@ if ($preview) {
   </div>
   <div class="shelf-meta">
    <?php if (isset($permissions['view'])): ?><span id="shelf-count"><?=h(sprintf(tr('%s books'),number_format($fileCount)))?></span><?php endif; ?>
-   <?php if ($dir!=='' && isset($permissions['share'])): ?>
+   <?php if ($currentPrivate): ?><span class="visibility-note"><?=privacyBadge()?><?=tr_html('Only me')?></span><?php endif; ?>
+   <?php if ($dir!=='' && $isOwner): folderPrivacyMenu($csrf,$dir,$mine); endif; ?>
+   <?php if ($dir!=='' && !$currentPrivate && isset($permissions['share'])): ?>
    <button class="pill-trigger <?=$active?'live':''?>" type="button" data-dialog="share-dialog" aria-label="<?=tr_html('Manage subscription sharing')?>" aria-describedby="share-current-status"><?=icon('link')?><span id="share-current-status"><span><?=h(tr($status))?></span><?php if ($active): ?> · <time datetime="<?=h($expiry)?>"><?=h(sprintf(tr('Expires %s'),$expiry))?></time><?php endif; ?></span><?=icon('down')?></button>
    <?php endif; ?>
   </div>
@@ -564,22 +606,24 @@ if ($preview) {
   <?php if ($listedFolders || $pageFiles): ?>
   <ul class="shelf-list" aria-label="<?=tr_html('Folder contents')?>">
    <?php foreach ($listedFolders as $item): ?>
-   <li class="shelf-folder"><a href="<?=h(libraryHref($item))?>">
+   <li class="shelf-folder"<?=$isOwner?' data-folder-menu':''?>><a href="<?=h(libraryHref($item))?>">
     <span class="shelf-folder-icon"><?=icon('folder')?></span><span class="shelf-folder-name" title="<?=h($item)?>"><?=h($item)?></span>
-    <span class="shelf-folder-detail"><?php if (isset($statuses[$item])): ?><span class="<?=shareBadge($statuses[$item])?>"><?=h(tr($statuses[$item]))?></span><?php endif; ?><span class="root-folder-arrow"><?=icon('down')?></span></span>
-   </a></li>
+    <span class="shelf-folder-detail"><?php if (folderPrivate($item)) echo privacyBadge(); if (isset($statuses[$item])): ?><span class="<?=shareBadge($statuses[$item])?>"><?=h(tr($statuses[$item]))?></span><?php endif; ?><span class="root-folder-arrow"><?=icon('down')?></span></span>
+   </a><?php if ($isOwner) folderPrivacyMenu($csrf,$item,$mine); ?></li>
    <?php endforeach; ?>
   <?php foreach ($pageFiles as $name=>$size):
     $download=libraryHref($dir,['download'=>$name]);
     $read='preview.php?'.http_build_query(['library'=>$library['id'],'dir'=>$dir,'book'=>$name],'','&',PHP_QUERY_RFC3986);
+    $bookPrivate=isset(privacyRules()[bookRuleKey($dir,$name)]);
     $format=strtolower(pathinfo($name,PATHINFO_EXTENSION)); $title=pathinfo($name,PATHINFO_FILENAME); ?>
   <li class="book">
    <span aria-hidden="true" class="book-icon <?=$format==='txt'?'txt':''?>"><?=h(strtoupper($format))?></span>
-   <div class="book-info"><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><small><?=h(fileSizeLabel($size))?></small></div>
+   <div class="book-info"><div class="book-title-line"><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><?php if ($currentPrivate || $bookPrivate) echo privacyBadge($currentPrivate); ?></div><small><?=h(fileSizeLabel($size))?></small></div>
    <?php if (isset($permissions['download'])): ?><a class="button icon-button" href="<?=h($download)?>" title="<?=tr_html('Download')?>" aria-label="<?=h(sprintf(tr('Download %s'),$name))?>"><?=icon('download')?></a><?php else: ?><span></span><?php endif; ?>
    <?php if (isset($permissions['organize'])||isset($permissions['delete'])): ?><details class="book-menu">
     <summary class="button icon-button" aria-label="<?=h(sprintf(tr('More actions for %s'),$name))?>"><?=icon('more')?></summary>
     <div class="book-actions">
+     <?php if ($isOwner && !$currentPrivate) privacyAction($csrf,'book',$dir,$name,$bookPrivate); ?>
      <?php if (isset($permissions['organize'])): ?><button type="button" data-book-rename="<?=h($name)?>" data-book-stem="<?=h($title)?>" data-book-extension="<?=h('.'.pathinfo($name,PATHINFO_EXTENSION))?>"><?=tr_html('Rename')?></button>
      <?php if ($directories): ?><button type="button" data-book-move="<?=h($name)?>"><?=tr_html('Move')?></button><?php endif;?><?php endif; ?>
      <?php if (isset($permissions['delete'])): ?><form action="up.php" method="post" data-confirm="<?=$active?tr_html('Delete this book? Subscribers will no longer be able to download it.'):tr_html('Delete this book?')?>"><?php hidden($csrf,'delete',$dir);?><input type="hidden" name="file" value="<?=h($name)?>"><button class="danger"><?=tr_html('Delete')?></button></form><?php endif; ?>
@@ -602,7 +646,7 @@ if ($preview) {
  <?php folderNav($directories,$dir,$statuses,$libraryName); ?>
  <?php if (isset($permissions['folder'])): ?><form class="folder-form actions" method="post" action="up.php"><?php hidden($csrf,'folder',$dir);?><input name="folder" aria-label="<?=tr_html('New folder name')?>" placeholder="<?=tr_html('New folder name')?>" required maxlength="240"><button class="primary"><?=tr_html('New folder')?></button></form><?php endif; ?>
 </dialog>
-<?php if ($dir!=='' && isset($permissions['share'])): ?>
+<?php if ($dir!=='' && !$currentPrivate && isset($permissions['share'])): ?>
 <dialog id="share-dialog" class="sheet" aria-labelledby="share-dialog-title" <?=$preview?'data-show':''?>>
  <div class="bar dialog-head"><h2 id="share-dialog-title"><?=tr_html('Subscription share')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
  <p class="share-summary"><?=h($shelfName)?> · <?=h(tr($status))?><?php if ($selectedShare && in_array($status,['Shared','Expiring soon','Expired'],true)): ?> · <time datetime="<?=h($expiry)?>" title="<?=h(sprintf(tr('Expires %s UTC'),$expiry))?>"><?=h(sprintf(tr('Expires %s'),$expiry))?></time><?php endif; ?></p>
@@ -655,7 +699,12 @@ if ($preview) {
 </main>
 <script nonce="<?=h($nonce)?>">
 document.addEventListener('submit',e=>{
- const f=e.target;if(!f.matches('form[data-confirm],form[data-move]'))return;
+ const f=e.target;
+ if(f.matches('form[data-privacy-confirm]')){
+  if(confirm(f.dataset.privacyConfirm))f.elements.confirmed.value='1';else e.preventDefault();
+  return;
+ }
+ if(!f.matches('form[data-confirm],form[data-move]'))return;
  const message=f.dataset.confirm || ((f.dataset.move==='1'||f.elements.destination.selectedOptions[0]?.dataset.shared==='1')?f.dataset.sharedWarning:'');
  if(message&&!confirm(message))e.preventDefault();
 });

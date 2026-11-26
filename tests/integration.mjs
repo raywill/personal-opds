@@ -89,7 +89,7 @@ try{
  const translationKeys=[...dictionary.matchAll(/^  '((?:[^'\\]|\\.)*)' =>/gm)].map(m=>m[1]);
  const uniqueKeys=new Set(translationKeys);
  assert.equal(uniqueKeys.size,translationKeys.length,'Duplicate translation entries');
- for(const source of ['tools/install.template.php','bootstrap.php','up.php','accounts.php','catalogue.php','index.php','api.php','upload-common.php','security.php','libraries.php','library-controls.php','preview.php','reader-content.php']){
+ for(const source of ['tools/install.template.php','bootstrap.php','up.php','accounts.php','catalogue.php','index.php','api.php','upload-common.php','security.php','libraries.php','privacy.php','library-controls.php','preview.php','reader-content.php']){
    for(const [,label] of fs.readFileSync(path.join(project,source),'utf8').matchAll(/\b(?:tr|tr_html|reject|RequestError)\('((?:[^'\\]|\\.)*)'/g))
      assert(uniqueKeys.has(label),`Missing Chinese translation in ${source}: ${label}`);
  }
@@ -657,7 +657,7 @@ try{
      await zh.getByRole('link',{name:'预览',exact:true}).click();
      await zh.getByText(/只读预览 · 此订阅可查看 [0-9]+ 本书/).waitFor();
      await zh.locator('#share-dialog').getByRole('button',{name:'关闭',exact:true}).click();
-     await zh.locator('.book-menu summary').first().click();
+     await zh.locator('.book .book-menu summary').first().click();
      await zh.getByRole('button',{name:'移动',exact:true}).first().click();
      let warning='';
      zh.once('dialog',d=>{warning=d.message();return d.dismiss();});
@@ -992,6 +992,151 @@ try{
  assert(audit.some(e=>e.event==='library_archive'&&e.actor===librarian));
  assert(!JSON.stringify(audit).includes(auto.token));
  pass('one personal library per account, fixed ownership, archive/restore and secret-free audit');
+
+ {
+   const privateFolder='Owner vault', hidden='Only-this-book.txt', inherited='Inherited-book.txt', publicBook='Visible-book.txt';
+   const ownerOpds=params=>opds(librarian,{library:family,...params});
+   const memberOpds=params=>opds(thirdUser,{library:family,...params});
+   const shelfURL=(dir,extra={})=>libraryWeb(family,{dir,...extra});
+   const previewURL=(dir,book,extra={})=>'preview.php?'+new URLSearchParams({library:family,dir,book,...extra});
+   const change=(kind,dir,entry,visibility='private',confirmed='0')=>ui({action:'privacy',library:family,kind,dir,entry,visibility,confirmed});
+   const anon=params=>request(url(params),{headers:{cookie:''}});
+   const shareKey=async dir=>(await request(shelfURL(dir))).text.match(/\?s=([1-9]{8}-[A-Z0-9]{4})/)?.[1];
+   const publicFolder='Mixed reading';
+   assert.equal((await ui({action:'member_edit',library:family,member:thirdUser,role:'admin'})).status,303);
+   for(const dir of [privateFolder,publicFolder]) assert.equal((await ui({action:'folder',library:family,folder:dir})).status,303);
+   assert.equal((await scopedUpload(family,privateFolder,inherited,'inherited private text')).status,200);
+   assert.equal((await scopedUpload(family,privateFolder,'sample-private.epub',epubBytes)).status,200);
+   for(const name of [hidden,publicBook]) assert.equal((await scopedUpload(family,publicFolder,name,name)).status,200);
+   assert.equal((await ui({action:'share',library:family,dir:privateFolder})).status,303);
+   assert.equal((await ui({action:'share',library:family,dir:publicFolder})).status,303);
+   const oldKey=await shareKey(privateFolder), liveKey=await shareKey(publicFolder);
+   assert(oldKey&&liveKey);
+   const publicList=await anon({s:liveKey});
+   assert.equal(publicList.status,200); assert(publicList.text.includes('Only-this-book'));
+   assert((await memberOpds({feed:'books'})).text.includes('sample-private.epub'));
+   restoreSession(caseySession);
+   assert.equal((await change('book',publicFolder,hidden)).status,403);
+   restoreSession(ownerSession);
+   assert.equal((await change('book',publicFolder,hidden)).status,303);
+   assert.equal((await change('folder','',privateFolder)).status,409);
+   assert.equal((await anon({s:oldKey})).status,200);
+   assert.equal((await change('folder','',privateFolder,'private','1')).status,303);
+   for(const params of [{s:oldKey},{s:oldKey,search:'1'},{s:oldKey,download:privateFolder+'/'+inherited}]){
+     const blocked=await anon(params);
+     assert.equal(blocked.status,403); assert(!blocked.headers['www-authenticate']);
+     assert.match(blocked.text,/No permission\. Ask the owner for a new link/);
+   }
+   assert.equal((await anon({s:liveKey,download:publicFolder+'/'+hidden})).status,403);
+   assert.equal((await anon({s:liveKey,download:publicFolder+'/'+publicBook})).status,200);
+   assert(!(await anon({s:liveKey,q:'Only-this-book'})).text.includes('<entry>'));
+   const authorizedShelf=await request(shelfURL(privateFolder));
+   assert(authorizedShelf.text.includes('Private through the parent folder.'));
+   assert(!authorizedShelf.text.includes('id="share-dialog"'));
+   assert.equal((await request(previewURL(privateFolder,'sample-private.epub'))).status,200);
+   assert.equal((await request(shelfURL(publicFolder,{download:hidden}))).text,hidden);
+   assert.equal((await ownerOpds({download:privateFolder+'/'+inherited})).text,'inherited private text');
+   assert((await ownerOpds({feed:'books'})).text.includes('Only-this-book'));
+   assert.equal((await ui({action:'share',library:family,dir:privateFolder})).status,409);
+   const sharePreview=await request(shelfURL(publicFolder,{preview:1}));
+   assert.match(sharePreview.text,/Books in this subscription: 1/);
+   assert(!sharePreview.text.match(/<li>Only-this-book<\/li>/));
+   const vaultOnDisk=path.join(data,'books',librarian,privateFolder);
+   const ownerIndex=path.join(data,'conf','cache','index-'+librarian+'-owner.json');
+   const memberIndex=path.join(data,'conf','cache','index-'+librarian+'.json');
+   const coldNames=Array.from({length:121},(_,n)=>'cold-private-'+String(n).padStart(3,'0')+'.txt');
+   try{
+     for(const name of coldNames)fs.writeFileSync(path.join(vaultOnDisk,name),'disposable metadata fixture');
+     for(const file of [ownerIndex,memberIndex])fs.rmSync(file,{force:true});
+     const coldMember=await memberOpds({feed:'books'});
+     assert.equal(coldMember.status,200);
+     assert(coldMember.text.includes('Visible-book')&&!coldMember.text.includes('cold-private-'));
+     assert.equal((await ownerOpds({feed:'books'})).status,503);
+     assert.equal((await ownerOpds({feed:'books'})).status,200);
+     const warmed=fs.readFileSync(ownerIndex,'utf8');
+     assert.equal((await memberOpds({feed:'books'})).status,200);
+     assert.equal(fs.readFileSync(ownerIndex,'utf8'),warmed);
+     assert.equal((await ownerOpds({feed:'books'})).status,200);
+   }finally{for(const name of coldNames)fs.rmSync(path.join(vaultOnDisk,name),{force:true});}
+
+   const ownerAgent=setupConfig(await ui({action:'agent_setup',library:family}));
+   assert(!ownerAgent.folders.includes(privateFolder));
+   assert(!(await verify(ownerAgent.token)).json.folders.includes(privateFolder));
+   const deniedUpload=await upload(ownerAgent.token,privateFolder,[['blocked.txt','never written']]);
+   assert.equal(deniedUpload.status,403); assert.equal(deniedUpload.json.message,'No permission.');
+   assert.equal((await upload(ownerAgent.token,'New Agent destination',[['allowed.txt','new directory']])).status,200);
+   assert.equal((await upload(ownerAgent.token,publicFolder,[[hidden,'must not overwrite']])).status,403);
+   assert.equal((await upload(ownerAgent.token,publicFolder,[['Agent-public.txt','still works']])).status,200);
+   assert.equal((await opds(librarian,{library:family,category:privateFolder,feed:'books'})).status,200);
+   restoreSession(caseySession);
+   assert(!(await request(shelfURL(''))).text.includes(privateFolder));
+   assert(!(await request(shelfURL(publicFolder))).text.includes(hidden));
+   assert.equal((await request(shelfURL(privateFolder))).status,403);
+   assert.equal((await request(shelfURL(publicFolder,{download:hidden}))).status,403);
+   for(const extra of [{},{part:0,version:'old'},{toc:1,version:'old'},{asset:'cover.png',version:'old'}]){
+     const blocked=await request(previewURL(privateFolder,'sample-private.epub',extra));
+     assert.equal(blocked.status,403,blocked.text); assert(!blocked.text.includes('sample-private'));
+   }
+   assert.equal((await scopedUpload(family,privateFolder,'not-allowed.txt','not saved')).status,403);
+   assert.equal((await ui({action:'move',library:family,dir:publicFolder,file:publicBook,destination:privateFolder})).status,403);
+   assert.equal((await ui({action:'rename',library:family,dir:publicFolder,file:hidden,new_name:'Attempt to rename'})).status,403);
+   assert.equal((await ui({action:'delete',library:family,dir:publicFolder,file:hidden})).status,403);
+   assert.equal((await ui({action:'share',library:family,dir:privateFolder})).status,403);
+   assert(!(await memberOpds({})).text.includes('Owner%20vault'));
+   assert(!(await memberOpds({feed:'books'})).text.includes('Only-this-book'));
+   assert.equal((await memberOpds({download:privateFolder+'/'+inherited})).status,403);
+   assert.equal((await memberOpds({download:publicFolder+'/'+hidden})).status,403);
+   assert.equal((await memberOpds({download:publicFolder+'/Not-a-book.txt'})).status,404);
+   assert.equal((await memberOpds({category:privateFolder,feed:'books'})).status,403);
+   restoreSession(ownerSession);
+   assert.equal((await ui({action:'move',library:family,dir:privateFolder,file:inherited,destination:publicFolder})).status,303);
+   assert.equal((await ui({action:'rename',library:family,dir:publicFolder,file:inherited,new_name:'Still-private'})).status,303);
+   assert.equal((await anon({s:liveKey,download:publicFolder+'/Still-private.txt'})).status,403);
+   assert.equal((await change('folder','',privateFolder,'normal')).status,409);
+   assert.equal((await change('folder','',privateFolder,'normal','1')).status,303);
+   assert.equal((await anon({s:oldKey})).status,403);
+   assert.equal((await memberOpds({download:publicFolder+'/Still-private.txt'})).status,403);
+   assert.equal((await memberOpds({download:privateFolder+'/sample-private.epub'})).status,200);
+   assert.equal((await change('book',publicFolder,hidden,'normal','1')).status,303);
+   assert.equal((await anon({s:liveKey,download:publicFolder+'/'+hidden})).status,200);
+   const rulesFile=path.join(data,'conf','privacy-dana.json');
+   const rules=fs.readFileSync(rulesFile);
+   fs.writeFileSync(rulesFile,'corrupt');
+   try{assert.equal((await anon({s:liveKey,download:publicFolder+'/Still-private.txt'})).status,500);}
+   finally{fs.writeFileSync(rulesFile,rules);}
+   assert.equal(fs.statSync(rulesFile).mode&0o777,0o600);
+   if(process.env.CHROME_BIN&&process.env.PLAYWRIGHT_MODULE){
+     const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+     const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+     try {
+       const ctx=await browser.newContext({viewport:{width:390,height:740},isMobile:true,hasTouch:true,ignoreHTTPSErrors:true,locale:'zh-CN',extraHTTPHeaders:{'Accept-Language':'zh-CN'}});
+       for(const cookie of cookies.values()){
+         const [name,...v]=cookie.split('=');await ctx.addCookies([{name,value:v.join('='),url:base,secure:true}]);
+       }
+       const mobile=await ctx.newPage();
+       await mobile.goto(base+shelfURL(publicFolder));
+       const row=mobile.locator('.book').filter({hasText:'Still-private'});
+       assert.equal(await row.getByRole('img',{name:'仅我可见'}).count(),1);
+       await row.locator('summary').tap();
+       assert(await row.getByRole('button',{name:'取消私密'}).isVisible());
+       mobile.once('dialog',dialog=>dialog.dismiss());
+       await row.getByRole('button',{name:'取消私密'}).tap();
+       assert.equal(await row.getByRole('img',{name:'仅我可见'}).count(),1);
+       assert.equal((await anon({s:liveKey,download:publicFolder+'/Still-private.txt'})).status,403);
+       await mobile.goto(base+shelfURL(''));
+       const folder=mobile.locator('.shelf-folder').filter({hasText:privateFolder});
+       await folder.locator('summary').tap();
+       await Promise.all([mobile.waitForNavigation(),folder.getByRole('button',{name:'设为私密'}).tap()]);
+       assert.equal(await folder.getByRole('img',{name:'仅我可见'}).count(),1);
+       assert(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+       await Promise.all([mobile.waitForNavigation(),folder.getByRole('link',{name:privateFolder}).tap()]);
+       await mobile.locator('.book').filter({hasText:'sample-private'}).getByRole('img',{name:'随上级目录私密'}).waitFor();
+     } finally {await browser.close();}
+     pass('mobile privacy menus, lock markers, and cancelling a visibility confirmation');
+   }
+   assert.equal((await ui({action:'member_edit',library:family,member:thirdUser,role:'editor'})).status,303);
+   pass('owner-only book/folder access across web, reader, OPDS, sharing and Agent; privacy survives moves, renames, and restore');
+ }
 
  assert.equal((await ui({action:'account_invite',username:'notallowed',operation:'create'})).status,403);
  assert(!fs.existsSync(path.join(data,'books','notallowed')));

@@ -40,6 +40,8 @@ try {
     if (!$user) reject('Sign in again.',401);
     $id=readerParam('library'); $dir=readerParam('dir'); $bookName=readerParam('book');
     $row=selectLibrary($id,$viewer,'view');
+    $GLOBALS['opdsInteractiveViewer']=$viewer;
+    lockBookRead();
     $query=['library'=>$id,'dir'=>$dir];
     $back='up.php?'.http_build_query($query,'','&',PHP_QUERY_RFC3986);
     $path=managedBook($dir,$bookName);
@@ -91,6 +93,7 @@ try {
     $status=$e instanceof RequestError?$e->getCode():($e instanceof AccountStorageError?503:500);
     $error=publicError($e);
     if ($api) readerJson(['error'=>$error],$status);
+    if (in_array($status,[403,404],true)) { $bookName=''; $back='up.php'; }
     http_response_code($status);
 }
 function re(string $text): string { return readerEscape($text); }

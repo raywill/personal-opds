@@ -169,17 +169,18 @@ function validDirectoryName(string $name): bool
 }
 
 // Traversal supports bounded depth; bootstrap currently enforces depth === 1.
-function libraryDirectories(bool $writableOnly = false): array
+function libraryDirectories(bool $writableOnly = false, bool $includePrivate = false): array
 {
     $root = getLibraryRoot();
     $result = [];
-    $walk = function (string $parent, string $prefix, int $depth) use (&$walk, &$result, $writableOnly): void {
+    $walk = function (string $parent, string $prefix, int $depth) use (&$walk, &$result, $writableOnly, $includePrivate): void {
         if ($depth >= MAX_CATEGORY_DEPTH) return;
         foreach (scandir($parent) ?: [] as $name) {
             $path = $parent . '/' . $name;
             if (!validDirectoryName($name) || is_link($path) || !is_dir($path)
                 || dirname((string) realpath($path)) !== $parent) continue;
             $relative = $prefix === '' ? $name : $prefix . '/' . $name;
+            if (!$includePrivate && !canSeePrivateBooks() && folderPrivate($relative)) continue;
             if (!$writableOnly || is_writable($path)) $result[$relative] = $path;
             if (count($result) > 1000) reject(tr('Too many categories.'), 503);
             $walk($path, $relative, $depth + 1);
@@ -191,6 +192,7 @@ function libraryDirectories(bool $writableOnly = false): array
 function resolveDestinationDirectory(string $name): string
 {
     if ($name === '') return getLibraryRoot();
+    requireVisibleFolder($name);
     $parts = explode('/', $name);
     if (count($parts) > MAX_CATEGORY_DEPTH) reject(tr('Only one category level is currently supported.'));
     $parent = getLibraryRoot();
@@ -198,6 +200,7 @@ function resolveDestinationDirectory(string $name): string
         if (!validDirectoryName($part)) reject(tr('Invalid destination category.'));
         $candidate = $parent . '/' . $part;
         if (is_link($candidate) || !is_dir($candidate)) reject(tr('Destination category does not exist.'));
+        if (privacyRules() && !exactLibraryName($parent,$part)) reject('Directory not found.',404);
         $real = realpath($candidate);
         if ($real === false || dirname($real) !== $parent || basename($real) !== $part) reject(tr('Category is outside the allowed location.'));
         $parent = $real;

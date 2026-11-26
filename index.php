@@ -35,6 +35,7 @@ function requireOpdsAccess(): void
         reject('Enter your OPDS username and password.',401);
     }
     setAccountScope($user);
+    $GLOBALS['opdsInteractiveViewer']=$user;
     selectLibrary(parameter('library',personalLibraryId($user)),$user,'opds');
 }
 
@@ -67,7 +68,7 @@ try {
     if (isset($_GET['s'])) {
         $key=parameter('s'); $share=resolveShare($key);
         $GLOBALS['shareKey']=strtoupper($key); $GLOBALS['shareCategory']=$share['category'];
-    } else requireOpdsAccess();
+    } else { requireOpdsAccess(); lockBookRead(); }
     if (isset($_GET['search'])) {
         if (parameter('search') !== '1') reject(tr('Invalid search parameter.'));
         $doc=new DOMDocument('1.0','UTF-8');
@@ -87,11 +88,13 @@ try {
         header('Content-Type: ' . (strtolower(pathinfo($path,PATHINFO_EXTENSION)) === 'epub' ? 'application/epub+zip' : 'text/plain'));
         header('Content-Disposition: attachment; filename*=UTF-8\'\'' . rawurlencode(basename($path)));
         header('Content-Length: ' . $stat['size']);
+        unlockBookRead();
         if ($_SERVER['REQUEST_METHOD'] !== 'HEAD') fpassthru($handle); fclose($handle); exit;
     }
     $directories = isset($share)?[$share['category']=>resolveDestinationDirectory($share['category'])]:libraryDirectories();
     $mode = parameter('feed',isset($share)?'books':''); $category = parameter('category'); $query = trim(parameter('q'));
     if ($mode !== '' && $mode !== 'books') reject('Not Found',404);
+    if (!isset($share)) requireVisibleFolder($category);
     if ($category !== '' && !isset($directories[$category])) reject(tr('Category not found.'),404);
     $doc = new DOMDocument('1.0','UTF-8'); $doc->formatOutput = true;
     $feed = $doc->createElementNS(ATOM,'feed'); $doc->appendChild($feed);

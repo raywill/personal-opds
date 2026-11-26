@@ -1,6 +1,20 @@
 <?php
 declare(strict_types=1);
 const UI_TRANSLATIONS = array (
+  'No permission.' => '没有权限。',
+  'No permission. Ask the owner for a new link.' => '没有权限。请向分享者索取新链接。',
+  'Only me' => '仅我可见',
+  'Make private' => '设为私密',
+  'Restore normal visibility' => '取消私密',
+  'Private through the parent folder.' => '随上级目录私密',
+  'Library owner access required.' => '只有书库所有者可以更改私密设置。',
+  'Confirm restoring normal visibility.' => '请确认取消私密。',
+  'Confirm revoking affected subscription links.' => '有仍然有效的订阅链接，请确认撤销后再试。',
+  'Private folders cannot be shared.' => '私密目录不能创建订阅分享。',
+  'Visibility changed to Only me.' => '已设为仅我可见。',
+  'Normal visibility restored.' => '已取消私密。',
+  'Restore normal visibility? Members and active parent subscriptions may see this item.' => '取消私密后，有权限的成员和上级目录的订阅者可能看到此内容。继续吗？',
+  'Make this folder private? This revokes %d active subscription link(s).' => '设为私密将撤销 %d 条有效订阅链接。继续吗？',
   'This EPUB entry is missing or too large to display.' => '该 EPUB 内容缺失或过大，无法显示。',
   'Cannot read this EPUB.' => '无法读取此 EPUB。',
   'Cannot read this TXT file.' => '无法读取此 TXT 文件。',

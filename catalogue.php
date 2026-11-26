@@ -41,14 +41,16 @@ function metadata(string $path, string $name): array
         return $result;
     } finally { $zip->close(); }
 }
-function bookPath(string $relative): string
+function bookPath(string $relative, bool $listed = false): string
 {
     if (isset($GLOBALS['shareCategory']) && !str_starts_with($relative,$GLOBALS['shareCategory'].'/')) reject('Book not found.',404);
     $parts = explode('/', $relative);
     if (count($parts) > MAX_CATEGORY_DEPTH + 1) reject(tr('Invalid book path.'), 404);
     $name = array_pop($parts);
     safeFilename($name);
+    requireVisibleBook(implode('/',$parts),$name);
     $directory = $parts ? resolveDestinationDirectory(implode('/', $parts)) : getLibraryRoot();
+    if (!$listed && privacyRules() && !exactLibraryName($directory,$name)) reject('Book not found.',404);
     $path = $directory . '/' . $name;
     if (is_link($path) || !is_file($path) || !is_readable($path)
         || dirname((string) realpath($path)) !== $directory) reject(tr('Book not found.'), 404);
@@ -60,7 +62,8 @@ function books(array $directories, string $requiredCategory = '', bool $requireC
     if (!$lock || !flock($lock, LOCK_EX)) throw new RuntimeException('Index lock unavailable.');
     $temp = null;
     try {
-        $cachePath = CONFIG_DIR . '/cache/index-'.libraryStorageKey().(isset($GLOBALS['shareCategory'])?'-'.hash('sha256',$GLOBALS['shareCategory']):'').'.json';
+        $ownerIndex = canSeePrivateBooks() && privacyRules() ? '-owner' : '';
+        $cachePath = CONFIG_DIR . '/cache/index-'.libraryStorageKey().(isset($GLOBALS['shareCategory'])?'-'.hash('sha256',$GLOBALS['shareCategory']):$ownerIndex).'.json';
         $raw = is_file($cachePath) ? file_get_contents($cachePath, false, null, 0, 16*1024*1024) : '';
         $cache = $raw ? json_decode($raw, true) : [];
         if (!is_array($cache)) $cache = [];
@@ -72,7 +75,7 @@ function books(array $directories, string $requiredCategory = '', bool $requireC
                 if ($name === '' || $name[0] === '.') continue;
                 try { safeFilename($name); } catch (RequestError $e) { continue; }
                 $relative = (string)$category === '' ? $name : (string)$category . '/' . $name;
-                try { $path = bookPath($relative); } catch (RequestError $e) { continue; }
+                try { $path = bookPath($relative,listed:true); } catch (RequestError $e) { continue; }
                 if (++$count > 5000) reject(tr('The library exceeds the current indexing limit.'), 503);
                 $stat = stat($path);
                 if (!$stat || $stat['size'] < 1 || $stat['size'] > MAX_FILE_SIZE) continue;

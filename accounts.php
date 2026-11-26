@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__.'/libraries.php';
+require_once __DIR__.'/privacy.php';
 
 final class AccountStorageError extends RuntimeException {}
 
@@ -142,9 +143,11 @@ function accountBooks(): string
 function createCategory(string $name): string
 {
     if (!validCategory($name)) reject('Enter a valid single-level category name.');
+    requireVisibleFolder($name);
     $root=getLibraryRoot();
+    if (privacyRules() && is_dir($root.'/'.$name) && !exactLibraryName($root,$name)) reject('Directory not found.',404);
     return withLock('category-'.libraryStorageKey(),function () use ($root,$name) {
-        if (!is_dir($root.'/'.$name) && count(libraryDirectories())>=1000) reject('Category limit reached.',507);
+        if (!is_dir($root.'/'.$name) && count(libraryDirectories(includePrivate:true))>=1000) reject('Category limit reached.',507);
         return directoryUnder($root,$name,true);
     });
 }
@@ -298,6 +301,8 @@ function manageShare(string $category,bool $revoke): void
     if (!validCategory($category)) reject('Select a subdirectory to share.');
     $library=currentLibrary()??libraryInfo(personalLibraryId(accountScope()));
     $owner=$library['legacy']??$library['owner'];
+    requireVisibleFolder($category);
+    if (!$revoke && folderPrivate($category)) reject('Private folders cannot be shared.',409);
     stateUpdate('shares',function (&$records) use ($category,$revoke,$owner,$library) {
         foreach ($records as &$old) {
             if (shareLibraryId($old)===$library['id'] && $old['category']===$category && empty($old['revoked'])) $old['revoked']=time();
@@ -316,10 +321,19 @@ function resolveShare(string $key): array
     if (preg_match('/\A([1-9]{8})-([A-Z0-9]{4})\z/iD',$key,$m)) {
         $row=stateRead('shares')[$m[1]]??null;
         if (is_array($row) && hash_equals(shareCode($m[1],$row['salt']),strtoupper($m[2]))) {
+            if (!empty($row['privacy_revoked'])) reject('No permission. Ask the owner for a new link.',403);
             if (!empty($row['revoked']) || $row['expires']<=time() || !($library=libraryInfo(shareLibraryId($row))) || !empty($library['archived']) ||
                 ($library['legacy']!==null && $library['owner']===$library['legacy'] && !activeAccount($library['legacy'])))
                 reject('Subscription unavailable. Ask the owner for a new link.',410);
             setAccountScope($row['owner']); setLibraryScope($library);
+            lockBookRead();
+            // A share may have been revoked while we waited for a privacy change.
+            $row=stateRead('shares')[$m[1]]??null;
+            if (!$row) reject('Subscription unavailable. Ask the owner for a new link.',404);
+            if (!empty($row['privacy_revoked']) || folderPrivate($row['category']))
+                reject('No permission. Ask the owner for a new link.',403);
+            if (!empty($row['revoked']) || $row['expires']<=time())
+                reject('Subscription unavailable. Ask the owner for a new link.',410);
             try { $identity=categoryIdentity(resolveDestinationDirectory($row['category'])); }
             catch (RequestError) { $identity=null; }
             if ($identity!==null && hash_equals($row['identity'],$identity)) return $row;
@@ -327,14 +341,15 @@ function resolveShare(string $key): array
         }
     }
     reserveRateAttempt('share-invalid',30,1500);
-    reject('Subscription not found.',404);
+    reject('Subscription unavailable. Ask the owner for a new link.',404);
 }
 
-function listBookFiles(string $dir): array
+function listBookFiles(string $dir, ?string $visibleCategory=null): array
 {
     $files=[];
     foreach (scandir($dir) ?: [] as $name) {
         try { safeFilename($name); } catch (RequestError) { continue; }
+        if ($visibleCategory!==null && !canSeePrivateBooks() && isset(privacyRules()[bookRuleKey($visibleCategory,$name)])) continue;
         $path=$dir.'/'.$name;
         if (is_link($path)||!is_file($path)||realpath($path)!==$path) continue;
         $size=filesize($path);
@@ -347,7 +362,7 @@ function enforceAccountQuota(int $incoming, ?array &$quota=null): void
     if ($quota===null) {
         $account=currentLibrary()??activeAccount(accountScope())??throw new RequestError('Account disabled.',401);
         $quota=['bytes'=>0,'files'=>0,'max_bytes'=>$account['quota_bytes']??5*1024*1024*1024,'max_files'=>$account['quota_files']??5000];
-        foreach ([getLibraryRoot(),...array_values(libraryDirectories())] as $dir) {
+        foreach ([getLibraryRoot(),...array_values(libraryDirectories(includePrivate:true))] as $dir) {
             $items=listBookFiles($dir); $quota['bytes']+=array_sum($items); $quota['files']+=count($items);
         }
     }
@@ -356,7 +371,9 @@ function enforceAccountQuota(int $incoming, ?array &$quota=null): void
 }
 function managedBook(string $category,string $name): string
 {
-    $dir=resolveDestinationDirectory($category); safeFilename($name);
+    safeFilename($name); requireVisibleBook($category,$name);
+    $dir=resolveDestinationDirectory($category);
+    if (privacyRules() && !exactLibraryName($dir,$name)) reject('Book not found.',404);
     $path=$dir.'/'.$name;
     clearstatcache(true,$path);
     if (is_link($path)||!is_file($path)||realpath($path)!==$path) reject('Book not found.',404);
@@ -364,10 +381,13 @@ function managedBook(string $category,string $name): string
 }
 function manageBook(string $action,string $category,string $name,string $to): void
 {
-    withLock('books-'.libraryStorageKey(),fn()=>uploadCommit(function () use ($action,$category,$name,$to) {
+    withBookWrite(fn()=>uploadCommit(function () use ($action,$category,$name,$to) {
         $source=managedBook($category,$name);
+        $rules=privacyRules(); $oldKey=bookRuleKey($category,$name);
         if ($action==='delete') {
             if (!unlink($source)) reject('Could not delete the book.',409);
+            // Leave the rule in place if the cleanup cannot be persisted.
+            if (isset($rules[$oldKey])) { unset($rules[$oldKey]); storePrivacyRules($rules); }
             return;
         }
         if ($action==='rename') {
@@ -377,20 +397,27 @@ function manageBook(string $action,string $category,string $name,string $to): vo
             if (trim($stem)==='' || trim($stem)!==$stem) reject('Enter a valid book name.');
             $newName=safeFilename($stem.$suffix);
             if ($newName===$name) return;
-            $target=dirname($source).'/'.$newName;
-            if (!@link($source,$target)) {
-                clearstatcache(true,$target);
-                if (file_exists($target) || is_link($target)) reject('A book with this name already exists.',409);
-                reject('Could not rename the book.',409);
-            }
+            $targetFolder=$category;
         } elseif ($action==='move') {
             if ($category===$to) reject('Choose a different destination.');
-            $target=resolveDestinationDirectory($to).'/'.$name;
-            if (!@link($source,$target)) reject('Could not move; check for an existing book with the same name.',409);
+            $newName=$name; $targetFolder=$to;
         } else reject('Unknown action.');
+        requireVisibleBook($targetFolder,$newName);
+        $target=resolveDestinationDirectory($targetFolder).'/'.$newName;
+        if (file_exists($target)||is_link($target)) reject('A book with this name already exists.',409);
+        $newKey=bookRuleKey($targetFolder,$newName);
+        $keepPrivate=isset($rules[$oldKey]) || (folderPrivate($category,$rules) && !folderPrivate($targetFolder,$rules));
+        // Protect the new path before linking it; do not unprotect the old
+        // path until it has stopped resolving. An interrupted move fails closed.
+        if ($keepPrivate && !isset($rules[$newKey])) {
+            $rules[$newKey]=true;
+            storePrivacyRules($rules);
+        }
+        if (!@link($source,$target)) reject($action==='move'?'Could not move; check for an existing book with the same name.':'Could not rename the book.',409);
         if (!@unlink($source)) {
             @unlink($target);
             reject('Could not remove the original book.',409);
         }
+        if (isset($rules[$oldKey])) { unset($rules[$oldKey]); storePrivacyRules($rules); }
     }));
 }

@@ -3,7 +3,7 @@ declare(strict_types=1);
 if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 $root = dirname(__DIR__);
 $payload = [];
-foreach (['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','agent-skill.php','library-controls.php','catalogue.php','preview.php','reader-content.php','reader.js','reader.css','admin.php','LICENSE','NOTICE'] as $name) {
+foreach (['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','privacy.php','agent-skill.php','library-controls.php','catalogue.php','preview.php','reader-content.php','reader.js','reader.css','admin.php','LICENSE','NOTICE'] as $name) {
     $content = file_get_contents($root . '/' . $name);
     if ($content === false) throw new RuntimeException('Missing source: ' . $name);
     $payload[$name] = ['sha256'=>hash('sha256',$content),'content'=>base64_encode($content)];

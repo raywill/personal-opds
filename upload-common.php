@@ -145,6 +145,7 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName,?ar
     } else {
         validateTxt($tmpPath);
     }
+    requireVisibleBook($directoryName,$filename);
     $destination = resolveDestinationDirectory($directoryName);
     $target = $destination . DIRECTORY_SEPARATOR . $filename;
     if (file_exists($target) || is_link($target))
@@ -288,7 +289,7 @@ function processUpload(bool $singleFile, bool $bearer, array $scope=[], string $
         $directory=$scope['dir'];
     }
     reserveRateAttempt('upload', 120, 600);
-    return withLock('books-'.libraryStorageKey(),function () use ($directory,$singleFile,$bearer,$fixed,$scope) {
+    return withBookWrite(function () use ($directory,$singleFile,$bearer,$fixed,$scope) {
         $slot=acquireUploadSlot();
         try { return receiveUploads($directory,$singleFile,$bearer&&!$fixed&&!empty($scope['mkdir'])); }
         finally { fclose($slot); }
