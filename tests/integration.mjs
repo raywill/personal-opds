@@ -507,6 +507,8 @@ try{
             assert(network.requests.some(r=>Number(r.range?.match(/^bytes=(\d+)-/)?.[1])>1048576),'A separate request for the distant image was made');
           };
           await waitForImage();
+          assert.equal(network.requests.filter(r=>Number(r.range?.match(/^bytes=(\d+)-/)?.[1])<1048576).length,1,
+            'Opening chapter one did not start a background text scan');
           await bench.locator('#contents').click();
           await bench.locator('#chapters').getByRole('button',{name:'Chapter 2 of 2'}).click();
           await bench.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor({timeout:5000});
@@ -556,17 +558,26 @@ try{
       try{
         await real.goto(new URL('preview.php?library=p-alice&book='+encodeURIComponent(name),base).href);
         await real.waitForFunction(()=>document.querySelector('#book')?.innerText.replace(/\s/g,'').length>120);
+        await real.locator('#continue').waitFor();
         const firstBytes=network.requests.reduce((n,r)=>n+r.bytes,0);
-        assert.equal(firstBytes,65536,'A real readable paragraph appears while the rest of the book is blocked');
-        release();
+        assert.equal(firstBytes,65536,'A complete readable first chapter appears while later records are held');
+        const first=await real.locator('#book').innerText();
+        await real.locator('#continue').click();
+        await real.waitForFunction(previous=>document.querySelector('#book').innerText!==previous,first);
+        await delay(250);
+        assert.equal(network.requests.length,1,'Reading the first two chapters did not request the late directory');
         await real.locator('#contents').click();
+        for(let i=0;i<80&&network.requests.length===1;i++)await delay(25);
+        assert(network.requests.length>1,'The directory begins reading only after the drawer opens');
+        assert.equal(network.requests.slice(1).reduce((n,r)=>n+r.bytes,0),0);
+        release();
         const menu=real.locator('#chapters').getByRole('button');
         await menu.first().waitFor();assert(await menu.count()>2);
         assert(network.requests.length<=5,'Legacy chapter indexing should coalesce contiguous text');
-        console.log('Real MOBI initial reading: '+JSON.stringify({fileBytes:bytes.length,firstBytes,indexRequests:network.requests.length}));
+        console.log('Real MOBI initial reading: '+JSON.stringify({fileBytes:bytes.length,firstBytes,initialRequests:1,indexRequests:network.requests.length}));
       }finally{release?.();mobiNetwork=null;await real.close();}
       assert.equal((await ui({action:'delete',file:name})).status,303);
-      pass('real legacy book renders first-page prose before the blocked index and merges contiguous scans');
+      pass('real legacy book opens and advances in one range; only opening the directory starts the coalesced index read');
     }
     // Revoke access to the browser's next chunk while it has the source.
     await ctx.clearCookies();

@@ -168,9 +168,10 @@ The built-in modules support EPUB and TXT for upload, download and web reading.
 Upload, index, download and read standard unencrypted MOBI and KF8 books in the
 web reader. It keeps the original file, without conversion or decryption. The
 browser reads authenticated byte ranges and parses them in an isolated worker.
-Legacy MOBI can show a first excerpt while its chapter index is built with merged
-reads of contiguous text; KF8 reads
-the text records it needs, and embedded images are fetched separately. A server
+Legacy MOBI reads through the next chapter boundary rather than scanning the
+whole book on open. Both legacy MOBI and KF8 load the table of contents only
+when the drawer is opened. The total number of legacy chapters may be unknown
+until the end is scanned. Embedded images are fetched separately. A server
 or proxy that ignores Range falls back to loading the original once. Keep the
 `Range` and `Content-Range` headers intact for progressive reading. Existing
 reading permissions still apply. Fixed-layout fidelity, custom styles, embedded
@@ -185,7 +186,7 @@ php tools/build.php
 PHP_BINARY=php node tests/integration.mjs
 ```
 
-The Node 20+ integration test uses OpenSSL CLI, a temporary private data directory, and a trusted local HTTPS proxy. Environment variables `PLAYWRIGHT_MODULE` and `CHROME_BIN` additionally enable desktop/mobile browser tests. Set `OPDS_TEST_WEBKIT=1` with Playwright WebKit installed to also test the chapter drawer with an iPhone-sized touch profile. Set `OPDS_KF8_FIXTURE` to a known DRM-free KF8 or hybrid MOBI with multiple indexed chapters to also test real-file range reading. Set `OPDS_MOBI_PREFIX_FIXTURE` to a legacy MOBI with a long opening paragraph and chapter index to verify that first-page prose does not wait for indexing. Set `NGINX_BIN` to run the emitted rewrite rules in a temporary Nginx instance. Optionally set `SCREENSHOT_DIR`, `RBAC_SCREENSHOT_DIR`, or `ADVANCED_SCREENSHOT_DIR` to a writable directory for UI screenshots. Set `OPDS_LEGACY_SOURCE` to an unpacked copy of the previous release to test creating a share on the actual old code, then upgrading and using the exact same URL. Test with a physical e-reader before rolling the new URL out to other people. Never deploy the test router.
+The Node 20+ integration test uses OpenSSL CLI, a temporary private data directory, and a trusted local HTTPS proxy. Environment variables `PLAYWRIGHT_MODULE` and `CHROME_BIN` additionally enable desktop/mobile browser tests. Set `OPDS_TEST_WEBKIT=1` with Playwright WebKit installed to also test the chapter drawer with an iPhone-sized touch profile. Set `OPDS_KF8_FIXTURE` to a known DRM-free KF8 or hybrid MOBI with multiple indexed chapters to also test real-file range reading. Set `OPDS_MOBI_PREFIX_FIXTURE` to a legacy MOBI with a long opening paragraph and chapter index to verify that initial reading does not request the full index. Set `NGINX_BIN` to run the emitted rewrite rules in a temporary Nginx instance. Optionally set `SCREENSHOT_DIR`, `RBAC_SCREENSHOT_DIR`, or `ADVANCED_SCREENSHOT_DIR` to a writable directory for UI screenshots. Set `OPDS_LEGACY_SOURCE` to an unpacked copy of the previous release to test creating a share on the actual old code, then upgrading and using the exact same URL. Test with a physical e-reader before rolling the new URL out to other people. Never deploy the test router.
 
 Apache License 2.0.
 

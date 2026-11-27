@@ -131,7 +131,7 @@ try {
         'profile'=>hash_hmac('sha256',$viewer,SHARE_KEY),'book'=>$version,
         'loading'=>tr('Opening book…'),'failed'=>tr('Could not load this part. Try again.'),
         'unsupported'=>tr('This book could not be decoded for online reading. You can still download the original.'),
-        'chapter'=>tr('Next chapter'),'part'=>tr('Chapter %d of %d'),
+        'chapter'=>tr('Next chapter'),'part'=>tr('Chapter %d of %d'),'partUnknown'=>tr('Chapter %d'),
         'signedOut'=>tr('Sign in again.'),'denied'=>tr('Library access denied.'),
         'changed'=>tr('This book changed. Reopen it from the library.'),
     ];

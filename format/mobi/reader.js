@@ -15,12 +15,12 @@ export async function openReader(cfg){
             const timer=setTimeout(()=>{
                 if(action!=='image'){stop();return;}
                 pending.delete(id);reject(new Error(cfg.failed));
-            },action==='open'?180000:60000);
+            },action==='image'?60000:180000);
             pending.set(id,{resolve,reject,timer,onPreview});
             worker.postMessage({id,action,value});
         });
     }
-    async function ensure(onPreview,previewMode){
+    async function ensure(){
         if(!opening){
             const path=new URL('./worker.js',import.meta.url);
             path.search=new URL(import.meta.url).search;
@@ -38,7 +38,7 @@ export async function openReader(cfg){
                     item.reject(new Error(message||cfg.failed));
                 }
             };
-            opening=call('open',{url:new URL(cfg.url,location.href).href,preview:previewMode},onPreview)
+            opening=call('open',new URL(cfg.url,location.href).href)
                 .catch(error=>{stop();throw error;});
         }
         return opening;
@@ -90,9 +90,11 @@ export async function openReader(cfg){
     }
     addEventListener('pagehide',event=>{if(!event.persisted){stop();cleanup();}});
     return {async read(query,preview){
-        await ensure(preview?html=>preview.paint({mount:container=>mount(container,html,false)}):null,preview?.mode);
+        await ensure();
         if(query.toc)return {toc:await call('toc')};
-        const data=await call('part',query.part);
-        return {count:data.count,mount:container=>mount(container,data.html,data.imageToken)};
+        if(query.locate)return {location:await call('locate',query.locate)};
+        const data=await call('part',{part:query.part,fragment:query.fragment??'',preview:preview?.mode==='partial'},
+            preview?html=>preview.paint({mount:container=>mount(container,html,false)}):null);
+        return {count:data.count,hasNext:data.hasNext,mount:container=>mount(container,data.html,data.imageToken)};
     }};
 }

@@ -572,7 +572,7 @@ export class MOBI extends PDB {
             }
         }
         await this.#setup()
-        return isKF8 ? new KF8(this).init(readingOnly) : new MOBI6(this).init(onPrefix)
+        return isKF8 ? new KF8(this).init(readingOnly) : readingOnly ? new LazyMOBI6(this) : new MOBI6(this).init(onPrefix)
     }
     #getHeaders(buf) {
         const palmdoc = getStruct(PALMDOC_HEADER, buf)
@@ -958,6 +958,127 @@ class MOBI6 {
     }
 }
 
+// Reflowable reader: advance only as far as the requested chapter. A MOBI6
+// guide may point to the end of the book, so do not follow it during open.
+class LazyMOBI6 {
+    legacy = true
+    #records = []
+    #starts = [0]
+    #length = 0
+    #tail = ''
+    #finished = false
+    #links = new Map()
+    #toc = null
+    constructor(mobi) { this.mobi = mobi }
+    async #advance(coalesce = false) {
+        if (this.#finished) return
+        const raw = await this.mobi.loadText(this.#records.length, coalesce)
+        const offset = this.#length - this.#tail.length
+        this.#length += raw.byteLength
+        guard(this.#length <= MAX_RAW)
+        this.#records.push({start:this.#length-raw.byteLength,raw})
+        const text = this.#tail + rawBytesToString(raw)
+        for (const m of text.matchAll(mbpPagebreakRegex)) {
+            const at = offset + m.index
+            if (at > this.#starts.at(-1) && this.#starts.length < 2000) this.#starts.push(at)
+        }
+        // Allow ordinary pagebreak tags to cross a compression-record boundary.
+        this.#tail = text.slice(-512)
+        if (this.#records.length === this.mobi.headers.palmdoc.numTextRecords) {
+            this.#finished = true
+            if (this.#starts.at(-1) === this.#length) this.#starts.pop()
+        }
+    }
+    #raw(start,end) {
+        guard(end >= start && end-start <= MAX_CHAPTER)
+        const raw=new Uint8Array(end-start)
+        for (const record of this.#records) {
+            const limit=record.start+record.raw.length
+            if (limit <= start) continue
+            if (record.start >= end) break
+            const from=Math.max(start,record.start), to=Math.min(end,limit)
+            raw.set(record.raw.subarray(from-record.start,to-record.start),from-start)
+        }
+        return raw
+    }
+    #remember(href) {
+        if (!/^filepos:\d{1,12}$/i.test(href)) return null
+        const digits=href.slice(8), offset=Number(digits)
+        if (offset >= MAX_RAW) return null
+        if (this.#links.size < 8192 || this.#links.has(digits)) this.#links.set(digits,offset)
+        return [digits,offset]
+    }
+    #markup(start,end,fragment) {
+        if (/^filepos\d{1,12}$/.test(fragment)) this.#remember('filepos:'+fragment.slice(7))
+        const raw=this.#raw(start,end)
+        const points=[...this.#links].filter(([,offset])=>offset>=start&&offset<end)
+            .sort((a,b)=>a[1]-b[1])
+        const inserts=points.map(([digits,offset])=>[offset-start,this.mobi.encode('<a id="filepos'+digits+'"></a>')])
+        const length=raw.length+inserts.reduce((n,[,data])=>n+data.length,0)
+        guard(length<=MAX_CHAPTER)
+        if (!inserts.length) return this.mobi.decode(raw).replaceAll(mbpPagebreakRegex,'')
+        const stitched=new Uint8Array(length)
+        let previous=0, written=0
+        for (const [at,data] of inserts) {
+            stitched.set(raw.subarray(previous,at),written);written+=at-previous
+            stitched.set(data,written);written+=data.length;previous=at
+        }
+        stitched.set(raw.subarray(previous),written)
+        return this.mobi.decode(stitched).replaceAll(mbpPagebreakRegex,'')
+    }
+    async chapter(index,fragment='',onExcerpt) {
+        guard(Number.isInteger(index)&&index>=0&&index<2000)
+        while (!this.#finished && this.#starts.length<=index+1) {
+            await this.#advance(index > 8 && this.#starts.length <= index)
+            if (onExcerpt && index===0 && this.#starts.length===1 && this.#records.length<=16 && !this.#finished) {
+                const raw=this.#raw(0,Math.min(this.#length,64*1024))
+                const excerpt=this.mobi.decode(raw).replace(/<[^<>]*$|&(?:#?[a-z0-9]*)$|\uFFFD+$/gi,'')
+                if(await onExcerpt(excerpt))onExcerpt=null
+            }
+            if (this.#starts[index]!==undefined) guard(this.#length - this.#starts[index] <= MAX_CHAPTER ||
+                this.#starts[index+1]!==undefined)
+        }
+        const start=this.#starts[index]
+        guard(start!==undefined)
+        const next=this.#starts[index+1], end=next??this.#length
+        return {raw:this.#markup(start,end,fragment),count:this.#finished?this.#starts.length:null,hasNext:next!==undefined}
+    }
+    #sectionAt(offset) {
+        let lo=0, hi=this.#starts.length
+        while(lo+1<hi){const mid=(lo+hi)>>1;if(this.#starts[mid]<=offset)lo=mid;else hi=mid}
+        return lo
+    }
+    async locate(href) {
+        const parsed=this.#remember(href)
+        if(!parsed)return null
+        const [digits,offset]=parsed
+        // A tag crossing the last record can introduce a boundary just before
+        // the target. Read enough look-ahead to settle that boundary.
+        while(!this.#finished&&this.#length<=offset+512)await this.#advance(true)
+        return offset<this.#length?[this.#sectionAt(offset),'filepos'+digits]:null
+    }
+    async contents() {
+        if (this.#toc) return this.#toc
+        const first=await this.chapter(0)
+        const parse=raw=>new DOMParser().parseFromString(raw,'text/html')
+        const guide=[...parse(first.raw).getElementsByTagName('reference')]
+            .find(ref=>ref.getAttribute('type')?.split(/\s+/).includes('toc'))
+        const where=guide?await this.locate('filepos:'+guide.getAttribute('filepos')):null
+        if(where){
+            const {raw}=await this.chapter(where[0])
+            const rows=[]
+            for (const a of parse(raw).querySelectorAll('a[filepos]')) {
+                const target=await this.locate('filepos:'+a.getAttribute('filepos'))
+                if(target)rows.push([...target,(a.textContent??'').trim().slice(0,512)])
+                if(rows.length===2000)break
+            }
+            if(rows.length)return this.#toc=rows
+        }
+        while(!this.#finished)await this.#advance(true)
+        return this.#toc=this.#starts.map((_,i)=>[i,'',''])
+    }
+}
+
 // handlers for `kindle:` uris
 const kindleResourceRegex = /kindle:(flow|embed):(\w+)(?:\?mime=(\w+\/[-+.\w]+))?/
 const kindlePosRegex = /kindle:pos:fid:(\w+):off:(\w+)/
@@ -1097,21 +1218,7 @@ class KF8 {
                 pageSpread: pageSpreads.get(index),
             }) : ({ linear: 'no' }))
 
-        try {
-            const ncx = await this.mobi.getNCX()
-            const map = ({ label, pos, children }) => {
-                const [fid, off] = pos
-                const href = makePosURI(fid, off)
-                const arr = this.#fragmentOffsets.get(fid)
-                if (arr) arr.push(off)
-                else this.#fragmentOffsets.set(fid, [off])
-                return { label: unescapeHTML(label), href, subitems: children?.map(map) }
-            }
-            this.toc = ncx?.map(map)
-            if (!readingOnly) this.landmarks = await this.getGuide()
-        } catch(e) {
-            console.warn(e)
-        }
+        if (!readingOnly) { await this.loadContents(); this.landmarks = await this.getGuide().catch(()=>undefined) }
 
         const exth = this.mobi.headers.exth ?? {}
         this.dir = exth.pageProgressionDirection
@@ -1125,6 +1232,25 @@ class KF8 {
         this.metadata = this.mobi.getMetadata()
         this.getCover = this.mobi.getCover.bind(this.mobi)
         return this
+    }
+    async loadContents() {
+        if(this.contentsLoaded)return
+        try {
+            const ncx = await this.mobi.getNCX()
+            const map = ({ label, pos, children }) => {
+                const [fid, off] = pos
+                const href = makePosURI(fid, off)
+                const arr = this.#fragmentOffsets.get(fid)
+                if (arr) arr.push(off)
+                else this.#fragmentOffsets.set(fid, [off])
+                return { label: unescapeHTML(label), href, subitems: children?.map(map) }
+            }
+            this.toc = ncx?.map(map)
+        } catch(e) {
+            console.warn(e)
+        }
+
+        this.contentsLoaded=true
     }
     // is this really the only way of getting to RESC, PAGE, etc.?
     async getResourcesByMagic(keys) {

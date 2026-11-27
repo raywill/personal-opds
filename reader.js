@@ -274,7 +274,7 @@
  let part=0,data=null,busy=false,requestNo=0,failed=null,saveTimer=0;
  let pendingLocation=null,selectedLocation=null;
  const prevPart=()=>part>0?part-1:undefined;
- const nextPart=()=>data&&part+1<data.count?part+1:undefined;
+ const nextPart=()=>data&&(data.hasNext??(part+1<data.count))?part+1:undefined;
  function position(){
      if(data&&!busy&&!failed)write(posKey,{part,ratio:scrollRatio(),fragment:currentSelection()?.fragment});
  }
@@ -282,8 +282,11 @@
  function displayProgress(){
      if(!data)return;
      const offset=limit()>0?scrollRatio():(nextPart()===undefined?1:0);
-     const percent=new Intl.NumberFormat(document.documentElement.lang,{style:'percent'}).format(clamp((part+offset)/data.count));
-     progress.textContent=format(cfg.part,part+1,data.count)+' · '+percent;
+     if(data.count===null)progress.textContent=format(cfg.partUnknown,part+1);
+     else {
+         const percent=new Intl.NumberFormat(document.documentElement.lang,{style:'percent'}).format(clamp((part+offset)/data.count));
+         progress.textContent=format(cfg.part,part+1,data.count)+' · '+percent;
+     }
      more.hidden=busy||!!failed||nextPart()===undefined;
  }
  function jumpAnchor(fragment){
@@ -326,7 +329,7 @@
                  paintedPrefix=true;
              }
          }:null;
-         const result=await chapterSource({part:target},preview);
+         const result=await chapterSource(cfg.client?{part:target,fragment}:{part:target},preview);
          if(seq!==requestNo)return;
          const prefixTop=paintedPrefix&&ratio===0?vp.scrollTop:null;
          // Only the active chapter adopts its validated local raster blobs.
@@ -366,6 +369,22 @@
  vp.addEventListener('load',displayProgress,true);
  window.addEventListener('resize',displayProgress);
  vp.addEventListener('click',event=>{
+     const deferred=event.target.closest('a[data-mobi-href]');
+     if(deferred&&cfg.client){
+         event.preventDefault();
+         if(busy)return;
+         const href=deferred.dataset.mobiHref, seq=requestNo;
+         busy=true;book.setAttribute('aria-busy','true');$('reader-message').hidden=false;status.textContent=cfg.loading;
+         chapterSource({locate:href}).then(({location})=>{
+             if(seq!==requestNo)return;
+             if(!location)throw new Error(cfg.failed);
+             load(location[0],0,location[1]);
+         }).catch(error=>{
+             if(seq!==requestNo)return;
+             busy=false;book.setAttribute('aria-busy','false');status.textContent=error.message||cfg.failed;
+         });
+         return;
+     }
      const link=event.target.closest('a[data-part]');
      if(link){
          event.preventDefault();
