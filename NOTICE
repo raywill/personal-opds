@@ -2,3 +2,6 @@ personal-opds
 Copyright 2026 personal-opds contributors
 
 Licensed under the Apache License, Version 2.0.
+
+MOBI reader includes Foliate-js (MIT) and LinkeDOM (ISC).
+See the license and dependency notices in format/mobi/.

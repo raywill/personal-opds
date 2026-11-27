@@ -28,7 +28,7 @@ function readerJson(array $data,int $status=200): never {
     exit;
 }
 $back='up.php'; $error=''; $bookName=''; $page=[];
-$api=isset($_GET['part'])||isset($_GET['asset'])||isset($_GET['toc']);
+$api=isset($_GET['part'])||isset($_GET['asset'])||isset($_GET['toc'])||isset($_GET['source'])||isset($_GET['check']);
 try {
     requireUploadHttps();
     if ($_SERVER['REQUEST_METHOD']!=='GET') reject('Method not allowed.',405);
@@ -46,16 +46,42 @@ try {
     $back='up.php?'.http_build_query($query,'','&',PHP_QUERY_RFC3986);
     $path=managedBook($dir,$bookName);
     $stat=stat($path);
-    if (!$stat||$stat['size']>MAX_FILE_SIZE) reject('This file is too large for online reading.',422);
+    if (!$stat||$stat['size']<1||$stat['size']>MAX_FILE_SIZE) reject('This file is too large for online reading.',422);
     $version=hash_hmac('sha256',implode(':',[$id,$stat['dev'],$stat['ino'],$stat['size'],$stat['mtime']]),SHARE_KEY);
     $url='preview.php?'.http_build_query($query+['book'=>$bookName],'','&',PHP_QUERY_RFC3986);
     $format=bookFormat($bookName);
     if (!$format['enabled'] || $format['reader']===null) reject('Online reading is unavailable for this format.',415);
+    $client=$format['reader_client'];
+    if ($client!==null) {
+        // A client renderer needs the original bytes, not just permission to browse.
+        if (!in_array('download',libraryPermissions($row,$viewer),true)) reject('Library access denied.',403);
+    }
     $reader=BookFormatRegistry::get()->handler($format);
     if ($api) {
         if (!hash_equals($version,readerParam('version'))) reject('This book changed. Reopen it from the library.',409);
-        $operations=(int)isset($_GET['part'])+(int)isset($_GET['asset'])+(int)isset($_GET['toc']);
+        $operations=(int)isset($_GET['part'])+(int)isset($_GET['asset'])+(int)isset($_GET['toc'])+(int)isset($_GET['source'])+(int)isset($_GET['check']);
         if ($operations!==1) reject('Invalid input.',400);
+        if ($client!==null) {
+            if (isset($_GET['check'])) readerJson(['success'=>true]);
+            if (!isset($_GET['source'])) reject('Book not found.',404);
+            $reader->validate($path);
+            $file=fopen($path,'rb');
+            if (!$file) reject('Book not found.',404);
+            $opened=fstat($file);
+            foreach (['dev','ino','size','mtime'] as $field) {
+                if (!$opened||$opened[$field]!==$stat[$field]) {
+                    fclose($file);
+                    reject('This book changed. Reopen it from the library.',409);
+                }
+            }
+            $length=$opened['size'];
+            header('Content-Type: application/octet-stream');
+            header('Content-Disposition: attachment');
+            header('Content-Length: '.$length);
+            unlockBookRead();
+            try { fpassthru($file); } finally { fclose($file); }
+            exit;
+        }
         if ($format['reader']==='bytes' && $reader instanceof ByteBookReader) {
             if (!isset($_GET['part'])) reject('Book not found.',404);
             readerJson($reader->chunk($path,readerNumber('part'),readerParam('encoding'),readerParam('direction')));
@@ -73,10 +99,17 @@ try {
         $chapter=$reader->chapter($path,readerNumber('part'));
         readerJson(['html'=>readerMarkup($chapter->body,$chapter,$url.'&version='.$version),'count'=>$chapter->count]);
     }
+    $clientRevision=0;
+    if ($client!==null) {
+        foreach (glob(dirname(__DIR__.'/'.$client).'/*.js') ?: [] as $asset)
+            $clientRevision=max($clientRevision,(int)filemtime($asset));
+        header("Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    }
     $page=[
-        'reader'=>$format['reader'],'url'=>$url.'&version='.$version,
+        'reader'=>$format['reader'],'client'=>$client===null?null:'./'.$client.'?v='.$clientRevision,'url'=>$url.'&version='.$version,
         'profile'=>hash_hmac('sha256',$viewer,SHARE_KEY),'book'=>$version,
         'loading'=>tr('Opening book…'),'failed'=>tr('Could not load this part. Try again.'),
+        'unsupported'=>tr('This book could not be decoded for online reading. You can still download the original.'),
         'chapter'=>tr('Next chapter'),'part'=>tr('Chapter %d of %d'),
     ];
 } catch (Throwable $e) {
@@ -107,7 +140,7 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
 <?php if ($error): ?>
  <main class="reader-error" role="alert"><?=re($error)?></main>
 <?php else: ?>
-<div id="reader" data-reader="<?=re($page['reader'])?>" data-config="<?=re(json_encode($page,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE))?>">
+<div id="reader" data-reader="<?=re($page['reader'])?>" data-config="<?=re(json_encode($page,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES))?>">
  <div class="reader-toolbar" id="toolbar" hidden>
   <button id="settings" type="button"><?=tr_html('Reading settings')?></button>
  </div>

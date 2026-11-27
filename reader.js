@@ -258,6 +258,19 @@
      openText(validPart(saved.part)?saved.part:0,{ratio:clamp(saved.ratio)});
  }
  if(byteReader){startTextReader();return;}
+ let chapterClient=null;
+ async function chapterSource(query){
+     if(!cfg.client)return get(query);
+     const permission=await get({check:1});
+     if(permission.success!==true)throw new Error(cfg.failed);
+     if(!chapterClient){
+         chapterClient=import(cfg.client).then(module=>module.openReader(cfg)).catch(error=>{
+             chapterClient=null;
+             throw error;
+         });
+     }
+     return (await chapterClient).read(query);
+ }
  let part=0,data=null,busy=false,requestNo=0,failed=null,saveTimer=0;
  let pendingLocation=null,selectedLocation=null;
  const prevPart=()=>part>0?part-1:undefined;
@@ -301,10 +314,11 @@
      progress.textContent='';
      // Keep the old chapter on screen until the requested one returns.
      try {
-         const result=await get({part:target});
+         const result=await chapterSource({part:target});
          if(seq!==requestNo)return;
-         // Server output is rebuilt using a strict HTML and attribute allowlist.
-         book.innerHTML=result.html;
+         // Only the active chapter adopts its validated local raster blobs.
+         if(typeof result.mount==='function')result.mount(book);
+         else book.innerHTML=result.html;
          part=target;
          data=result;
          $('reader-message').hidden=true;status.textContent='';
@@ -428,7 +442,7 @@
      if(tocRows.length){highlightCurrentChapter();return;}
      const message=document.createElement('p');message.textContent=cfg.loading;chapters.replaceChildren(message);
      try{
-         tocRequest??=get({toc:1}).then(result=>result.toc).finally(()=>{tocRequest=null;});
+         tocRequest??=chapterSource({toc:1}).then(result=>result.toc).finally(()=>{tocRequest=null;});
          tocCache??=await tocRequest;
          if(!toc.open||closingToc)return;
          chapters.replaceChildren();

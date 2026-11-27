@@ -638,7 +638,7 @@ if ($preview) {
     $read='preview.php?'.http_build_query(['library'=>$library['id'],'dir'=>$dir,'book'=>$name],'','&',PHP_QUERY_RFC3986);
     $bookPrivate=isset(privacyRules()[bookRuleKey($dir,$name)]);
     $douban=bookDoubanUrl($bookDirectory.'/'.$name);
-    $format=bookFormat($name); $canRead=$format['enabled']&&$format['reader']!==null; $title=pathinfo($name,PATHINFO_FILENAME); ?>
+    $format=bookFormat($name); $canRead=$format['enabled']&&$format['reader']!==null&&($format['reader_client']===null||isset($permissions['download'])); $title=pathinfo($name,PATHINFO_FILENAME); ?>
   <li class="book">
    <span aria-hidden="true" class="book-icon <?=h($format['badge'])?>"><?=h($format['label'])?></span>
    <div class="book-info"><div class="book-title-line"><?php if ($canRead): ?><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><?php else: ?><span class="book-name" title="<?=h($name)?>"><?=h($title)?></span><?php endif; ?><?php if ($currentPrivate || $bookPrivate) echo privacyBadge($currentPrivate); ?></div><small><span><?=h(fileSizeLabel($size))?></span><?php if ($douban!==null): ?><a class="book-source" href="<?=h($douban)?>" target="_blank" rel="noopener noreferrer" aria-label="<?=tr_html('Douban book details (opens in a new tab)')?>" title="<?=tr_html('Douban')?>"><span class="book-source-icon" aria-hidden="true">豆</span></a><?php endif; ?></small></div>

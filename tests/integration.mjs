@@ -94,7 +94,11 @@ function upload(token,dir,files,url='api.php',fields={}){
  return request(url,{method:'POST',headers,body:Buffer.concat(chunks)});
 }
 function sampleMobi({drm=0,version=6}={}){
- const text=Buffer.from('<html><body>Personal OPDS format fixture.</body></html>');
+ const text=Buffer.from('<html><body><h1>First MOBI chapter</h1><img recindex="1" alt="Included MOBI image">'+
+   '<img src="https://not-a-reader-resource.invalid/beacon"><script>document.title="NOT SAFE"</script>'+
+   '<a href="https://not-a-reader-resource.invalid/link">External link</a>'+
+   '<mbp:pagebreak/><h1 id="second">Second MOBI chapter</h1><p>Personal OPDS format fixture.</p></body></html>');
+ const raster=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4xkAAAAASUVORK5CYII=','base64');
  const title=Buffer.from('MOBI fixture'), author=Buffer.from('Personal OPDS');
  const exth=Buffer.alloc(20+author.length);exth.write('EXTH');exth.writeUInt32BE(exth.length,4);
  exth.writeUInt32BE(1,8);exth.writeUInt32BE(100,12);exth.writeUInt32BE(8+author.length,16);author.copy(exth,20);
@@ -102,10 +106,12 @@ function sampleMobi({drm=0,version=6}={}){
  header.writeUInt16BE(1,8);header.writeUInt16BE(4096,10);header.writeUInt16BE(drm,12);
  header.write('MOBI',16);header.writeUInt32BE(232,20);header.writeUInt32BE(2,24);header.writeUInt32BE(65001,28);
  header.writeUInt32BE(version,36);header.writeUInt32BE(header.length+exth.length,0x54);header.writeUInt32BE(title.length,0x58);
- header.writeUInt32BE(0x40,0x80);header.writeUInt32BE(0xffffffff,0xa8);
- const pdb=Buffer.alloc(96);pdb.write('BOOKMOBI',60);pdb.writeUInt16BE(2,76);
- pdb.writeUInt32BE(pdb.length,78);pdb.writeUInt32BE(pdb.length+header.length+exth.length+title.length,86);
- return Buffer.concat([pdb,header,exth,title,text]);
+ header.writeUInt32BE(2,108);header.writeUInt32BE(0x40,0x80);header.writeUInt32BE(0xffffffff,0xa8);
+ header.writeUInt32BE(0xffffffff,244);
+ const pdb=Buffer.alloc(104);pdb.write('BOOKMOBI',60);pdb.writeUInt16BE(3,76);
+ const start=pdb.length+header.length+exth.length+title.length;
+ pdb.writeUInt32BE(pdb.length,78);pdb.writeUInt32BE(start,86);pdb.writeUInt32BE(start+text.length,94);
+ return Buffer.concat([pdb,header,exth,title,text,raster]);
 }
 const url=(f)=>'index.php?'+new URLSearchParams(f);
 const opds=(u,params={})=>request(url(params),{headers:auth(u,password)});
@@ -368,7 +374,51 @@ try{
   const saved=await opds('alice',{download:filename});
   assert.equal(saved.headers['content-type'],'application/x-mobipocket-ebook');
   assert.deepEqual(saved.bytes,valid);
-  assert.equal((await request('preview.php?library=p-alice&book='+encodeURIComponent(filename))).status,415);
+  const preview='preview.php?library=p-alice&book='+encodeURIComponent(filename);
+  const page=await request(preview);
+  assert.equal(page.status,200,page.text);assert.match(page.text,/format\/mobi\/reader\.js/);
+  const version=page.text.match(/version=([a-f0-9]{64})/)[1];
+  const source=preview+'&version='+version+'&source=1';
+  const guard=preview+'&version='+version+'&check=1';
+  assert.deepEqual((await request(source)).bytes,valid);
+  assert.equal((await request(guard)).json.success,true);
+  assert.equal((await request(preview+'&version=invalid&source=1')).status,409);
+  assert.equal((await request(source,{headers:{cookie:''}})).status,401);
+  assert.equal((await request(source,{headers:{cookie:'',...auth('alice',password)}})).status,401);
+  assert.equal((await request(source,{headers:{cookie:'',authorization:'Bearer '+aliceToken}})).status,401);
+  if(process.env.CHROME_BIN&&process.env.PLAYWRIGHT_MODULE){
+   const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);
+   const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
+   try{
+    const ctx=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:390,height:844}});
+    const view=await ctx.newPage(), leaks=[];
+    await view.goto(base+'up.php');
+    await view.getByLabel('Username').fill('alice');
+    await view.getByLabel('Password',{exact:true}).fill(password);
+    await view.getByRole('button',{name:'Sign in'}).click();
+    await view.getByRole('heading',{name:'alice’s library'}).waitFor();
+    view.on('request',req=>{if(req.url().includes('not-a-reader-resource.invalid'))leaks.push(req.url());});
+    await view.goto(new URL(preview,base).href);
+    await view.locator('#book').getByText('First MOBI chapter',{exact:true}).waitFor({timeout:15000});
+    const image=view.getByRole('img',{name:'Included MOBI image'});
+    await image.waitFor();
+    await view.waitForFunction(()=>document.querySelector('#book img')?.naturalWidth===1);
+    assert.match(await image.getAttribute('src'),/^blob:/);
+    assert.equal(await view.locator('#book script,#book a[href^="https:"]').count(),0);
+    assert.deepEqual(leaks,[]);
+    await view.locator('#contents').click();
+    await view.locator('#chapters').getByRole('button',{name:'Chapter 2 of 2'}).click();
+    await view.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor();
+    await view.reload();
+    await view.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor();
+    // Revoke access to the browser's next chunk while it has the source.
+    await ctx.clearCookies();
+    await view.locator('#contents').click();
+    await view.locator('#chapters').getByText('Sign in again.').waitFor();
+    await ctx.close();
+   } finally {await browser.close();}
+   pass('MOBI browser uses isolated decoder, embedded raster, chapter drawer, resume, and rechecks web authorization');
+  }
   assert.equal((await ui({action:'delete',file:filename})).status,303);
   pass('MOBI module accepts a bounded structural fixture, exposes searchable metadata and original bytes, rejects invalid files and DRM');
  }
@@ -398,8 +448,14 @@ try{
    const setup=await ui({action:'agent_setup'});
    assert.equal(setup.status,200);
    assert(setup.json.setup.includes('douban_url[0]'));
-   assert.match(setup.json.setup,/If `accepted_formats` is absent.*If present but empty.*If present but malformed/);
+   assert.match(setup.json.setup,/including extensions you have not seen before/);
+   assert.match(setup.json.setup,/If `accepted_formats` is absent, rely on the server’s per-file result.*If present but empty.*If present but malformed/);
    const agent=JSON.parse(setup.json.setup.match(/```json\n(.*?)\n```/s)[1]);
+   const rejected=await upload(agent.token,directory,[['not-supported.nosuchformat','unrecognized'],['valid-mixed.txt','valid']]);
+   assert.equal(rejected.status,422);
+   assert.match(rejected.json.results[0].message,/Unsupported book format/);
+   assert.equal(rejected.json.results[1].success,true);
+   assert.equal((await ui({action:'delete',dir:directory,file:'valid-mixed.txt'})).status,303);
    assert.equal((await upload(agent.token,directory,[['wrong-index.txt','A']],undefined,{'douban_url[1]':canonical})).status,400);
    const batch=await upload(agent.token,directory,[['Plain QA.txt','P'],['Linked QA.txt','L'],['Invalid QA.txt','I']],undefined,
      {'douban_url[1]':canonical+'?utm_source=example#details','douban_url[2]':'https://book.douban.com.example/subject/7654321/'});

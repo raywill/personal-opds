@@ -165,9 +165,12 @@ The web server should pass the public PHP path in `SCRIPT_NAME` (for example, `/
 ## Book formats
 
 The built-in modules support EPUB and TXT for upload, download and web reading.
-Common unencrypted MOBI files can also be uploaded, indexed and downloaded in
-their original format; browser reading and automatic conversion are not offered
-for MOBI. Actual OPDS download and reading support depends on the client.
+Upload, index, download and read standard unencrypted MOBI and KF8 books in the
+web reader. It keeps the original file, without conversion or decryption. The
+browser fetches the original once and parses it in an isolated worker; existing
+reading permissions still apply. Fixed-layout fidelity, custom styles, embedded
+fonts and multimedia are not supported. Malformed or unsupported books may
+still need a compatible offline reader. OPDS access depends on the client.
 See [the format module contract](format/README.md) to add a format.
 
 ## Development

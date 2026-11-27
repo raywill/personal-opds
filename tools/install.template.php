@@ -158,7 +158,7 @@ function payloadFiles(string $root): array {
     if (!is_array($payload) || array_keys($payload)!==PAYLOAD_FILES) stopInstall(tr('The installation payload is damaged.'));
     $files=[];
     foreach ($payload as $name=>$entry) {
-        if (!preg_match('~\A(?:[a-zA-Z0-9_-]+(?:\.[a-z]+)?|format/(?:[A-Za-z]+\.php|[a-z][a-z0-9_-]{0,31}/(?:manifest\.json|[A-Za-z][A-Za-z0-9_-]{0,31}\.php)))\z~D',$name))
+        if (!preg_match('~\A(?:[a-zA-Z0-9_-]+(?:\.[a-z]+)?|format/(?:[A-Za-z]+\.php|[a-z][a-z0-9_-]{0,31}/(?:manifest\.json|[A-Za-z][A-Za-z0-9_-]{0,31}\.(?:php|js|txt))))\z~D',$name))
             stopInstall(tr('The installation payload is damaged.'));
         $content=base64_decode($entry['content'],true);
         if (!is_string($content) || !hash_equals($entry['sha256'],hash('sha256',$content))) stopInstall(tr('Installation payload checksum mismatch.'));

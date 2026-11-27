@@ -28,6 +28,11 @@ final class BookFormatRegistry
                 || !array_key_exists('reader',$descriptor) || !in_array($descriptor['reader'],[null,'bytes','chapters'],true)
                 || !is_array($descriptor['requires']??null) || !array_is_list($descriptor['requires']))
                 throw new RuntimeException('Invalid book format manifest: '.$id);
+            $client=$descriptor['reader_client']??null;
+            if ($client!==null && (!is_string($client) || $descriptor['reader']!=='chapters'
+                || !preg_match('/\A[a-z][a-z0-9_-]{0,31}\.js\z/D',$client)
+                || !is_file($dir.'/'.$client) || is_link($dir.'/'.$client)))
+                throw new RuntimeException('Invalid book format reader client: '.$id);
             $enabled=!in_array($id,defined('DISABLED_BOOK_FORMATS')?DISABLED_BOOK_FORMATS:[],true);
             foreach ($descriptor['requires'] as $extension) {
                 if (!is_string($extension) || !preg_match('/\A[a-z][a-z0-9_]{0,31}\z/D',$extension))
@@ -42,6 +47,7 @@ final class BookFormatRegistry
                     'id'=>$id, 'label'=>$descriptor['label'], 'mime'=>$descriptor['mime'],
                     'badge'=>($descriptor['badge']??null)==='text'?'text':'default',
                     'metadata_version'=>$descriptor['metadata_version'], 'reader'=>$descriptor['reader'], 'enabled'=>$enabled,
+                    'reader_client'=>$client===null?null:'format/'.$id.'/'.$client,
                 ];
             }
         }
@@ -75,7 +81,7 @@ final class BookFormatRegistry
             $handler=require $path;
             if (!$handler instanceof BookFormat
                 || ($format['reader']==='bytes' && !$handler instanceof ByteBookReader)
-                || ($format['reader']==='chapters' && !$handler instanceof ChapterBookReader))
+                || ($format['reader']==='chapters' && $format['reader_client']===null && !$handler instanceof ChapterBookReader))
                 throw new RuntimeException('Invalid book format handler: '.$id);
             $this->handlers[$id]=$handler;
         }

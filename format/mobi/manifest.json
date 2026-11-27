@@ -3,7 +3,8 @@
   "mime": "application/x-mobipocket-ebook",
   "label": "MOBI",
   "metadata_version": 1,
-  "reader": null,
+  "reader": "chapters",
+  "reader_client": "reader.js",
   "requires": [],
   "zh": {
     "The MOBI file has an invalid or truncated structure.": "MOBI 文件结构无效或文件不完整。",

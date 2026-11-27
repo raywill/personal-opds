@@ -10,10 +10,10 @@ foreach (glob($root.'/format/*/manifest.json') ?: [] as $manifest) {
         throw new RuntimeException('Invalid format package: '.$id);
     $files[]='format/'.$id.'/manifest.json';
     $files[]='format/'.$id.'/module.php';
-    foreach (glob($dir.'/*.php') ?: [] as $helper) {
+    foreach (glob($dir.'/*.{php,js,txt}',GLOB_BRACE) ?: [] as $helper) {
         $file=basename($helper);
         if ($file==='module.php') continue;
-        if (!preg_match('/\A[a-z][a-z0-9_-]{0,31}\.php\z/iD',$file))
+        if (!preg_match('/\A[a-z][a-z0-9_-]{0,31}\.(?:php|js|txt)\z/iD',$file))
             throw new RuntimeException('Invalid format helper: '.$file);
         $files[]='format/'.$id.'/'.$file;
     }

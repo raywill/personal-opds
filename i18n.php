@@ -307,6 +307,7 @@ const UI_TRANSLATIONS = array (
   'Choose book files' => '选择图书文件',
   'Unsupported book format.' => '不支持此图书格式。',
   'This book format is currently unavailable.' => '此图书格式暂不可用。',
+  'This book could not be decoded for online reading. You can still download the original.' => '无法解析这本书供在线阅读。你仍可下载原文件。',
   'Online reading is unavailable for this format.' => '此格式暂不支持在线阅读。',
   'No book formats are currently available for upload.' => '目前没有可上传的图书格式。',
   'Uploaded %s books.' => '已上传 %s 本书。',
