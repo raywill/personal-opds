@@ -378,7 +378,7 @@ main{margin:auto}.page-message{margin:12px 24px 0}.layout{display:grid;grid-temp
 .shelf-folder>a{color:var(--ink);text-decoration:none}.shelf-folder>a:hover{background:var(--bg)}
 .shelf-folder-icon{display:grid;place-items:center;flex:0 0 var(--row-icon);height:38px;color:var(--accent)}
 .shelf-folder-name,.book-name{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.shelf-folder-name{flex:1;font-size:.95rem;font-weight:720}.shelf-folder-detail{display:flex;align-items:center;gap:6px}.shelf-folder-detail .badge{max-width:8rem;white-space:normal;text-align:center}.shelf-folder-detail .root-folder-arrow{flex:none}
-.book-icon{display:grid;place-items:center;flex:0 0 var(--row-icon);height:46px;border-radius:7px;background:var(--blue-soft);color:#234cac;font-size:.7rem;font-weight:790;letter-spacing:.02em}.book-icon.txt{background:#eaf2ec;color:#285e4b}
+.book-icon{display:grid;place-items:center;flex:0 0 var(--row-icon);height:46px;border-radius:7px;background:var(--blue-soft);color:#234cac;font-size:.7rem;font-weight:790;letter-spacing:.02em}.book-icon.text{background:#eaf2ec;color:#285e4b}
 [data-folder-menu]{display:flex;align-items:center;gap:var(--row-gap)}[data-folder-menu]>a{flex:1;min-width:0}.shelf-list .icon-button{width:var(--row-action);flex:none}
 .privacy-lock{display:inline-flex;align-items:center;flex:none;color:var(--soft)}.privacy-lock .icon{width:15px;height:15px}
 .book-title-line,.visibility-note{display:flex;align-items:center;gap:6px;min-width:0}.book-info{flex:1;min-width:0}
@@ -638,10 +638,10 @@ if ($preview) {
     $read='preview.php?'.http_build_query(['library'=>$library['id'],'dir'=>$dir,'book'=>$name],'','&',PHP_QUERY_RFC3986);
     $bookPrivate=isset(privacyRules()[bookRuleKey($dir,$name)]);
     $douban=bookDoubanUrl($bookDirectory.'/'.$name);
-    $format=strtolower(pathinfo($name,PATHINFO_EXTENSION)); $title=pathinfo($name,PATHINFO_FILENAME); ?>
+    $format=bookFormat($name); $canRead=$format['enabled']&&$format['reader']!==null; $title=pathinfo($name,PATHINFO_FILENAME); ?>
   <li class="book">
-   <span aria-hidden="true" class="book-icon <?=$format==='txt'?'txt':''?>"><?=h(strtoupper($format))?></span>
-   <div class="book-info"><div class="book-title-line"><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><?php if ($currentPrivate || $bookPrivate) echo privacyBadge($currentPrivate); ?></div><small><span><?=h(fileSizeLabel($size))?></span><?php if ($douban!==null): ?><a class="book-source" href="<?=h($douban)?>" target="_blank" rel="noopener noreferrer" aria-label="<?=tr_html('Douban book details (opens in a new tab)')?>" title="<?=tr_html('Douban')?>"><span class="book-source-icon" aria-hidden="true">豆</span></a><?php endif; ?></small></div>
+   <span aria-hidden="true" class="book-icon <?=h($format['badge'])?>"><?=h($format['label'])?></span>
+   <div class="book-info"><div class="book-title-line"><?php if ($canRead): ?><a class="book-name" href="<?=h($read)?>" title="<?=h($name)?>"><?=h($title)?></a><?php else: ?><span class="book-name" title="<?=h($name)?>"><?=h($title)?></span><?php endif; ?><?php if ($currentPrivate || $bookPrivate) echo privacyBadge($currentPrivate); ?></div><small><span><?=h(fileSizeLabel($size))?></span><?php if ($douban!==null): ?><a class="book-source" href="<?=h($douban)?>" target="_blank" rel="noopener noreferrer" aria-label="<?=tr_html('Douban book details (opens in a new tab)')?>" title="<?=tr_html('Douban')?>"><span class="book-source-icon" aria-hidden="true">豆</span></a><?php endif; ?></small></div>
    <?php if (isset($permissions['download'])): ?><a class="button icon-button" href="<?=h($download)?>" title="<?=tr_html('Download')?>" aria-label="<?=h(sprintf(tr('Download %s'),$name))?>"><?=icon('download')?></a><?php endif; ?>
    <?php if (isset($permissions['organize'])||isset($permissions['delete'])): ?><details class="book-menu">
     <summary class="button icon-button" aria-label="<?=h(sprintf(tr('More actions for %s'),$name))?>"><?=icon('more')?></summary>
@@ -656,7 +656,7 @@ if ($preview) {
   <?php endforeach; ?>
   </ul>
   <?php elseif ($canViewBooks): ?>
-  <div class="empty"><p class="muted"><?=tr_html(isset($permissions['web_upload'])?'No books here yet. Upload an EPUB or TXT to get started.':'No books here yet.')?></p></div>
+  <div class="empty"><p class="muted"><?=tr_html(isset($permissions['web_upload'])?'No books here yet. Upload a book to get started.':'No books here yet.')?></p></div>
   <?php endif; ?>
   <?php if ($pages>1): ?><nav class="bar pagination" aria-label="<?=tr_html('Pagination')?>"><?php if($page>1):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page-1]))?>"><?=tr_html('Previous')?></a><?php endif;?><small><?=$page?> / <?=$pages?></small><?php if($page<$pages):?><a class="button" href="<?=h(libraryHref($dir,['page'=>$page+1]))?>"><?=tr_html('Next')?></a><?php endif;?></nav><?php endif;?>
  </div>
@@ -690,11 +690,12 @@ if ($preview) {
 <?php if (isset($permissions['web_upload'])): ?><dialog id="upload-dialog" class="sheet" aria-labelledby="upload-dialog-title">
  <div class="bar dialog-head"><h2 id="upload-dialog-title"><?=tr_html('Upload books')?></h2><button type="button" class="icon-button dialog-close" aria-label="<?=tr_html('Close')?>"><?=icon('close')?></button></div>
  <p id="upload-target" class="upload-target"><?=h(sprintf(tr('Upload to: %s'),$uploadTarget))?></p>
- <form id="upload" aria-describedby="upload-target" class="upload-form" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" data-working="<?=tr_html('Uploading %s of %s')?>" data-processing="<?=tr_html('Sent. Waiting for the server…')?>" data-unknown="<?=tr_html('No save confirmation (HTTP %s).')?>" data-check="<?=tr_html(isset($permissions['view'])?'Check this folder before retrying.':'Ask the library owner to check this folder before retrying.')?>" data-drop-invalid="<?=tr_html('Skipped items: %s. Drop EPUB or TXT files, not folders.')?>" method="post" enctype="multipart/form-data" action="<?=h(libraryHref($dir))?>">
+ <form id="upload" aria-describedby="upload-target" class="upload-form" data-interrupted="<?=tr_html('Connection interrupted. Save status is unknown.')?>" data-timeout="<?=tr_html('Request timed out. Save status is unknown.')?>" data-rejected="<?=tr_html('Server rejected the upload (HTTP %s).')?>" data-saved="<?=tr_html('Uploaded %s books.')?>" data-working="<?=tr_html('Uploading %s of %s')?>" data-processing="<?=tr_html('Sent. Waiting for the server…')?>" data-unknown="<?=tr_html('No save confirmation (HTTP %s).')?>" data-check="<?=tr_html(isset($permissions['view'])?'Check this folder before retrying.':'Ask the library owner to check this folder before retrying.')?>" data-drop-invalid="<?=tr_html('Skipped items: %s. Drop supported book files, not folders.')?>" method="post" enctype="multipart/form-data" action="<?=h(libraryHref($dir))?>">
  <input type="hidden" name="csrf" value="<?=h($csrf)?>"><input type="hidden" name="action" value="upload">
- <label><?=tr_html('Choose EPUB or TXT files')?><input id="files" type="file" name="files[]" accept=".epub,.txt" multiple required></label>
+ <label><?=tr_html('Choose book files')?><input id="files" type="file" name="files[]" accept="<?=h(implode(',',array_map(static fn($format)=>'.'.$format,acceptedBookFormats())))?>" multiple required<?=acceptedBookFormats()?'':' disabled'?>></label>
+ <?php if (!acceptedBookFormats()): ?><p class="muted"><?=tr_html('No book formats are currently available for upload.')?></p><?php endif; ?>
  <p class="upload-hint"><?=tr_html('You can also drop files here to start uploading.')?></p>
- <button class="primary" type="submit"><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
+ <button class="primary" type="submit"<?=acceptedBookFormats()?'':' disabled'?>><?=tr_html('Upload')?></button> <button type="button" id="retry" hidden><?=tr_html('Retry failed')?></button>
  </form>
  <p class="drop-error error" id="drop-error" role="status"></p>
  <div class="queue" id="queue"><p class="upload-summary" id="upload-summary" role="status"></p><div id="upload-rows"></div></div>
@@ -707,7 +708,7 @@ if ($preview) {
   <input type="hidden" name="file" value="<?=h($renameDraft['file']??'')?>">
   <label for="rename-name"><?=tr_html('New book name')?></label>
   <div class="rename-name"><input id="rename-name" name="new_name" value="<?=h($renameDraft['name']??'')?>" required maxlength="240" aria-describedby="rename-hint"><span id="rename-extension"><?=h($renameDraft?'.'.pathinfo($renameDraft['file'],PATHINFO_EXTENSION):'')?></span></div>
-  <p id="rename-hint" class="muted"><?=tr_html('This changes the filename, not the file format or the title stored inside an EPUB.')?></p>
+  <p id="rename-hint" class="muted"><?=tr_html('This changes the filename, not the file format or the embedded title.')?></p>
   <?php if ($active): ?><p class="muted"><?=tr_html('The subscription URL stays the same, but the old download link for this book will stop working.')?></p><?php endif; ?>
   <button class="primary"><?=tr_html('Save name')?></button>
  </form>
@@ -990,7 +991,8 @@ if(form&&dropShelf){
   if(!target)return;
   const items=Array.from(e.dataTransfer.items||[]).filter(item=>item.kind==='file');
   const dropped=items.length?items.map(item=>item.webkitGetAsEntry?.()?.isDirectory?null:item.getAsFile()):Array.from(e.dataTransfer.files);
-  const accepted=dropped.filter(file=>file&&/\.(epub|txt)$/i.test(file.name));
+  const extensions=new Set(filesInput.accept.toLowerCase().split(',').filter(Boolean));
+  const accepted=dropped.filter(file=>file&&file.name.lastIndexOf('.')>0&&extensions.has(file.name.slice(file.name.lastIndexOf('.')).toLowerCase()));
   if(!uploadDialog.open)uploadDialog.showModal();
   filesInput.value='';
   transfer(accepted,{skipped:dropped.length-accepted.length});

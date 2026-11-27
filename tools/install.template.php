@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 const PAYLOAD = '__OPDS_PAYLOAD__';
+const PAYLOAD_FILES = /*__OPDS_PAYLOAD_FILES__*/[];
 /*__OPDS_I18N__*/
 /*__OPDS_ACCOUNT_RULES__*/
 ini_set('display_errors','0'); ini_set('log_errors','1'); umask(0077);
@@ -39,7 +40,7 @@ function writeNew(string $path,string $value,array &$created,int $mode=0600): vo
 function environmentErrors(): array {
     $errors=[];
     if (PHP_VERSION_ID<80100 || PHP_INT_SIZE<8) $errors[]=tr('64-bit PHP 8.1+ is required. Use a supported, patched release in production.');
-    foreach (['ZipArchive','DOMDocument','SimpleXMLElement'] as $class) if (!class_exists($class)) $errors[]=tr('Missing extension: ').$class;
+    foreach (['DOMDocument'] as $class) if (!class_exists($class)) $errors[]=tr('Missing extension: ').$class;
     foreach (['session_start','gzdecode','filter_var','fsync'] as $f) if (!function_exists($f)) $errors[]=tr('Missing PHP function: ').$f;
     if (!ini_get('allow_url_fopen') || !in_array('https',stream_get_wrappers(),true)) $errors[]=tr('Installation checks require allow_url_fopen and HTTPS streams (OpenSSL).');
     if ((int)ini_get('max_file_uploads')<21) $errors[]=tr('Set max_file_uploads=21; the application limit is still 20 files.');
@@ -154,12 +155,20 @@ function storageLayout(string $webRoot,string $dataDir): array {
 function payloadFiles(string $root): array {
     $decoded=gzdecode(base64_decode(PAYLOAD,true) ?: '');
     $payload=$decoded===false ? null : json_decode($decoded,true,16,JSON_THROW_ON_ERROR);
-    if (!is_array($payload) || array_keys($payload)!==['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','privacy.php','agent-skill.php','library-controls.php','advanced-settings.php','site-link-settings.php','catalogue.php','preview.php','reader-content.php','reader.js','reader.css','admin.php','LICENSE','NOTICE']) stopInstall(tr('The installation payload is damaged.'));
+    if (!is_array($payload) || array_keys($payload)!==PAYLOAD_FILES) stopInstall(tr('The installation payload is damaged.'));
     $files=[];
     foreach ($payload as $name=>$entry) {
+        if (!preg_match('~\A(?:[a-zA-Z0-9_-]+(?:\.[a-z]+)?|format/(?:[A-Za-z]+\.php|[a-z][a-z0-9_-]{0,31}/(?:manifest\.json|[A-Za-z][A-Za-z0-9_-]{0,31}\.php)))\z~D',$name))
+            stopInstall(tr('The installation payload is damaged.'));
         $content=base64_decode($entry['content'],true);
         if (!is_string($content) || !hash_equals($entry['sha256'],hash('sha256',$content))) stopInstall(tr('Installation payload checksum mismatch.'));
         $path=$root.'/'.$name;
+        $parent=dirname($path);
+        while ($parent!==$root) {
+            if (is_link($parent) || (file_exists($parent)&&!is_dir($parent)))
+                stopInstall(tr('Installation files must not be symbolic links.'));
+            $parent=dirname($parent);
+        }
         if (is_link($path)) stopInstall(tr('Installation files must not be symbolic links.'));
         if (file_exists($path) && (!is_file($path) || !is_readable($path) || !hash_equals(hash_file('sha256',$path),$entry['sha256']))) stopInstall(tr('Different application files already exist. Nothing was overwritten. Use an empty directory.'));
         $files[$name]=$content;
@@ -323,6 +332,12 @@ function installLibrary(array $fields,string $url,int &$step): string {
         $dirs[]=$personal;
         $step=4;
         foreach ($files as $name=>$content) {
+            $parent=__DIR__;
+            foreach (array_slice(explode('/',$name),0,-1) as $component) {
+                $parent.='/'.$component;
+                makeDirectory($parent,0750,$dirs);
+            }
+            if (is_link(__DIR__.'/'.$name)) stopInstall(tr('Installation files must not be symbolic links.'));
             if (!file_exists(__DIR__.'/'.$name)) writeNew(__DIR__.'/'.$name,$content,$created,0640);
         }
         $config=['base_url'=>$url,'title'=>$title,'max_category_depth'=>1,'multiuser'=>true,'share_key'=>bin2hex(random_bytes(32))];

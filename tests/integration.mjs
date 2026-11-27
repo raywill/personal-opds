@@ -15,7 +15,19 @@ const php=process.env.PHP_BINARY || 'php';
 const runFile=promisify(execFile);
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'opds-test-'));
 const web=path.join(temp,'web'),app=path.join(web,'library');fs.mkdirSync(app,{recursive:true});
-fs.copyFileSync(path.join(project,'install.php'),path.join(app,'install.php'));
+const extraFormat=process.env.OPDS_TEST_EXTRA_FORMAT==='1';
+let installer=path.join(project,'install.php');
+if(extraFormat){
+ const fixtureBuild=path.join(temp,'fixture-build');fs.mkdirSync(fixtureBuild);
+ for(const item of fs.readdirSync(project,{withFileTypes:true})){
+  if(item.isFile()&&!item.name.startsWith('.')&&item.name!=='install.php')fs.copyFileSync(path.join(project,item.name),path.join(fixtureBuild,item.name));
+ }
+ for(const name of ['format','tools'])fs.cpSync(path.join(project,name),path.join(fixtureBuild,name),{recursive:true});
+ fs.cpSync(path.join(project,'tests','fixtures','formats','probe'),path.join(fixtureBuild,'format','probe'),{recursive:true});
+ execFileSync(php,[path.join(fixtureBuild,'tools','build.php')]);
+ installer=path.join(fixtureBuild,'install.php');
+}
+fs.copyFileSync(installer,path.join(app,'install.php'));
 const cert=path.join(temp,'cert.pem'),tlsKey=path.join(temp,'key.pem');
 execFileSync(process.env.OPENSSL_BIN || 'openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost,IP:127.0.0.1','-keyout',tlsKey,'-out',cert],{stdio:'ignore'});
 async function port(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;}
@@ -52,7 +64,7 @@ const pass=name=>{console.log('PASS '+name);results.push(name);};
 async function request(endpoint='install.php',options={}){
  return new Promise((resolve,reject)=>{
   const req=https.request(new URL(endpoint,base),{rejectUnauthorized:false,method:options.method||'GET',headers:{'accept-language':'en',cookie:[...cookies.values()].join('; '),...options.headers,...(options.body?{'content-length':options.body.length}:{})}},res=>{
-   const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>{for(const cookie of res.headers['set-cookie']??[])cookies.set(cookie.split('=')[0],cookie.split(';')[0]);const text=Buffer.concat(chunks).toString();let json;try{json=JSON.parse(text);}catch{}resolve({status:res.statusCode,text,json,headers:res.headers});});
+   const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>{for(const cookie of res.headers['set-cookie']??[])cookies.set(cookie.split('=')[0],cookie.split(';')[0]);const bytes=Buffer.concat(chunks),text=bytes.toString();let json;try{json=JSON.parse(text);}catch{}resolve({status:res.statusCode,text,bytes,json,headers:res.headers});});
   });req.on('error',reject);if(options.body)req.write(options.body);req.end();
  });
 }
@@ -80,6 +92,20 @@ function upload(token,dir,files,url='api.php',fields={}){
  chunks.push(Buffer.from(`--${b}--\r\n`));
  const headers={'content-type':'multipart/form-data; boundary='+b};if(token)headers.authorization='Bearer '+token;
  return request(url,{method:'POST',headers,body:Buffer.concat(chunks)});
+}
+function sampleMobi({drm=0,version=6}={}){
+ const text=Buffer.from('<html><body>Personal OPDS format fixture.</body></html>');
+ const title=Buffer.from('MOBI fixture'), author=Buffer.from('Personal OPDS');
+ const exth=Buffer.alloc(20+author.length);exth.write('EXTH');exth.writeUInt32BE(exth.length,4);
+ exth.writeUInt32BE(1,8);exth.writeUInt32BE(100,12);exth.writeUInt32BE(8+author.length,16);author.copy(exth,20);
+ const header=Buffer.alloc(16+232);header.writeUInt16BE(1,0);header.writeUInt32BE(text.length,4);
+ header.writeUInt16BE(1,8);header.writeUInt16BE(4096,10);header.writeUInt16BE(drm,12);
+ header.write('MOBI',16);header.writeUInt32BE(232,20);header.writeUInt32BE(2,24);header.writeUInt32BE(65001,28);
+ header.writeUInt32BE(version,36);header.writeUInt32BE(header.length+exth.length,0x54);header.writeUInt32BE(title.length,0x58);
+ header.writeUInt32BE(0x40,0x80);header.writeUInt32BE(0xffffffff,0xa8);
+ const pdb=Buffer.alloc(96);pdb.write('BOOKMOBI',60);pdb.writeUInt16BE(2,76);
+ pdb.writeUInt32BE(pdb.length,78);pdb.writeUInt32BE(pdb.length+header.length+exth.length+title.length,86);
+ return Buffer.concat([pdb,header,exth,title,text]);
 }
 const url=(f)=>'index.php?'+new URLSearchParams(f);
 const opds=(u,params={})=>request(url(params),{headers:auth(u,password)});
@@ -211,6 +237,14 @@ try{
  r=await setupPost(3,'back',{username:'alice'});assert.equal(r.json.step,2);
  r=await setupPost(2,'next',settings);assert.equal(r.json.step,3);
  r=await setupPost(3,'next',{username:'alice'});assert.equal(r.json.step,4);
+ const external=path.join(temp,'linked-outside');fs.mkdirSync(external);
+ fs.symlinkSync(external,path.join(app,'format'),'dir');
+ r=await setupPost(4,'install');assert.equal(r.status,400,r.text);assert.match(r.json.message,/symbolic links/);
+ assert.deepEqual(fs.readdirSync(external),[]);assert(!fs.existsSync(path.join(app,'paths.php')));
+ fs.unlinkSync(path.join(app,'format'));
+ assert.equal((await setupPost(1,'next')).json.step,2);
+ assert.equal((await setupPost(2,'next',settings)).json.step,3);
+ assert.equal((await setupPost(3,'next',{username:'alice'})).json.step,4);
  const latePath=path.join(data,'books','alice');
  fs.mkdirSync(latePath,{recursive:true});
  r=await setupPost(4,'install');assert.equal(r.status,400);assert.equal(r.json.step,3);
@@ -228,6 +262,11 @@ try{
  assert.equal((await request()).status,403);
  assert.equal(await fs.promises.stat(path.join(data,'conf','users.json')).then(s=>s.mode&0o777),0o600);
  assert.equal((await request('admin.php')).status,404);
+ for(const id of ['epub','mobi','txt',...(extraFormat?['probe']:[])]){
+  assert(fs.existsSync(path.join(app,'format',id,'manifest.json')));
+  assert(fs.existsSync(path.join(app,'format',id,'module.php')));
+  assert.equal((await request('format/'+id+'/module.php')).status,404);
+ }
  pass('four installer gates, actionable permissions, changed-root revalidation, case collisions and final no-clobber check');
 
  assert.equal((await opds('alice')).status,401);
@@ -277,6 +316,62 @@ try{
  assert(!skill.headers['content-disposition']);
  pass('first and later activation recovery, one-time links, separate login channels and hashed token');
 
+ const formatVerify=()=>request('api.php?action=verify',{headers:{authorization:'Bearer '+aliceToken}});
+ const accepted=extraFormat?['epub','mobi','opdstest','txt']:['epub','mobi','txt'];
+ assert.deepEqual((await formatVerify()).json.accepted_formats,accepted);
+ assert.match((await request('up.php')).text,new RegExp('accept="'+accepted.map(x=>'\\.'+x).join(',')+'"'));
+ if(extraFormat){
+  const name='Third module.OPDSTEST', body='PTEST!\nThe original-format bytes.';
+  assert.equal((await upload(aliceToken,'',[[name,'not its content']])).status,422);
+  assert.equal((await upload(aliceToken,'',[[name,body]])).status,200);
+  const feed=await opds('alice',{feed:'books'});
+  assert.match(feed.text,/Format fixture/);assert.match(feed.text,/type="application\/x-opds-test-book"/);
+  const fetched=await opds('alice',{download:name});
+  assert.equal(fetched.headers['content-type'],'application/x-opds-test-book');assert.equal(fetched.text,body);
+  const shelf=await request('up.php'); assert.match(shelf.text,/<span class="book-name" title="Third module.OPDSTEST">Third module<\/span>/);
+  const preview='preview.php?library=p-alice&book='+encodeURIComponent(name);
+  assert.equal((await request(preview)).status,415);
+  const config=path.join(data,'conf','config.php'), originalConfig=fs.readFileSync(config,'utf8');
+  try {
+   fs.writeFileSync(config,originalConfig.replace('return array (',"return array ('disabled_formats' => ['epub','mobi','txt','probe'],"));
+   assert.deepEqual((await formatVerify()).json.accepted_formats,[]);
+   assert.match((await request('up.php')).text,/No book formats are currently available for upload/);
+   assert.equal((await upload(aliceToken,'',[['disabled.opdstest',body]])).status,503);
+   assert.equal((await opds('alice',{download:name})).text,body);
+   assert.equal((await ui({action:'rename',file:name,new_name:'Renamed format fixture'})).status,303);
+   assert.equal((await ui({action:'delete',file:'Renamed format fixture.OPDSTEST'})).status,303);
+  } finally { fs.writeFileSync(config,originalConfig); }
+  assert.deepEqual((await formatVerify()).json.accepted_formats,accepted);
+  const probeManifest=path.join(app,'format','probe','manifest.json');
+  const originalManifest=fs.readFileSync(probeManifest,'utf8');
+  try {
+    fs.writeFileSync(probeManifest,JSON.stringify({...JSON.parse(originalManifest),requires:['opds_test_missing_extension']}));
+    assert.deepEqual((await formatVerify()).json.accepted_formats,['epub','mobi','txt']);
+    assert.equal((await upload(aliceToken,'',[['disabled.opdstest',body]])).status,503);
+  } finally { fs.writeFileSync(probeManifest,originalManifest); }
+  pass('third module packaged on fresh install: verified formats, strict validation, matching OPDS MIME, original bytes, no reader, safe disable');
+ }
+ {
+  const filename='Mobi format fixture.mobi', valid=sampleMobi();
+  for(const [name,bytes,message] of [
+   ['spoof.mobi',Buffer.from('not a real book'),/invalid or truncated/],
+   ['truncated.mobi',valid.subarray(0,99),/invalid or truncated/],
+   ['protected.mobi',sampleMobi({drm:2}),/DRM-protected/],
+   ['unknown.mobi',sampleMobi({version:99}),/variant is not supported/],
+  ]){
+   const result=await upload(aliceToken,'',[[name,bytes]]);
+   assert.equal(result.status,422,result.text); assert.match(result.text,message);
+  }
+  assert.equal((await upload(aliceToken,'',[[filename,valid]])).status,200);
+  const feed=await opds('alice',{feed:'books',q:'MOBI fixture'});
+  assert.match(feed.text,/<title>MOBI fixture<\/title>/);assert.match(feed.text,/type="application\/x-mobipocket-ebook"/);
+  const saved=await opds('alice',{download:filename});
+  assert.equal(saved.headers['content-type'],'application/x-mobipocket-ebook');
+  assert.deepEqual(saved.bytes,valid);
+  assert.equal((await request('preview.php?library=p-alice&book='+encodeURIComponent(filename))).status,415);
+  assert.equal((await ui({action:'delete',file:filename})).status,303);
+  pass('MOBI module accepts a bounded structural fixture, exposes searchable metadata and original bytes, rejects invalid files and DRM');
+ }
  r=await upload(aliceToken,undefined,[['private.txt','Alice root content']]);assert.equal(r.status,200,r.text);
  const uploads=await Promise.all([
    upload(aliceToken,'Share shelf',[['same.txt','Alice shared content']]),
@@ -303,6 +398,7 @@ try{
    const setup=await ui({action:'agent_setup'});
    assert.equal(setup.status,200);
    assert(setup.json.setup.includes('douban_url[0]'));
+   assert.match(setup.json.setup,/If `accepted_formats` is absent.*If present but empty.*If present but malformed/);
    const agent=JSON.parse(setup.json.setup.match(/```json\n(.*?)\n```/s)[1]);
    assert.equal((await upload(agent.token,directory,[['wrong-index.txt','A']],undefined,{'douban_url[1]':canonical})).status,400);
    const batch=await upload(agent.token,directory,[['Plain QA.txt','P'],['Linked QA.txt','L'],['Invalid QA.txt','I']],undefined,
@@ -601,7 +697,7 @@ try{
      const drop=async (target,names)=>{
        const handle=await page.evaluateHandle(names=>{
          const dt=new DataTransfer();
-         for(const name of names)dt.items.add(new File(['Drop upload fixture'],name,{type:'text/plain'}));
+         for(const name of names)dt.items.add(new File([name.endsWith('.opdstest')?'PTEST!\nDrop upload fixture':'Drop upload fixture'],name,{type:'text/plain'}));
          return dt;
        },names);
        await target.dispatchEvent('dragover',{dataTransfer:handle});
@@ -629,12 +725,18 @@ try{
      assert.equal((await opds('alice',{download:'drop-list.txt'})).status,404);
      await page.getByRole('button',{name:'Upload books',exact:true}).click();
      await drop(dropModal,['drop-dialog.txt','not-a-book.jpg']);
-     await dropModal.getByText('Skipped items: 1. Drop EPUB or TXT files, not folders.').waitFor();
+     await dropModal.getByText('Skipped items: 1. Drop supported book files, not folders.').waitFor();
      await dropModal.getByText('Saved: drop-dialog.txt').waitFor();
      await dropModal.getByRole('button',{name:'Close'}).click();
      await page.getByRole('link',{name:'drop-dialog',exact:true}).waitFor();
      assert.equal((await opds('alice',{download:'Browser-created folder/drop-dialog.txt'})).text,'Drop upload fixture');
      assert.equal((await opds('alice',{download:'Browser-created folder/not-a-book.jpg'})).status,422);
+     if(extraFormat){
+       await drop(dropTarget,['drop-third.opdstest']);
+       await dropModal.getByText('Saved: drop-third.opdstest').waitFor();
+       assert.equal((await opds('alice',{download:'Browser-created folder/drop-third.opdstest'})).text,'PTEST!\nDrop upload fixture');
+       assert.equal(await page.getByRole('link',{name:'drop-third',exact:true}).count(),0);
+     }
      // Do not retry ambiguous gateway results; an explicit 429 is safe to retry.
      let unknown=0,temporary=0;
      const outcomes=async route=>{

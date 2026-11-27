@@ -4,7 +4,7 @@ A self-hosted PHP OPDS 1.2 library for moving AI-generated EPUB and TXT files to
 
 ## Install
 
-1. Use a supported 64-bit PHP release (PHP 8.1+), with session, ZIP, DOM, SimpleXML/libxml, filter, zlib, and OpenSSL. Enable `allow_url_fopen`, provide at least two PHP workers for installer self-checks, and use a valid HTTPS certificate. Run PHP as a dedicated, non-root account.
+1. Use a supported 64-bit PHP release (PHP 8.1+), with session, DOM/libxml, filter, zlib, and OpenSSL. Enable ZIP and SimpleXML for EPUB support. Enable `allow_url_fopen`, provide at least two PHP workers for installer self-checks, and use a valid HTTPS certificate. Run PHP as a dedicated, non-root account.
 2. Build `install.php` with `php tools/build.php` or take the generated installer from this branch. Place it in a new web application directory. Restrict installer access to the operator during setup, while letting the service reach its own temporary HTTPS verification file. Do not expose an unconfigured installer indefinitely.
 3. Open the installer over HTTPS and complete its four server-validated steps: **Environment → Library location → First account → Review and install**. In step 2, choose a site-wide display name. The site URL is inferred from the HTTPS host and path used to open `install.php`; open it via the public address readers should use, not a temporary host alias. The private data root must be separate from the website root and must not be exposed through an alias or another virtual host. The wizard shows which PHP account needs access and what to change if a permission check fails. For a dedicated application subdirectory that PHP does not own, it shows non-recursive chown and chmod commands. The installer does not require ACL utilities. If a shared parent is not traversable, choose another path or ask the server administrator for traverse-only access using the host’s permission policy. Do not transfer ownership of a shared directory or the website root. Use an existing parent for the private data directory. If that parent is traversable but not writable by PHP, follow the wizard’s non-recursive commands to create and assign **only** the new private directory. Do not make the parent writable. If the private directory already exists, PHP needs read, write and traverse on it, but only traverse on its ancestors. Data is organized as `conf/` and `books/` under that root. Each account has exactly one personal library in `books/<username>/`. Existing account paths (including case variants, files and symlinks) are never claimed by a new account. For a legacy flat library, choose a fresh data root and migrate separately. The HTTPS self-check creates and removes only a small temporary probe before installation.
 4. Copy or open the first activation link. The account owner sets their own nonempty password. The link expires in 24 hours, works once, and is not recoverable from installer output after setup is locked. If the first link was lost or expired before activation, run `php admin.php invite USERNAME` from the installed application directory as the same operating-system account that runs PHP. That reissues for the pending account and immediately invalidates the previous link. Remove the installer when done.
@@ -123,7 +123,7 @@ Limits: 20 files per request, 100 MiB per file, 200 MiB combined, and the target
 ## Upgrade an existing multiuser installation
 
 1. Schedule a short maintenance window and pause uploads and other writes. Back up the entire private `opds-data/` tree and current application files, including local `paths.php`. Keep the original HTTPS URL and directory. Do not run `install.php` again.
-2. If the deployed app is a Git checkout, fetch `multiuser` and fast-forward it; preserve untracked `paths.php` and local settings. If the app was copied from the standalone installer, update the PHP application files from the branch (including `libraries.php`, `library-controls.php`, `privacy.php` and `agent-skill.php`); preserve `paths.php` and the existing private data. Never replace the live config with example data.
+2. If the deployed app is a Git checkout, fetch `multiuser` and fast-forward it; preserve untracked `paths.php` and local settings. If the app was copied from the standalone installer, update the PHP application files and static files from the branch, including the entire `format/` directory; preserve `paths.php` and the existing private data. Never replace the live config with example data.
 3. In the updated app directory, run `php admin.php rbac-check` as the PHP service account. This read-only preflight reports the library/owner mapping, book counts and bytes, quotas, and active shares, without printing credentials. Exit code 2 means unresolved storage or link identity issues. Investigate them before allowing writes; unknown folders are not automatically adopted.
 4. Test the old OPDS and upload URLs and at least one previously issued anonymous subscription, including a download without credentials. Only then reopen writes. Existing libraries retain their physical folders, share key, expiry, revocation and hidden folder identities. There is no book copy or account reset; the private RBAC JSON is initialized on first management write on an old site. No new PHP extension or database service is needed.
 
@@ -161,6 +161,14 @@ OPDS_BASE_URL=https://example.com/opds/ php admin.php invite USERNAME
 ```
 
 The web server should pass the public PHP path in `SCRIPT_NAME` (for example, `/opds/up.php`). Do not configure it using client request headers.
+
+## Book formats
+
+The built-in modules support EPUB and TXT for upload, download and web reading.
+Common unencrypted MOBI files can also be uploaded, indexed and downloaded in
+their original format; browser reading and automatic conversion are not offered
+for MOBI. Actual OPDS download and reading support depends on the client.
+See [the format module contract](format/README.md) to add a format.
 
 ## Development
 

@@ -18,3 +18,5 @@ jobs:
           find . -name '*.php' -not -path './conf/*' -exec php -l {} \;
       - name: Run HTTPS integration tests
         run: PHP_BINARY=php node tests/integration.mjs
+      - name: Verify a third format on a fresh single-file installation
+        run: OPDS_TEST_EXTRA_FORMAT=1 PHP_BINARY=php node tests/integration.mjs

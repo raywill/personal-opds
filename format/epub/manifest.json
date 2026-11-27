@@ -1,0 +1,33 @@
+{
+  "extensions": [
+    "epub"
+  ],
+  "mime": "application/epub+zip",
+  "label": "EPUB",
+  "metadata_version": 2,
+  "reader": "chapters",
+  "requires": [
+    "zip",
+    "dom",
+    "simplexml"
+  ],
+  "zh": {
+    "This EPUB entry is missing or too large to display.": "该 EPUB 内容缺失或过大，无法显示。",
+    "Cannot read this EPUB.": "无法读取此 EPUB。",
+    "Cannot read EPUB metadata.": "无法读取 EPUB 元数据。",
+    "EPUB metadata is too large or unreadable.": "EPUB 元数据过大或无法读取。",
+    "The EPUB is not a valid ZIP archive.": "EPUB 不是有效的 ZIP 文件。",
+    "Invalid EPUB entry count.": "EPUB 条目数量无效。",
+    "The EPUB contains invalid or duplicate entries.": "EPUB 含无效或重复条目。",
+    "The EPUB expansion size or compression ratio is excessive.": "EPUB 解压体积或压缩比过大。",
+    "ZIP-encrypted EPUB files are not accepted.": "不接受 ZIP 层加密的 EPUB。",
+    "EPUB symbolic-link entries are not allowed.": "EPUB 不允许符号链接条目。",
+    "The first EPUB mimetype entry is invalid.": "EPUB 的首个 mimetype 条目无效。",
+    "Incorrect EPUB mimetype.": "EPUB mimetype 不正确。",
+    "EPUB container.xml is missing or has an invalid size.": "EPUB 缺少 container.xml，或其大小不合法。",
+    "EPUB container.xml has an invalid encoding or DTD/entity declaration.": "EPUB container.xml 编码无效或含 DTD/实体声明。",
+    "Malformed EPUB container.xml.": "EPUB container.xml 格式错误。",
+    "The EPUB has no rootfile declaration.": "EPUB 缺少 rootfile 声明。",
+    "Invalid EPUB rootfile path, media type, or entry.": "EPUB 的 rootfile 路径、类型或条目无效。"
+  }
+}

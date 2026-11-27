@@ -156,8 +156,8 @@ try {
                     enforceAccountQuota($size);
                     $src=$path.'/'.$name;
                     if (is_link($src)||realpath($src)!==$src) reject('Source changed; stop migration.');
-                    if (strtolower(pathinfo($src,PATHINFO_EXTENSION))==='epub') validateEpub($src); else validateTxt($src);
                     if ($size<1 || $size>MAX_FILE_SIZE) reject('File outside upload size limit.');
+                    validateBookUpload($src,$name);
                     $temp=tempnam($target,'.migrate-');
                     if ($temp===false) throw new RuntimeException('Cannot stage migration.');
                     try { if (!copy($src,$temp)||!chmod($temp,0640)||!link($temp,$target.'/'.$name)) reject('Migration stopped. Already copied files and originals are retained.'); }

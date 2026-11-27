@@ -86,7 +86,7 @@ try {
         $relative = parameter('download'); $path = bookPath($relative);
         $handle = fopen($path, 'rb'); if (!$handle) reject(tr('Book is unreadable.'),404);
         $stat = fstat($handle); if (!$stat || $stat['size'] > MAX_FILE_SIZE) reject(tr('Invalid file size.'),413);
-        header('Content-Type: ' . (strtolower(pathinfo($path,PATHINFO_EXTENSION)) === 'epub' ? 'application/epub+zip' : 'text/plain'));
+        header('Content-Type: ' . bookFormat(basename($path))['mime']);
         header('Content-Disposition: attachment; filename*=UTF-8\'\'' . rawurlencode(basename($path)));
         header('Content-Length: ' . $stat['size']);
         unlockBookRead();
@@ -140,7 +140,7 @@ try {
                 $language->appendChild($doc->createTextNode($book['language'])); $entry->appendChild($language);
             }
             linkNode($doc,$entry,'http://opds-spec.org/acquisition',catalogueUrl(['download'=>$book['path']]),
-                strtolower(pathinfo($book['path'],PATHINFO_EXTENSION)) === 'epub' ? 'application/epub+zip' : 'text/plain');
+                bookFormat($book['path'])['mime']);
         }
     }
     header('Content-Type: application/atom+xml; charset=UTF-8');

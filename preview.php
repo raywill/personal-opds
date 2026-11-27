@@ -49,42 +49,32 @@ try {
     if (!$stat||$stat['size']>MAX_FILE_SIZE) reject('This file is too large for online reading.',422);
     $version=hash_hmac('sha256',implode(':',[$id,$stat['dev'],$stat['ino'],$stat['size'],$stat['mtime']]),SHARE_KEY);
     $url='preview.php?'.http_build_query($query+['book'=>$bookName],'','&',PHP_QUERY_RFC3986);
-    $format=strtolower(pathinfo($bookName,PATHINFO_EXTENSION));
+    $format=bookFormat($bookName);
+    if (!$format['enabled'] || $format['reader']===null) reject('Online reading is unavailable for this format.',415);
+    $reader=BookFormatRegistry::get()->handler($format);
     if ($api) {
         if (!hash_equals($version,readerParam('version'))) reject('This book changed. Reopen it from the library.',409);
-        if ($format==='txt') {
-            if (!isset($_GET['part'])||isset($_GET['asset'])||isset($_GET['toc'])) reject('Book not found.',404);
-            readerJson(readerTextChunk($path,readerNumber('part'),readerParam('encoding'),readerParam('direction')));
+        $operations=(int)isset($_GET['part'])+(int)isset($_GET['asset'])+(int)isset($_GET['toc']);
+        if ($operations!==1) reject('Invalid input.',400);
+        if ($format['reader']==='bytes' && $reader instanceof ByteBookReader) {
+            if (!isset($_GET['part'])) reject('Book not found.',404);
+            readerJson($reader->chunk($path,readerNumber('part'),readerParam('encoding'),readerParam('direction')));
         }
-        $zip=new ZipArchive();
-        if ($zip->open($path,ZipArchive::RDONLY)!==true) reject('Cannot read this EPUB.',422);
-        try {
-            $epub=readerEpub($zip);
-            if (isset($_GET['asset'])) {
-                $name=readerParam('asset');
-                $type=$epub[2][$name]['type']??'';
-                if (!in_array($type,READER_IMAGES,true)) reject('Book not found.',404);
-                $bytes=readerEntry($zip,$name,12*1024*1024);
-                header('Content-Type: '.$type);
-                header('Content-Length: '.strlen($bytes));
-                echo $bytes;
-            } elseif (isset($_GET['toc'])) {
-                readerJson(['toc'=>readerToc($zip,$epub)]);
-            } else {
-                $i=readerNumber('part');
-                $name=$epub[0][$i]??null;
-                if ($name===null) reject('Book not found.',404);
-                $doc=readerHtmlDocument(readerEntry($zip,$name,2*1024*1024));
-                $body=$doc->getElementsByTagName('body')->item(0);
-                if (!$body) reject('Cannot read this EPUB.',422);
-                $html=readerMarkup($body,$name,$epub[1],$epub[2],$url.'&version='.$version);
-                readerJson(['html'=>$html,'count'=>count($epub[0])]);
-            }
-        } finally { $zip->close(); }
-        exit;
+        if (!$reader instanceof ChapterBookReader) reject('Book not found.',404);
+        if (isset($_GET['asset'])) {
+            $image=$reader->image($path,readerParam('asset'));
+            if (!readerImageAllowed($image->mime)||strlen($image->bytes)>READER_MAX_IMAGE) reject('Book not found.',404);
+            header('Content-Type: '.$image->mime);
+            header('Content-Length: '.strlen($image->bytes));
+            echo $image->bytes;
+            exit;
+        }
+        if (isset($_GET['toc'])) readerJson(['toc'=>$reader->contents($path)]);
+        $chapter=$reader->chapter($path,readerNumber('part'));
+        readerJson(['html'=>readerMarkup($chapter->body,$chapter,$url.'&version='.$version),'count'=>$chapter->count]);
     }
     $page=[
-        'format'=>$format,'url'=>$url.'&version='.$version,
+        'reader'=>$format['reader'],'url'=>$url.'&version='.$version,
         'profile'=>hash_hmac('sha256',$viewer,SHARE_KEY),'book'=>$version,
         'loading'=>tr('Opening book…'),'failed'=>tr('Could not load this part. Try again.'),
         'chapter'=>tr('Next chapter'),'part'=>tr('Chapter %d of %d'),
@@ -117,7 +107,7 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
 <?php if ($error): ?>
  <main class="reader-error" role="alert"><?=re($error)?></main>
 <?php else: ?>
-<div id="reader" data-format="<?=re($page['format'])?>" data-config="<?=re(json_encode($page,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE))?>">
+<div id="reader" data-reader="<?=re($page['reader'])?>" data-config="<?=re(json_encode($page,JSON_THROW_ON_ERROR|JSON_UNESCAPED_UNICODE))?>">
  <div class="reader-toolbar" id="toolbar" hidden>
   <button id="settings" type="button"><?=tr_html('Reading settings')?></button>
  </div>
@@ -126,11 +116,11 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
    <button id="retry" type="button" hidden><?=tr_html('Retry')?></button>
  </div>
  <div id="viewport" tabindex="0" aria-label="<?=tr_html('Book text')?>">
-  <article id="book" aria-busy="true"<?=$page['format']==='txt'?' class="plain-text"':''?>></article>
-  <?php if ($page['format']==='epub'): ?><button class="continue" id="continue" type="button" hidden><?=tr_html('Next chapter')?></button><?php endif; ?>
+  <article id="book" aria-busy="true"<?=$page['reader']==='bytes'?' class="plain-text"':''?>></article>
+  <?php if ($page['reader']==='chapters'): ?><button class="continue" id="continue" type="button" hidden><?=tr_html('Next chapter')?></button><?php endif; ?>
  </div>
- <button id="contents" class="contents-fab" type="button" aria-controls="toc" aria-expanded="false" aria-haspopup="dialog"<?=$page['format']==='txt'?' disabled':''?>>
-  <?php if ($page['format']==='txt'): ?>
+ <button id="contents" class="contents-fab" type="button" aria-controls="toc" aria-expanded="false" aria-haspopup="dialog"<?=$page['reader']==='bytes'?' disabled':''?>>
+  <?php if ($page['reader']==='bytes'): ?>
   <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.65"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
   <?=tr_html('Go to position')?>
   <?php else: ?>
@@ -138,13 +128,13 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
   <?=tr_html('Contents')?>
   <?php endif; ?>
  </button>
- <dialog id="toc" class="contents-drawer<?=$page['format']==='epub'?' chapter-drawer':''?>" aria-labelledby="toc-title">
+ <dialog id="toc" class="contents-drawer<?=$page['reader']==='chapters'?' chapter-drawer':''?>" aria-labelledby="toc-title">
   <div class="drawer-heading">
    <button type="button" class="dialog-close" aria-label="<?=tr_html('Close')?>">×</button>
-   <h2 id="toc-title"><?=tr_html($page['format']==='txt'?'Go to position':'Contents')?></h2>
+   <h2 id="toc-title"><?=tr_html($page['reader']==='bytes'?'Go to position':'Contents')?></h2>
    <p id="progress" class="contents-progress"></p>
   </div>
-  <?php if ($page['format']==='txt'): ?>
+  <?php if ($page['reader']==='bytes'): ?>
   <div class="text-position">
    <label for="position-range"><?=tr_html('Reading position')?></label>
    <input id="position-range" type="range" min="0" max="100" value="0">
@@ -160,8 +150,8 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
   <label><?=tr_html('Font size')?><input id="size" type="range" min="15" max="34" value="20"></label>
   <label><?=tr_html('Line spacing')?><select id="spacing"><option value="1.5"><?=tr_html('Compact')?></option><option value="1.75" selected><?=tr_html('Comfortable')?></option><option value="2.05"><?=tr_html('Spacious')?></option></select></label>
   <label><?=tr_html('Theme')?><select id="theme"><option value="light"><?=tr_html('Light')?></option><option value="warm"><?=tr_html('Warm')?></option><option value="dark"><?=tr_html('Dark')?></option></select></label>
-  <?php if ($page['format']==='epub'): ?><label><?=tr_html('Reading mode')?><select id="mode"><option value="scroll"><?=tr_html('Scroll')?></option><option value="page"><?=tr_html('By screen')?></option></select></label><?php endif; ?>
-  <?php if ($page['format']==='txt'): ?><label><?=tr_html('Text encoding')?><select id="encoding"><option value=""><?=tr_html('Automatic')?></option><option value="utf-8">UTF-8</option><option value="gb18030">GB18030 / GBK</option></select></label><?php endif; ?>
+  <?php if ($page['reader']==='chapters'): ?><label><?=tr_html('Reading mode')?><select id="mode"><option value="scroll"><?=tr_html('Scroll')?></option><option value="page"><?=tr_html('By screen')?></option></select></label><?php endif; ?>
+  <?php if ($page['reader']==='bytes'): ?><label><?=tr_html('Text encoding')?><select id="encoding"><option value=""><?=tr_html('Automatic')?></option><option value="utf-8">UTF-8</option><option value="gb18030">GB18030 / GBK</option></select></label><?php endif; ?>
  </dialog>
 </div>
 <noscript><p class="reader-error"><?=tr_html('Enable JavaScript to read in the browser.')?></p></noscript>

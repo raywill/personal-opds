@@ -1,0 +1,9 @@
+{
+  "extensions": ["opdstest"],
+  "mime": "application/x-opds-test-book",
+  "label": "PTEST",
+  "metadata_version": 1,
+  "reader": null,
+  "requires": [],
+  "zh": {"Invalid test book signature.":"测试书籍的文件签名无效。"}
+}

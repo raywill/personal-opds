@@ -1,0 +1,15 @@
+{
+  "extensions": [
+    "txt"
+  ],
+  "mime": "text/plain",
+  "label": "TXT",
+  "badge": "text",
+  "metadata_version": 2,
+  "reader": "bytes",
+  "requires": [],
+  "zh": {
+    "Cannot read this TXT file.": "无法读取此 TXT 文件。",
+    "The TXT contains binary NUL bytes. Use a text encoding such as UTF-8 or GBK.": "TXT 文件包含二进制空字节；请使用 UTF-8、GBK 等文本编码。"
+  }
+}

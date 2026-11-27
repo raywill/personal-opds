@@ -140,11 +140,7 @@ function saveUpload(string $tmpPath, string $filename, string $directoryName,?ar
     if ($size === false || $size < 1 || $size > MAX_FILE_SIZE) {
         reject(tr('Each file must be between 1 byte and 100 MiB.'), 413);
     }
-    if (strtolower(pathinfo($filename, PATHINFO_EXTENSION)) === 'epub') {
-        validateEpub($tmpPath);
-    } else {
-        validateTxt($tmpPath);
-    }
+    validateBookUpload($tmpPath,$filename);
     requireVisibleBook($directoryName,$filename);
     $destination = resolveDestinationDirectory($directoryName);
     $target = $destination . DIRECTORY_SEPARATOR . $filename;

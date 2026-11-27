@@ -10,7 +10,7 @@
  const read=key=>{try{return JSON.parse(localStorage.getItem(key))||{};}catch{return {};}};
  const write=(key,value)=>{try{localStorage.setItem(key,JSON.stringify(value));}catch{}};
  const prefs=read(prefsKey), saved=read(posKey);
- const txt=cfg.format==='txt';
+ const byteReader=cfg.reader==='bytes';
  const validPart=value=>Number.isSafeInteger(value)&&value>=0&&value<=100*1024*1024;
  const clamp=value=>Math.min(1,Math.max(0,Number(value)||0));
  const limit=()=>Math.max(0,vp.scrollHeight-vp.clientHeight);
@@ -257,7 +257,7 @@
      document.addEventListener('visibilitychange',()=>{if(document.hidden)saveText();});
      openText(validPart(saved.part)?saved.part:0,{ratio:clamp(saved.ratio)});
  }
- if(txt){startTextReader();return;}
+ if(byteReader){startTextReader();return;}
  let part=0,data=null,busy=false,requestNo=0,failed=null,saveTimer=0;
  let pendingLocation=null,selectedLocation=null;
  const prevPart=()=>part>0?part-1:undefined;

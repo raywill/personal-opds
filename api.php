@@ -54,7 +54,7 @@ try {
         lockBookRead();
         if ($scope['fixed']) requireVisibleFolder($scope['dir']);
         $profile=['success'=>true,'library_id'=>$scope['library']['id'],
-            'directory'=>$scope['fixed']?$scope['dir']:null,'can_create_directory'=>$scope['mkdir'],'expires_at'=>$scope['expires']?gmdate(DATE_ATOM,$scope['expires']):null];
+            'directory'=>$scope['fixed']?$scope['dir']:null,'can_create_directory'=>$scope['mkdir'],'accepted_formats'=>acceptedBookFormats(),'expires_at'=>$scope['expires']?gmdate(DATE_ATOM,$scope['expires']):null];
         if (!empty($scope['folder_names'])) $profile['folders']=agentFolderNames();
         jsonResponse($profile);
     }

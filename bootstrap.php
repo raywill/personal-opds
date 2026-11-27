@@ -77,6 +77,7 @@ if (PHP_SAPI!=='cli') {
             bootstrapFailure(tr('Library data must be outside the web root.'));
     }
 }
+define('DISABLED_BOOK_FORMATS', is_array($settings['disabled_formats']??null)?$settings['disabled_formats']:[]);
 define('SHARE_KEY', $settings['share_key']);
 define('BASE_URL', publicAppBase(is_string($settings['base_url']??null)?$settings['base_url']:''));
 define('LIBRARY_TITLE', $settings['title']);
@@ -91,8 +92,6 @@ define('COOKIE_PATH', parse_url(BASE_URL, PHP_URL_PATH) ?: '/');
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const MAX_FILES = 20;
 const MAX_BATCH_SIZE = 200 * 1024 * 1024;
-const MAX_TOTAL_UNCOMPRESSED = 500 * 1024 * 1024;
-const MAX_CONTAINER_SIZE = 1024 * 1024;
 const LOGIN_WINDOW = 900;
 const LOGIN_IP_LIMIT = 10;
 const LOGIN_GLOBAL_LIMIT = 100;

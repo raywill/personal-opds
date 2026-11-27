@@ -1,45 +1,12 @@
 <?php
 declare(strict_types=1);
 
-function xmlDocument(string $text): DOMDocument
+function metadata(string $path, array $format,MetadataBudget $budget): array
 {
-    if (strlen($text) > MAX_CONTAINER_SIZE || preg_match('//u', $text) !== 1
-        || str_contains($text, "\0") || preg_match('/<!\s*(DOCTYPE|ENTITY)\b/i', $text)
-        || (preg_match('/<\?xml\b[^?]*encoding\s*=\s*([\'"])([^\'"]+)\1/i', $text, $m)
-            && !in_array(strtoupper($m[2]), ['UTF-8','UTF8','ASCII','US-ASCII'], true))) reject(tr('Invalid metadata.'), 422);
-    $previous = libxml_use_internal_errors(true);
-    libxml_set_external_entity_loader(static fn () => null);
-    try {
-        $doc = new DOMDocument();
-        if (!$doc->loadXML($text, LIBXML_NONET)) reject(tr('Invalid metadata XML.'), 422);
-        return $doc;
-    } finally { libxml_clear_errors(); libxml_use_internal_errors($previous); }
-}
-function metadata(string $path, string $name): array
-{
-    $result = ['title' => pathinfo($name, PATHINFO_FILENAME), 'author' => '', 'language' => ''];
-    if (strtolower(pathinfo($name, PATHINFO_EXTENSION)) === 'txt') { validateTxt($path); return $result; }
-    validateEpub($path);
-    $zip = new ZipArchive();
-    if ($zip->open($path, ZipArchive::RDONLY) !== true) reject(tr('Cannot read book.'), 422);
-    try {
-        $container = xmlDocument(readZipEntry($zip, 'META-INF/container.xml', MAX_CONTAINER_SIZE));
-        $xp = new DOMXPath($container);
-        $xp->registerNamespace('c', 'urn:oasis:names:tc:opendocument:xmlns:container');
-        $node = $xp->query('/c:container/c:rootfiles/c:rootfile')->item(0);
-        if (!$node) reject(tr('Missing metadata entry point.'), 422);
-        $opf = $node->getAttribute('full-path');
-        $stat = $zip->statName($opf);
-        if (!$stat || $stat['size'] > MAX_CONTAINER_SIZE) reject(tr('OPF metadata is too large.'), 422);
-        $doc = xmlDocument(readZipEntry($zip, $opf, MAX_CONTAINER_SIZE));
-        $xp = new DOMXPath($doc);
-        foreach (['title'=>'title', 'author'=>'creator', 'language'=>'language'] as $key=>$tag) {
-            $nodes = $xp->query('/*[local-name()="package"]/*[local-name()="metadata"]/*[local-name()="' . $tag . '"]');
-            $text = $nodes && $nodes->length ? trim($nodes->item(0)->textContent) : '';
-            if ($text !== '') { preg_match('/\A.{0,128}/us', $text, $m); $result[$key] = $m[0]; }
-        }
-        return $result;
-    } finally { $zip->close(); }
+    if (!$format['enabled']) return [];
+    $data=BookFormatRegistry::get()->handler($format)->metadata($path,$budget);
+    return array_filter(array_intersect_key($data,array_flip(['title','author','language'])),
+        static fn($value): bool=>is_string($value)&&$value!==''&&strlen($value)<=512&&preg_match('//u',$value)===1);
 }
 function bookPath(string $relative, bool $listed = false): string
 {
@@ -69,25 +36,27 @@ function books(array $directories, string $requiredCategory = '', bool $requireC
         if (!is_array($cache)) $cache = [];
         $updated = []; $budget = 120; $count = 0; $pending = false;
         $deadline = hrtime(true) + 1_000_000_000;
+        $metadataBudget=new MetadataBudget($deadline);
         // Include existing loose books as well as top-level categories.
         foreach ((isset($GLOBALS['shareCategory'])?$directories:[''=>getLibraryRoot()] + $directories) as $category => $directory) {
             foreach (scandir($directory) ?: [] as $name) {
                 if ($name === '' || $name[0] === '.') continue;
-                try { safeFilename($name); } catch (RequestError $e) { continue; }
+                try { safeFilename($name); $format=bookFormat($name); } catch (RequestError $e) { continue; }
                 $relative = (string)$category === '' ? $name : (string)$category . '/' . $name;
                 try { $path = bookPath($relative,listed:true); } catch (RequestError $e) { continue; }
                 if (++$count > 5000) reject(tr('The library exceeds the current indexing limit.'), 503);
                 $stat = stat($path);
                 if (!$stat || $stat['size'] < 1 || $stat['size'] > MAX_FILE_SIZE) continue;
                 $old = $cache[$relative] ?? [];
+                $formatVersion=$format['id'].':'.$format['metadata_version'].':'.(int)$format['enabled'];
                 if (($old['mtime'] ?? null) === $stat['mtime'] && ($old['size'] ?? null) === $stat['size']
                     && ($old['ctime'] ?? null) === $stat['ctime'] && ($old['ino']??null)===$stat['ino'] && ($old['dev']??null)===$stat['dev'] && !($old['pending'] ?? false)
-                    && (($old['author']??null)!=='Unknown'||isset($old['metadata_version']))) {
+                    && ($old['format_version']??null)===$formatVersion) {
                     $updated[$relative] = $old; continue;
                 }
                 $record = ['path'=>$relative, 'category'=>(string)$category, 'mtime'=>$stat['mtime'],
                     'size'=>$stat['size'], 'ctime'=>$stat['ctime'], 'ino'=>$stat['ino'], 'dev'=>$stat['dev'], 'title'=>pathinfo($name, PATHINFO_FILENAME),
-                    'author'=>'', 'language'=>'', 'metadata_version'=>2];
+                    'author'=>'', 'language'=>'', 'format_version'=>$formatVersion];
                 if ($requiredCategory !== '' && (string)$category !== $requiredCategory) {
                     $record['pending'] = true; $updated[$relative] = $record; continue;
                 }
@@ -95,7 +64,8 @@ function books(array $directories, string $requiredCategory = '', bool $requireC
                     $record['pending'] = true; $updated[$relative] = $record; $pending = true; continue;
                 }
                 --$budget;
-                try { $record = array_merge($record, metadata($path, $name)); }
+                try { $record = array_merge($record, metadata($path,$format,$metadataBudget)); }
+                catch (MetadataDeferred) { $record['pending']=true; $pending=true; }
                 catch (Throwable $e) { $record['invalid'] = true; error_log('OPDS: metadata rejected.'); }
                 $updated[$relative] = $record;
             }

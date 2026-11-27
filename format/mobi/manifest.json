@@ -1,0 +1,13 @@
+{
+  "extensions": ["mobi"],
+  "mime": "application/x-mobipocket-ebook",
+  "label": "MOBI",
+  "metadata_version": 1,
+  "reader": null,
+  "requires": [],
+  "zh": {
+    "The MOBI file has an invalid or truncated structure.": "MOBI 文件结构无效或文件不完整。",
+    "This MOBI variant is not supported.": "不支持此 MOBI 变体。",
+    "DRM-protected MOBI files are not accepted.": "不接受带 DRM 的 MOBI 文件。"
+  }
+}

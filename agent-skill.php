@@ -20,12 +20,12 @@ Install the Skill below in your user-level skills directory. Save the profile to
 SKILL.md:
 ---
 name: personal-opds-upload
-description: Upload user-selected EPUB or TXT books to Personal OPDS, choosing a folder automatically.
+description: Upload user-selected books to Personal OPDS in formats the server accepts.
 ---
 
 1. Load `~/.personal-opds-upload/profiles.json`. Use the requested library, or the only configured library. Ask only if the library is ambiguous.
-2. Use HTTPS GET `endpoint?action=verify` with `Authorization: Bearer <token>` (no redirects) to refresh `folders`. For an upload the user requested, honor any folder they named. Otherwise, reuse a suitable existing folder or pick a short new name based on the books. Use one level only; the server creates missing folders. Omit `directory` to use the library root.
-3. POST multipart to `endpoint` with the same header and no redirects. Use one `files[]` field per EPUB or TXT, plus `directory` for the chosen folder. Group files by folder. If supplied or found through an allowed lookup, verify the Douban book detail link against the title and author or ISBN, then send it in `douban_url[0]` for the first file, `douban_url[1]` for the second, and so on (zero-based). Use `https://book.douban.com/subject/<id>/`. Omit uncertain or missing links; never guess or use a search page. Limits: 20 files per request, 100 MiB each, 200 MiB total.
+2. Use HTTPS GET `endpoint?action=verify` with `Authorization: Bearer <token>` (no redirects) to refresh `folders` and `accepted_formats` (lowercase extensions without dots). If `accepted_formats` is absent, use EPUB and TXT for legacy servers. If present but empty, report that uploads are unavailable. If present but malformed, report a verification error. For an upload the user requested, honor any folder they named. Otherwise, reuse a suitable existing folder or pick a short new name based on the books. Use one level only; the server creates missing folders. Omit `directory` to use the library root.
+3. POST multipart to `endpoint` with the same header and no redirects. Use one `files[]` field per accepted book file, plus `directory` for the chosen folder. Group files by folder. If supplied or found through an allowed lookup, verify the Douban book detail link against the title and author or ISBN, then send it in `douban_url[0]` for the first file, `douban_url[1]` for the second, and so on (zero-based). Use `https://book.douban.com/subject/<id>/`. Omit uncertain or missing links; never guess or use a search page. Limits: 20 files per request, 100 MiB each, 200 MiB total.
 4. Check each result and tell the user which books were saved and where. If the server denies access to a destination or filename (HTTP 403), say this connection has no permission and ask for a different destination or filename. Do not guess or silently change it. This is not a token-expiry error. Report conflicts or partial failures; never overwrite, silently rename, or blindly retry an interrupted upload. Never print the token.
 
 ### If the upload token stops working
