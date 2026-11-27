@@ -39,12 +39,16 @@ fs.mkdirSync(path.join(temp,'sessions'));
 const log=fs.openSync(path.join(temp,'php.log'),'w');
 const server=spawn(php,['-d','display_errors=0','-d','session.upload_progress.enabled=0','-d','max_file_uploads=21','-d','upload_max_filesize=100M','-d','post_max_size=205M','-d',`openssl.cafile=${cert}`,'-d',`session.save_path=${temp}/sessions`,'-S',`127.0.0.1:${back}`,'-t',web,path.join(web,'router.php')],{env:{...process.env,PHP_CLI_SERVER_WORKERS:'4'},stdio:['ignore',log,log],detached:true});
 
-let denySetupProbe=false, holdUploadResponse=null, rewriteMode='original', nginxPort, nginxServer;
+let denySetupProbe=false, holdUploadResponse=null, rewriteMode='original', nginxPort, nginxServer, mobiNetwork=null;
 const proxy=https.createServer({key:fs.readFileSync(tlsKey),cert:fs.readFileSync(cert)},(req,res)=>{
  if(denySetupProbe&&req.url.startsWith('/library/install-check-')){res.writeHead(403);res.end();return;}
  const headers={...req.headers};
  delete headers['x-test-original-uri'];
  const original=req.url, pathname=original.split('?')[0];
+ const readerParams=pathname==='/library/preview.php'?new URLSearchParams(original.split('?')[1]):null;
+ const throttle=readerParams?.has('source')&&readerParams.get('book')===mobiNetwork?.filename?mobiNetwork:null;
+ const sentRange=headers.range;
+ if(throttle?.whole)delete headers.range;
  const reader=pathname.match(/^\/library\/([a-z0-9][a-z0-9_-]{0,31})$/);
  const share=pathname.match(/^\/library\/s\/([1-9]{8}-[A-Za-z0-9]{4})$/);
  const route=rewriteMode!=='original'&&reader?'library=p-'+reader[1]:rewriteMode==='reader-share'&&share?'s='+share[1]:'';
@@ -54,6 +58,36 @@ const proxy=https.createServer({key:fs.readFileSync(tlsKey),cert:fs.readFileSync
    if(hold&&req.method==='POST'&&req.url.startsWith('/library/up.php?')){
      holdUploadResponse=null;hold.arrive(req.url);
      await hold.gate;
+   }
+   if (throttle) {
+     const entry={range:sentRange,status:out.statusCode,bytes:0};
+     throttle.requests.push(entry);
+     res.writeHead(out.statusCode,out.headers);
+     try {
+       const offset=Number((sentRange??'').match(/^bytes=(\d+)-/)?.[1]);
+       const gate=out.statusCode===206&&(offset>=1048576?throttle.imageGate:offset>=65536?throttle.textGate:null);
+       if(gate){
+         await new Promise(resolve=>{
+           const wake=()=>{res.off('close',wake);resolve();};
+           res.once('close',wake);gate.then(wake);
+         });
+         if(res.destroyed){out.destroy();return;}
+       }
+       for await(const chunk of out){
+         for(let offset=0;offset<chunk.length;offset+=32768){
+           const block=chunk.subarray(offset,offset+32768);
+           await delay(block.length/throttle.bytesPerMs);
+           if(res.destroyed)return;
+           entry.bytes+=block.length;
+           if(!res.write(block))await new Promise(resolve=>{
+             const wake=()=>{res.off('drain',wake);res.off('close',wake);resolve();};
+             res.once('drain',wake);res.once('close',wake);
+           });
+         }
+       }
+       entry.complete=true;res.end();
+     }catch{res.destroy();}
+     return;
    }
    res.writeHead(out.statusCode,out.headers);out.pipe(res);
  });
@@ -93,25 +127,29 @@ function upload(token,dir,files,url='api.php',fields={}){
  const headers={'content-type':'multipart/form-data; boundary='+b};if(token)headers.authorization='Bearer '+token;
  return request(url,{method:'POST',headers,body:Buffer.concat(chunks)});
 }
-function sampleMobi({drm=0,version=6}={}){
- const text=Buffer.from('<html><body><h1>First MOBI chapter</h1><img recindex="1" alt="Included MOBI image">'+
+function sampleMobi({drm=0,version=6,large=false}={}){
+ const first='<html><body><h1>First MOBI chapter</h1><img recindex="1" alt="Included MOBI image">'+
    '<img src="https://not-a-reader-resource.invalid/beacon"><script>document.title="NOT SAFE"</script>'+
-   '<a href="https://not-a-reader-resource.invalid/link">External link</a>'+
-   '<mbp:pagebreak/><h1 id="second">Second MOBI chapter</h1><p>Personal OPDS format fixture.</p></body></html>');
+   '<a href="https://not-a-reader-resource.invalid/link">External link</a>';
+ const second='<mbp:pagebreak/><h1 id="second">Second MOBI chapter</h1><p>Personal OPDS format fixture.</p>';
  const raster=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4xkAAAAASUVORK5CYII=','base64');
  const title=Buffer.from('MOBI fixture'), author=Buffer.from('Personal OPDS');
+ const parts=large?[first+second,...Array.from({length:63},()=>'<p>'+'Test paragraph. '.repeat(248)+'</p>'),'</body></html>']
+   :[first+second+'</body></html>'];
+ const text=parts.map(p=>Buffer.from(p));
  const exth=Buffer.alloc(20+author.length);exth.write('EXTH');exth.writeUInt32BE(exth.length,4);
  exth.writeUInt32BE(1,8);exth.writeUInt32BE(100,12);exth.writeUInt32BE(8+author.length,16);author.copy(exth,20);
- const header=Buffer.alloc(16+232);header.writeUInt16BE(1,0);header.writeUInt32BE(text.length,4);
- header.writeUInt16BE(1,8);header.writeUInt16BE(4096,10);header.writeUInt16BE(drm,12);
- header.write('MOBI',16);header.writeUInt32BE(232,20);header.writeUInt32BE(2,24);header.writeUInt32BE(65001,28);
- header.writeUInt32BE(version,36);header.writeUInt32BE(header.length+exth.length,0x54);header.writeUInt32BE(title.length,0x58);
- header.writeUInt32BE(2,108);header.writeUInt32BE(0x40,0x80);header.writeUInt32BE(0xffffffff,0xa8);
- header.writeUInt32BE(0xffffffff,244);
- const pdb=Buffer.alloc(104);pdb.write('BOOKMOBI',60);pdb.writeUInt16BE(3,76);
- const start=pdb.length+header.length+exth.length+title.length;
- pdb.writeUInt32BE(pdb.length,78);pdb.writeUInt32BE(start,86);pdb.writeUInt32BE(start+text.length,94);
- return Buffer.concat([pdb,header,exth,title,text,raster]);
+ const header=Buffer.alloc(16+232);header.writeUInt16BE(1,0);header.writeUInt32BE(text.reduce((size,p)=>size+p.length,0),4);
+ header.writeUInt16BE(text.length,8);header.writeUInt16BE(4096,10);header.writeUInt16BE(drm,12);
+ header.write('MOBI',16);header.writeUInt32BE(232,20);header.writeUInt32BE(version,36);
+ header.writeUInt32BE(2,24);header.writeUInt32BE(65001,28);
+ header.writeUInt32BE(header.length+exth.length,0x54);header.writeUInt32BE(title.length,0x58);
+ header.writeUInt32BE(text.length+(large?2:1),108);header.writeUInt32BE(0x40,0x80);header.writeUInt32BE(0xffffffff,244);
+ const records=[Buffer.concat([header,exth,title]),...text,...(large?[Buffer.alloc(4*1024*1024)]:[]),raster];
+ const pdb=Buffer.alloc(80+8*records.length);pdb.write('BOOKMOBI',60);pdb.writeUInt16BE(records.length,76);
+ let offset=pdb.length;
+ records.forEach((record,index)=>{pdb.writeUInt32BE(offset,78+index*8);offset+=record.length;});
+ return Buffer.concat([pdb,...records]);
 }
 const url=(f)=>'index.php?'+new URLSearchParams(f);
 const opds=(u,params={})=>request(url(params),{headers:auth(u,password)});
@@ -393,6 +431,22 @@ try{
   const source=preview+'&version='+version+'&source=1';
   const guard=preview+'&version='+version+'&check=1';
   assert.deepEqual((await request(source)).bytes,valid);
+  const range=async (value,cookie={})=>request(source,{headers:{Range:value,...cookie}});
+  const head=await range('bytes=0-60');
+  assert.equal(head.status,206);
+  assert.equal(head.headers['content-range'],'bytes 0-60/'+valid.length);
+  assert.equal(head.headers['content-length'],'61');
+  assert.equal(head.headers['accept-ranges'],'bytes');
+  assert.match(head.headers['cache-control'],/private, no-store, no-transform/);
+  assert.deepEqual(head.bytes,valid.subarray(0,61));
+  const ending=await range('bytes='+(valid.length-4)+'-99999999');
+  assert.equal(ending.status,206);assert.deepEqual(ending.bytes,valid.subarray(-4));
+  for(const bad of ['bytes=0-1,2-3','bytes=-10','bytes=8-7','bytes='+valid.length+'-99999999']){
+   const unsatisfiable=await range(bad);assert.equal(unsatisfiable.status,416);
+   assert.equal(unsatisfiable.headers['content-range'],'bytes */'+valid.length);
+  }
+  assert.equal((await range('bytes=0-4',{cookie:''})).status,401);
+  assert.equal((await request(preview+'&version=bogus&source=1',{headers:{Range:'bytes=0-4'}})).status,409);
   assert.equal((await request(guard)).json.success,true);
   assert.equal((await request(preview+'&version=invalid&source=1')).status,409);
   assert.equal((await request(source,{headers:{cookie:''}})).status,401);
@@ -423,6 +477,72 @@ try{
     await view.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor();
     await view.reload();
     await view.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor();
+    const bigName='MOBI slow-network fixture.mobi',big=sampleMobi({large:true});
+    assert.equal((await upload(aliceToken,'',[[bigName,big]])).status,200);
+    const state=await ctx.storageState();
+    async function measure(whole){
+      const benchCtx=await browser.newContext({storageState:{cookies:state.cookies,origins:[]},
+        ignoreHTTPSErrors:true,viewport:{width:390,height:844}});
+      const bench=await benchCtx.newPage();
+      let releaseText,releaseImage;
+      const network={filename:bigName,whole,bytesPerMs:1024,requests:[],
+        textGate:whole?null:new Promise(r=>{releaseText=r;}),
+        imageGate:whole?null:new Promise(r=>{releaseImage=r;})};
+      mobiNetwork=network;
+      try{
+        const start=performance.now();
+        const bookUrl=new URL('preview.php?library=p-alice&book='+encodeURIComponent(bigName),base).href;
+        await bench.goto(bookUrl,{waitUntil:'domcontentloaded'});
+        await bench.locator('#book').getByText('First MOBI chapter',{exact:true}).waitFor({timeout:25000});
+        const measure={ms:Math.round(performance.now()-start),bytes:network.requests.reduce((n,r)=>n+r.bytes,0)};
+        if(!whole){
+          assert.equal(network.requests[0].status,206);
+          assert.match(network.requests[0].range,/^bytes=0-/);
+          assert.equal(measure.bytes,65536,'The first excerpt appears while later text records are held');
+          releaseText();
+          const waitForImage=async()=>{
+            for(let i=0;i<100&&!network.requests.some(r=>Number(r.range?.match(/^bytes=(\d+)-/)?.[1])>1048576);i++)await delay(50);
+            assert(network.requests.some(r=>Number(r.range?.match(/^bytes=(\d+)-/)?.[1])>1048576),'A separate request for the distant image was made');
+          };
+          await waitForImage();
+          await bench.locator('#contents').click();
+          await bench.locator('#chapters').getByRole('button',{name:'Chapter 2 of 2'}).click();
+          await bench.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor({timeout:5000});
+          const slowImages=network.requests.filter(r=>Number(r.range?.match(/^bytes=(\d+)-/)?.[1])>1048576);
+          assert(slowImages.every(r=>r.bytes===0),'Chapter navigation does not wait for the stalled image');
+          releaseImage();
+        }else{
+          assert.equal(network.requests[0].status,200);
+          assert.equal(measure.bytes,big.length,'No-Range fallback waits for original bytes');
+        }
+        return measure;
+      }finally{releaseText?.();releaseImage?.();mobiNetwork=null;await benchCtx.close();}
+    }
+    const progressive=await measure(false),baseline=await measure(true);
+    console.log('MOBI slow-network first text: '+JSON.stringify({progressive,baseline,bookBytes:big.length}));
+    assert.equal((await ui({action:'delete',file:bigName})).status,303);
+    pass('MOBI slow network starts before later bytes, loads images separately, and falls back if a proxy strips Range');
+    const kf8=process.env.OPDS_KF8_FIXTURE;
+    if(kf8){
+      const name='KF8 regression fixture.mobi', bytes=fs.readFileSync(kf8);
+      assert.equal((await upload(aliceToken,'',[[name,bytes]])).status,200);
+      const samplePage=await ctx.newPage();
+      const network={filename:name,whole:false,bytesPerMs:1024,requests:[]};
+      mobiNetwork=network;
+      try{
+        await samplePage.goto(new URL('preview.php?library=p-alice&book='+encodeURIComponent(name),base).href);
+        await samplePage.waitForFunction(()=>document.querySelector('#book')?.textContent.trim().length>0);
+        assert(network.requests.some(r=>r.status===206));
+        await samplePage.locator('#contents').click();
+        const menu=samplePage.locator('#chapters').getByRole('button');
+        await menu.first().waitFor();assert(await menu.count()>1);
+        const old=await samplePage.locator('#book').innerText();
+        await menu.last().click();
+        await samplePage.waitForFunction(previous=>document.querySelector('#book').innerText!==previous,old);
+      }finally{mobiNetwork=null;await samplePage.close();}
+      assert.equal((await ui({action:'delete',file:name})).status,303);
+      pass('real hybrid KF8 fixture opens with ranges and jumps through its directory');
+    }
     // Revoke access to the browser's next chunk while it has the source.
     await ctx.clearCookies();
     await view.locator('#contents').click();

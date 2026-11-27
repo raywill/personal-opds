@@ -530,11 +530,11 @@ class PDB {
             (_, i) => getUint(buffer.slice(i * 8, i * 8 + 4)))
             .map((x, i, a) => [x, a[i + 1]])
     }
-    loadRecord(index) {
+    loadRecord(index, signal) {
         const offsets = this.#offsets[index]
         if (!offsets) throw new RangeError('Record index out of bounds')
         guard((offsets[1] ?? this.#file.size) - offsets[0] <= MAX_RECORD)
-        return this.#file.slice(...offsets).arrayBuffer()
+        return this.#file.slice(...offsets).arrayBuffer(signal)
     }
     async loadMagic(index) {
         const start = this.#offsets[index][0]
@@ -553,7 +553,7 @@ export class MOBI extends PDB {
         super()
         this.unzlib = unzlib
     }
-    async open(file) {
+    async open(file, { onPrefix, readingOnly = false } = {}) {
         await super.open(file)
         // TODO: if (this.pdb.type === 'TEXt')
         this.headers = this.#getHeaders(await super.loadRecord(0))
@@ -572,7 +572,7 @@ export class MOBI extends PDB {
             }
         }
         await this.#setup()
-        return isKF8 ? new KF8(this).init() : new MOBI6(this).init()
+        return isKF8 ? new KF8(this).init(readingOnly) : new MOBI6(this).init(onPrefix)
     }
     #getHeaders(buf) {
         const palmdoc = getStruct(PALMDOC_HEADER, buf)
@@ -639,8 +639,8 @@ export class MOBI extends PDB {
             .then(this.#removeTrailingEntries)
             .then(this.#decompress)
     }
-    async loadResource(index) {
-        const buf = await super.loadRecord(this.#resourceStart + index)
+    async loadResource(index, signal) {
+        const buf = await super.loadRecord(this.#resourceStart + index, signal)
         const magic = getString(buf.slice(0, 4))
         if (magic === 'FONT') return getFont(buf, this.unzlib)
         if (magic === 'VIDE' || magic === 'AUDI') return buf.slice(12)
@@ -714,13 +714,31 @@ class MOBI6 {
     constructor(mobi) {
         this.mobi = mobi
     }
-    async init() {
+    async init(onPrefix) {
         const recordBuffers = []
         let totalLength = 0
         for (let i = 0; i < this.mobi.headers.palmdoc.numTextRecords; i++) {
             const buf = await this.mobi.loadText(i)
             guard((totalLength += buf.byteLength) <= MAX_RAW)
             recordBuffers.push(buf)
+            // A provisional excerpt is not an indexed chapter. Keep using
+            // the same records for the definitive chapter boundaries.
+            if (onPrefix && (i === 0 || i === 3 || i === 7 || i === 15)) {
+                const prefix = new Uint8Array(Math.min(totalLength, 64 * 1024))
+                let cursor = 0
+                for (const record of recordBuffers) {
+                    if (cursor >= prefix.length) break
+                    const data = record.subarray(0, prefix.length - cursor)
+                    prefix.set(data, cursor)
+                    cursor += data.length
+                }
+                const text = this.mobi.decode(prefix)
+                const breakAt = Array.from(text.matchAll(mbpPagebreakRegex)).find(m => m.index > 0)?.index
+                const end = breakAt ?? Array.from(text.matchAll(/<\/(?:p|div|li|h[1-6]|blockquote|section|body)\s*>/gi)).at(-1)
+                const excerpt = typeof end === 'number' ? text.slice(0, end)
+                    : end ? text.slice(0, end.index + end[0].length) : ''
+                if (excerpt && await onPrefix(excerpt)) onPrefix = null
+            }
         }
         // load all text records in an array
         const array = new Uint8Array(totalLength)
@@ -1000,7 +1018,7 @@ class KF8 {
     constructor(mobi) {
         this.mobi = mobi
     }
-    async init() {
+    async init(readingOnly) {
         const loadRecord = this.mobi.loadRecord.bind(this.mobi)
         const { kf8 } = this.mobi.headers
 
@@ -1047,7 +1065,8 @@ class KF8 {
             return arr.concat({ skel, frags, fragEnd, length, totalLength })
         }, [])
 
-        const resources = await this.getResourcesByMagic(['RESC', 'PAGE'])
+        // The OPDS text renderer ignores fixed-layout and print-page metadata.
+        const resources = readingOnly ? {} : await this.getResourcesByMagic(['RESC', 'PAGE'])
         const pageSpreads = new Map()
         if (resources.RESC) {
             const buf = await this.mobi.loadRecord(resources.RESC)
@@ -1085,7 +1104,7 @@ class KF8 {
                 return { label: unescapeHTML(label), href, subitems: children?.map(map) }
             }
             this.toc = ncx?.map(map)
-            this.landmarks = await this.getGuide()
+            if (!readingOnly) this.landmarks = await this.getGuide()
         } catch(e) {
             console.warn(e)
         }

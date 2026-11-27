@@ -75,11 +75,32 @@ try {
                 }
             }
             $length=$opened['size'];
+            $start=0; $end=$length-1;
+            $range=$_SERVER['HTTP_RANGE']??null;
+            header('Accept-Ranges: bytes');
+            if ($range!==null) {
+                // Only the reader's closed, single byte ranges are accepted.
+                if (!preg_match('/\Abytes=([0-9]{1,10})-([0-9]{1,10})\z/D',$range,$bounds)
+                    || ($start=(int)$bounds[1])>=$length || (int)$bounds[2]<$start) {
+                    fclose($file);
+                    header('Content-Range: bytes */'.$length);
+                    reject('Invalid input.',416);
+                }
+                $end=min((int)$bounds[2],$end);
+                if (fseek($file,$start)!==0) { fclose($file); reject('Book not found.',404); }
+                http_response_code(206);
+                header('Content-Range: bytes '.$start.'-'.$end.'/'.$length);
+            }
+            ini_set('zlib.output_compression','0');
+            header('Cache-Control: private, no-store, no-transform');
             header('Content-Type: application/octet-stream');
             header('Content-Disposition: attachment');
-            header('Content-Length: '.$length);
+            header('Content-Length: '.($end-$start+1));
             unlockBookRead();
-            try { fpassthru($file); } finally { fclose($file); }
+            try {
+                if ($range===null) fpassthru($file);
+                else stream_copy_to_stream($file,fopen('php://output','wb'),$end-$start+1);
+            } finally { fclose($file); }
             exit;
         }
         if ($format['reader']==='bytes' && $reader instanceof ByteBookReader) {
@@ -111,6 +132,8 @@ try {
         'loading'=>tr('Opening book…'),'failed'=>tr('Could not load this part. Try again.'),
         'unsupported'=>tr('This book could not be decoded for online reading. You can still download the original.'),
         'chapter'=>tr('Next chapter'),'part'=>tr('Chapter %d of %d'),
+        'signedOut'=>tr('Sign in again.'),'denied'=>tr('Library access denied.'),
+        'changed'=>tr('This book changed. Reopen it from the library.'),
     ];
 } catch (Throwable $e) {
     $status=$e instanceof RequestError?$e->getCode():($e instanceof AccountStorageError?503:500);

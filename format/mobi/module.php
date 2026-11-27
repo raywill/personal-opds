@@ -7,7 +7,7 @@ use BookFormat, MetadataBudget, RuntimeException;
 if (!interface_exists(BookFormat::class,false)) { http_response_code(404); exit; }
 
 /*
- * Download-only. Read the Palm record table and book headers, not the text
+ * Server-side metadata: read the Palm record table and book headers, not the text
  * compression streams. Layout reference: calibre/format_docs/pdb/mobi.txt.
  */
 final class MobiFormat implements BookFormat

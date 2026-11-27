@@ -1,12 +1,13 @@
-// The worker has no browsing context. Parsing a book cannot trigger a resource
-// fetch, run scripts, or add elements to the visible page.
+// The worker has no browsing context. All reads go through the authorized
+// same-origin source; book markup cannot fetch a URL or execute scripts.
 function asset(name){
     const url=new URL(name,import.meta.url);
     url.search=new URL(import.meta.url).search;
     return import(url);
 }
-let parser,MOBI;
-const ready=Promise.all([asset('./linkedom-worker.js'),asset('./foliate-mobi.js')]).then(([dom,mobi])=>{
+let parser,MOBI,BookSourceError,openSource;
+const ready=Promise.all([asset('./linkedom-worker.js'),asset('./foliate-mobi.js'),asset('./source.js')]).then(([dom,mobi,source])=>{
+    ({BookSourceError,openSource}=source);
     MOBI=mobi.MOBI;
     globalThis.DOMParser=dom.DOMParser;
     globalThis.document=dom.parseHTML('<!doctype html><html><body></body></html>').document;
@@ -20,7 +21,7 @@ const discard=new Set('script style iframe object embed form input textarea sele
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 const maxChapter=4*1024*1024;
 const maxImage=12*1024*1024;
-let book,sections,visibleIndexes,toc,anchors;
+let book,sections,visibleIndexes,toc,anchors,imageState;
 function localLink(raw,part){
     if(typeof raw!=='string'||raw.length>512)return null;
     if(raw.startsWith('#')&&part!==undefined){
@@ -66,54 +67,51 @@ function imageIndex(node){
     const key=rec&&/^\d{1,8}$/.test(rec)?Number(rec):embed?parseInt(embed[1],32):0;
     return Number.isSafeInteger(key)&&key>=1&&key<=book.mobi.pdb.numRecords?key-1:null;
 }
-async function render(part){
+async function render(part,token){
     if(!Number.isInteger(part)||part<0||part>=sections.length)throw Error('Invalid chapter');
-    const raw=await sections[part].readMarkup();
+    imageState?.controller.abort();
+    const chapter=await sanitize(await sections[part].readMarkup(),part);
+    imageState={token,keys:chapter.images,budget:0,controller:new AbortController()};
+    return {html:chapter.html,count:sections.length,imageToken:token};
+}
+async function sanitize(raw,part){
     if(typeof raw!=='string'||raw.length>maxChapter)throw Error('Chapter too large');
     const wrapped=/<(?:html|body)(?:\s|>)/i.test(raw)?raw:'<html><body>'+raw+'</body></html>';
     const doc=parser.parseFromString(wrapped,'text/html');
     const body=doc.querySelector('body')??doc.documentElement;
     if(!body)throw Error('Missing chapter body');
     const marks=new Map();
-    for(const [anchor,href] of anchors.get(part)??[]){
+    for(const [anchor,href] of (part===undefined?[]:anchors.get(part)??[])){
         try{
             const resolved=await book.resolveHref(href);
             const node=resolved?.anchor?.(doc);
             if(node){const list=marks.get(node)??[];list.push(anchor);marks.set(node,list);}
         }catch{}
     }
-    const images=[],imageKeys=new Map(),pieces=[];
-    let visited=0,imageBytes=0;
-    async function appendImage(node){
+    const images=new Set(),pieces=[];
+    let visited=0,hasText=false;
+    function appendImage(node){
+        if(part===undefined)return;
         const key=imageIndex(node);
-        if(key===null)return;
-        if(!imageKeys.has(key)){
-            if(images.length>=64)return;
-            try{
-                const bytes=await book.mobi.loadResource(key);
-                const mime=bytes instanceof ArrayBuffer?imageMime(bytes):null;
-                if(!mime||bytes.byteLength>maxImage||imageBytes+bytes.byteLength>24*1024*1024)return;
-                imageBytes+=bytes.byteLength;
-                imageKeys.set(key,images.push({mime,bytes})-1);
-            }catch{return;}
-        }
-        pieces.push('<img data-mobi-image="'+imageKeys.get(key)+'" loading="lazy" decoding="async" alt="'+escape(node.getAttribute('alt'))+'">');
+        if(key===null||(!images.has(key)&&images.size>=64))return;
+        images.add(key);
+        pieces.push('<img data-mobi-image="'+key+'" decoding="async" alt="'+escape(node.getAttribute('alt'))+'">');
     }
     async function visit(node,depth){
         if(++visited>100000)throw Error('Chapter too complex');
         if(depth>96)return;
-        if(node.nodeType===3){pieces.push(escape(node.nodeValue));return;}
+        if(node.nodeType===3){if(node.nodeValue.trim())hasText=true;pieces.push(escape(node.nodeValue));return;}
         if(node.nodeType!==1)return;
         const tag=node.localName.toLowerCase();
         if(discard.has(tag))return;
         for(const mark of marks.get(node)??[])pieces.push('<span data-book-anchor="'+mark+'"></span>');
-        if(tag==='img'||tag==='image'){await appendImage(node);return;}
+        if(tag==='img'||tag==='image'){appendImage(node);return;}
         if(tag==='br'||tag==='hr'){pieces.push('<'+tag+'>');return;}
         const name=node.getAttribute('id')||(tag==='a'?node.getAttribute('name'):'');
         const dir=node.getAttribute('dir');
         const attrs=(name&&name.length<=512?' data-book-anchor="'+escape(name)+'"':'')+(['ltr','rtl','auto'].includes(dir)?' dir="'+dir+'"':'');
         const pos=tag==='a'?node.getAttribute('filepos'):null;
-        const link=tag==='a'?localLink(pos?'filepos:'+pos:node.getAttribute('href'),part):null;
+        const link=tag==='a'&&part!==undefined?localLink(pos?'filepos:'+pos:node.getAttribute('href'),part):null;
         const use=link?'a':tags.has(tag)?tag:attrs?'span':'';
         if(use)pieces.push('<'+use+attrs+(link?' href="#" data-part="'+link[0]+'" data-fragment="'+escape(link[1])+'"':'')+'>');
         for(const child of node.childNodes)await visit(child,depth+1);
@@ -121,12 +119,30 @@ async function render(part){
     }
     for(const mark of marks.get(body)??[])pieces.push('<span data-book-anchor="'+mark+'"></span>');
     for(const child of body.childNodes)await visit(child,0);
-    return {html:pieces.join(''),images,count:sections.length};
+    if(part===undefined)return hasText?pieces.join(''):'';
+    return {html:pieces.join(''),images};
 }
-async function open(source){
-    if(!(source instanceof Blob)||source.size<96||source.size>100*1024*1024)throw Error('Unsupported file');
+async function getImage({token,key}){
+    const state=imageState;
+    if(state?.token!==token||!state.keys.delete(key)||state.budget>=24*1024*1024)return null;
+    const bytes=await book.mobi.loadResource(key,state.controller.signal);
+    if(state!==imageState||state.controller.signal.aborted)return null;
+    const mime=bytes instanceof ArrayBuffer?imageMime(bytes):null;
+    if(!mime||bytes.byteLength>maxImage||state.budget+bytes.byteLength>24*1024*1024)return null;
+    state.budget+=bytes.byteLength;
+    return {mime,bytes};
+}
+async function open({url,preview},id){
+    const source=await openSource(url);
+    const onPrefix=preview?async raw=>{
+        const html=await sanitize(raw);
+        if(!html)return false;
+        self.postMessage({id,preview:html});
+        return true;
+    }:undefined;
     // Styles and fonts are not rendered by the shared reader; never inflate them.
-    book=await new MOBI({unzlib:()=>{throw Error('Embedded fonts are not rendered');}}).open(source);
+    book=await new MOBI({unzlib:()=>{throw Error('Embedded fonts are not rendered');}})
+        .open(source,{onPrefix,readingOnly:true});
     sections=[];visibleIndexes=new Map();anchors=new Map();
     for(const [i,section] of book.sections.entries()){
         if(typeof section.readMarkup!=='function'||section.size<=0)continue;
@@ -135,17 +151,27 @@ async function open(source){
     if(!sections.length||sections.length>2000)throw Error('No readable chapters');
     toc=makeToc();
 }
-let queue=Promise.resolve();
+let queue=Promise.resolve(),imageQueue=Promise.resolve();
 self.onmessage=({data:{id,action,value}})=>{
+    // A slow illustration must never delay the next chapter's text.
+    if(action==='image'){
+        imageQueue=imageQueue.then(async()=>{
+            try{
+                const image=await getImage(value);
+                self.postMessage({id,ok:true,value:image},image?[image.bytes]:[]);
+            }catch{self.postMessage({id,ok:true,value:null});}
+        });
+        return;
+    }
     queue=queue.then(async()=>{
         try{
             await ready;
-            if(action==='open'){await open(value);self.postMessage({id,ok:true,value:true});return;}
+            if(action==='open'){await open(value,id);self.postMessage({id,ok:true,value:true});return;}
             if(!book)throw Error('Book not open');
             if(action==='toc'){self.postMessage({id,ok:true,value:toc});return;}
             if(action!=='part')throw Error('Unknown action');
-            const chapter=await render(value);
-            self.postMessage({id,ok:true,value:chapter},chapter.images.map(x=>x.bytes));
-        }catch{self.postMessage({id,ok:false});}
+            const chapter=await render(value,id);
+            self.postMessage({id,ok:true,value:chapter});
+        }catch(error){self.postMessage({id,ok:false,status:BookSourceError&&error instanceof BookSourceError?error.status:null});}
     });
 };

@@ -259,7 +259,7 @@
  }
  if(byteReader){startTextReader();return;}
  let chapterClient=null;
- async function chapterSource(query){
+ async function chapterSource(query,onPreview){
      if(!cfg.client)return get(query);
      const permission=await get({check:1});
      if(permission.success!==true)throw new Error(cfg.failed);
@@ -269,7 +269,7 @@
              throw error;
          });
      }
-     return (await chapterClient).read(query);
+     return (await chapterClient).read(query,onPreview);
  }
  let part=0,data=null,busy=false,requestNo=0,failed=null,saveTimer=0;
  let pendingLocation=null,selectedLocation=null;
@@ -314,8 +314,17 @@
      progress.textContent='';
      // Keep the old chapter on screen until the requested one returns.
      try {
-         const result=await chapterSource({part:target});
+         let paintedPrefix=false;
+         const onPreview=!data&&target===0&&ratio===0&&!fragment?excerpt=>{
+             if(seq!==requestNo)return;
+             excerpt.mount(book);
+             $('reader-message').hidden=true;status.textContent='';
+             book.setAttribute('aria-busy','false');
+             paintedPrefix=true;
+         }:null;
+         const result=await chapterSource({part:target},onPreview);
          if(seq!==requestNo)return;
+         const prefixTop=paintedPrefix?vp.scrollTop:null;
          // Only the active chapter adopts its validated local raster blobs.
          if(typeof result.mount==='function')result.mount(book);
          else book.innerHTML=result.html;
@@ -324,13 +333,13 @@
          $('reader-message').hidden=true;status.textContent='';
          busy=false;displayProgress();
          pendingLocation=null;selectedLocation=null;
-         if(!selectAnchor(target,fragment))vp.scrollTop=clamp(ratio)*limit();
+         if(!selectAnchor(target,fragment))vp.scrollTop=prefixTop===null?clamp(ratio)*limit():Math.min(prefixTop,limit());
          displayProgress();position();
          if(toc.open)highlightCurrentChapter();
      }catch(error){
          if(seq!==requestNo)return;
          pendingLocation=null;failed=()=>load(target,ratio,fragment);
-         status.textContent=error.message||cfg.failed;$('retry').hidden=false;
+         $('reader-message').hidden=false;status.textContent=error.message||cfg.failed;$('retry').hidden=false;
          busy=false;displayProgress();
          if(toc.open)highlightCurrentChapter();
      }finally{if(seq===requestNo)book.setAttribute('aria-busy','false');}
