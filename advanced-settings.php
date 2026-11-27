@@ -9,7 +9,7 @@ header('Cache-Control: private, no-store');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 $nonce=base64_encode(random_bytes(18));
-header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$nonce'; script-src 'nonce-$nonce'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$nonce'; script-src 'nonce-$nonce'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
 $method=$_SERVER['REQUEST_METHOD']??'GET';
 try {
     requireSiteLinkAdmin();
@@ -62,6 +62,7 @@ $probes=array_map(static fn($route)=>'./'.$route[0].OPDS_REWRITE_TEST_QUERY,OPDS
 <!doctype html>
 <html lang="<?=uiLanguageTag()?>"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?=tr_html('Advanced settings')?> · <?=sh(LIBRARY_TITLE)?></title>
+<link rel="icon" type="image/svg+xml" href="opds-icon.svg">
 <style nonce="<?=sh($nonce)?>">
 *{box-sizing:border-box} :root{color-scheme:light;--ink:#172337;--muted:#526176;--blue:#254ab8;--selected:#eef3ff;--line:#dfe6ef;--background:#f6f8fb;--white:#fff}
 body{margin:0;background:var(--background);color:var(--ink);font:15px/1.55 system-ui,-apple-system,sans-serif} button,input{font:inherit} a{color:var(--blue)} [hidden]{display:none!important}

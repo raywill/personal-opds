@@ -3,7 +3,7 @@ declare(strict_types=1);
 if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 $root = dirname(__DIR__);
 $payload = [];
-$files=['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','privacy.php','agent-skill.php','library-controls.php','advanced-settings.php','site-link-settings.php','catalogue.php','preview.php','reader-content.php','reader.js','reader.css','admin.php','LICENSE','NOTICE','format/Contracts.php','format/Registry.php'];
+$files=['i18n.php','bootstrap.php','security.php','index.php','up.php','api.php','upload-common.php','accounts.php','libraries.php','privacy.php','agent-skill.php','library-controls.php','advanced-settings.php','site-link-settings.php','catalogue.php','preview.php','reader-content.php','reader.js','reader.css','opds-icon.svg','admin.php','LICENSE','NOTICE','format/Contracts.php','format/Registry.php'];
 foreach (glob($root.'/format/*/manifest.json') ?: [] as $manifest) {
     $dir=dirname($manifest); $id=basename($dir);
     if (!preg_match('/\A[a-z][a-z0-9_-]{0,31}\z/D',$id) || is_link($dir) || is_link($manifest))

@@ -11,7 +11,7 @@ header('Cache-Control: private, no-store');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 $nonce=base64_encode(random_bytes(18));
-header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$nonce'; script-src 'nonce-$nonce'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$nonce'; script-src 'nonce-$nonce'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
 try {
     requireUploadHttps();
     startWebSession();
@@ -345,6 +345,7 @@ function fileSizeLabel(int $size): string {
 ?>
 <!doctype html><html lang="<?=uiLanguageTag()?>"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?=h(LIBRARY_TITLE)?> · Personal OPDS</title>
+<link rel="icon" type="image/svg+xml" href="opds-icon.svg">
 <style nonce="<?=h($nonce)?>">
 :root{color-scheme:light;--ink:#182739;--soft:#465d77;--line:#d9e3ee;--paper:#fff;--bg:#f8fafc;--accent:#204fce;--blue-soft:#e8eefc;--mint:#e6f5ed;--green:#056447;--warn:#9b263a}
 *{box-sizing:border-box}[hidden]{display:none!important}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -353,6 +354,7 @@ a{color:var(--accent)}:focus-visible{outline:3px solid #5683f4;outline-offset:3p
 .icon{width:17px;height:17px;flex:none;vertical-align:-.16em}
 .top{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:72px;border-bottom:1px solid var(--line);background:var(--paper);padding:0 24px}
 .brand{display:inline-flex;align-items:center;gap:11px;color:var(--ink);text-decoration:none;min-width:0;font-size:17px;font-weight:780;overflow-wrap:anywhere}
+.brand-logo{display:block;width:34px;height:34px;flex:none}
 .brand-mark{display:grid;place-items:center;width:37px;height:37px;flex:none;border-radius:11px;background:var(--accent);color:white}
 .account summary,.book-menu summary{list-style:none}.account summary::-webkit-details-marker,.book-menu summary::-webkit-details-marker{display:none}
 .account summary{display:flex;align-items:center;gap:11px;min-height:44px;padding:4px 13px;border-radius:9px;cursor:pointer;font-weight:720}.account summary:hover,.account[open] summary{background:var(--bg)}
@@ -428,7 +430,7 @@ dialog{width:min(500px,calc(100% - 28px));max-height:calc(100% - 28px);border:1p
 @media(max-width:600px){.manage-dialog{width:100%;padding:17px}.role-grid{grid-template-columns:1fr}.role-footer{bottom:-17px}.member-line{gap:.45rem}.member-toolbar{align-items:stretch}.member-line form button{padding:.35rem .45rem}}
 </style></head><body>
 <header class="top">
-<div class="brand-area"><a class="brand" href="<?=h($library?libraryHref(''):'up.php')?>"><span class="brand-mark"><?=icon('book')?></span><span><?=h(LIBRARY_TITLE)?></span></a>
+<div class="brand-area"><a class="brand" aria-label="<?=h(LIBRARY_TITLE)?>" href="<?=h($library?libraryHref(''):'up.php')?>"><img class="brand-logo" src="opds-icon.svg" alt="" width="34" height="34"><span><?=h(LIBRARY_TITLE)?></span></a>
 <?php if ($library && count($webLibraries)>1): ?><a class="button switcher" href="up.php?choose=1" aria-label="<?=tr_html('Switch library')?>"><?=h(libraryTitle($library,$viewer))?><?=icon('down')?></a><?php endif; ?></div>
 <?php if ($user): ?>
 <details class="account">

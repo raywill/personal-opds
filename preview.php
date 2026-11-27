@@ -128,6 +128,7 @@ $title=$bookName!==''?pathinfo($bookName,PATHINFO_FILENAME):tr('Reader');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title><?=re($title)?></title>
+<link rel="icon" type="image/svg+xml" href="opds-icon.svg">
 <link rel="stylesheet" href="reader.css?v=<?=filemtime(__DIR__.'/reader.css')?>">
 <?php if (!$error): ?><script src="reader.js?v=<?=filemtime(__DIR__.'/reader.js')?>" defer></script><?php endif; ?>
 </head>

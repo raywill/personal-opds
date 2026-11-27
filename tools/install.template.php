@@ -338,7 +338,8 @@ function installLibrary(array $fields,string $url,int &$step): string {
                 makeDirectory($parent,0750,$dirs);
             }
             if (is_link(__DIR__.'/'.$name)) stopInstall(tr('Installation files must not be symbolic links.'));
-            if (!file_exists(__DIR__.'/'.$name)) writeNew(__DIR__.'/'.$name,$content,$created,0640);
+            // Let a separate static web-server worker read the public site icon.
+            if (!file_exists(__DIR__.'/'.$name)) writeNew(__DIR__.'/'.$name,$content,$created,$name==='opds-icon.svg'?0644:0640);
         }
         $config=['base_url'=>$url,'title'=>$title,'max_category_depth'=>1,'multiuser'=>true,'share_key'=>bin2hex(random_bytes(32))];
         writeNew($conf.'/config.php',"<?php\nreturn ".var_export($config,true).";\n",$created);

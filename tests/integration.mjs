@@ -311,6 +311,18 @@ try{
  const bobOld=cli('invite','bob');const bobLink=cli('invite','bob');
  assert.equal((await activate('bob',bobOld)).status,403);
  assert.equal((await activate('bob',bobLink)).status,303);
+ const gateway=await request('up.php');
+ assert.equal(gateway.status,200);
+ assert.match(gateway.text,/<link rel="icon" type="image\/svg\+xml" href="opds-icon\.svg">/);
+ assert.match(gateway.text,/<a class="brand" aria-label="Test Site"[^>]*><img class="brand-logo" src="opds-icon\.svg" alt=""/);
+ assert.match(gateway.headers['content-security-policy'],/img-src 'self';/);
+ const siteIcon=await request('opds-icon.svg');
+ assert.equal(siteIcon.status,200);
+ assert.match(siteIcon.headers['content-type'],/^image\/svg\+xml/);
+ assert.equal(siteIcon.text,fs.readFileSync(path.join(project,'opds-icon.svg'),'utf8'));
+ for(const ink of ['#985E55','#537582','#697B55']) assert(siteIcon.text.includes(ink));
+ if(process.platform!=='win32') assert.equal(fs.statSync(path.join(app,'opds-icon.svg')).mode&0o777,0o644);
+ pass('color e-paper brand and favicon load from the fresh installer under a subdirectory');
  assert.equal((await ui({action:'login',username:'alice',password})).status,303);
  const aliceToken=getLegacyToken('alice');assert(aliceToken);
  assert(!fs.readFileSync(path.join(data,'conf','users.json'),'utf8').includes(aliceToken));
@@ -674,7 +686,14 @@ try{
    try{
      const page=await browser.newPage({viewport:{width:1260,height:900},ignoreHTTPSErrors:true});
      const errors=[];page.on('pageerror',e=>errors.push(e.message));
-     await page.goto(base+'up.php');await page.getByLabel('Username').fill('alice');await page.getByLabel('Password',{exact:true}).fill(password);
+     await page.goto(base+'up.php');
+     const loadedBrand=page.getByRole('link',{name:'Test Site',exact:true}).locator('img.brand-logo');
+     await loadedBrand.evaluate(async img=>{await img.decode();});
+     await page.setViewportSize({width:390,height:850});
+     assert(await loadedBrand.isVisible());
+     assert.equal(await loadedBrand.evaluate(img=>img.getBoundingClientRect().width),34);
+     await page.setViewportSize({width:1260,height:900});
+     await page.getByLabel('Username').fill('alice');await page.getByLabel('Password',{exact:true}).fill(password);
      await page.getByRole('button',{name:'Sign in'}).click();await page.getByRole('heading',{name:'alice’s library'}).waitFor();
      await page.getByRole('button',{name:'Upload books',exact:true}).click();
      const uploadSheet=page.getByRole('dialog',{name:'Upload books'});
