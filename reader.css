@@ -53,7 +53,8 @@ dialog input{accent-color:var(--accent);width:100%;margin:0}
 .contents-drawer[open][data-closing]{animation:reader-drawer-out .18s ease-in both}
 .contents-drawer h2{margin:.55rem 3rem .25rem 0}
 .chapter-drawer[open]{display:flex;flex-direction:column;overflow:hidden}
-.chapter-drawer .drawer-heading{flex:none;border-bottom:1px solid var(--line);margin-bottom:.68rem}
+.chapter-drawer .drawer-heading{flex:none}
+.mobi-drawer .drawer-heading{border-bottom:1px solid var(--line);margin-bottom:.68rem}
 .chapter-drawer #chapters{flex:1 1 0;min-height:0;overflow-x:hidden;overflow-y:auto;align-content:start;overscroll-behavior:contain;overflow-anchor:none;padding:4px;scrollbar-gutter:stable}
 .contents-progress{font-size:.82rem;color:var(--muted);margin:0 0 1rem;font-variant-numeric:tabular-nums}
 .contents-drawer #chapters button{border-color:transparent}

@@ -38,9 +38,8 @@
  }
  async function get(query){
      const response=await fetch(cfg.url+'&'+new URLSearchParams(query),{cache:'no-store',credentials:'same-origin'});
-     let result;try{result=await response.json();}catch{result=null;}
-     if(!response.ok)throw Object.assign(new Error(result?.error||cfg.failed),{status:response.status});
-     if(!result)throw new Error(cfg.failed);
+     let result;try{result=await response.json();}catch{throw Object.assign(new Error(cfg.failed),{status:response.status});}
+     if(!response.ok)throw Object.assign(new Error(result.error||cfg.failed),{status:response.status});
      return result;
  }
  let closeTimer=0;
@@ -491,7 +490,7 @@
      return {item,to,fragment};
  }
  function highlightCurrentChapter(){
-     if(!tocRows?.length)return;
+     if(tocRows?.[0]?.item.parentNode!==chapters)return;
      const destination=pendingLocation??currentSelection();
      const chapter=destination?.to??part;
      const same=tocRows.filter(row=>row.to===chapter);
@@ -523,6 +522,12 @@
      scheduleChapterCenter();
  }
  function contentsState(state,label,retry=false){
+     if(!cfg.tocKey){
+         const message=document.createElement('p');message.dataset.state=state;message.textContent=label;
+         if(state==='empty')chapters.replaceChildren();
+         else chapters.replaceChildren(message);
+         return;
+     }
      const panel=document.createElement('div');
      panel.className='contents-state';panel.dataset.state=state;
      const message=document.createElement('div');message.className='contents-state-message';
@@ -558,9 +563,10 @@
      if(tocRows.length)highlightCurrentChapter();
  }
  function loadContents(){
+     if(!cfg.tocKey&&tocCache){renderContents();return;}
      const loading=()=>{
          if(toc.open&&!closingToc&&chapters.firstElementChild?.dataset.state!=='loading')
-             contentsState('loading',cfg.tocLoading);
+             contentsState('loading',cfg.tocLoading??cfg.loading);
      };
      if(tocRequest){loading();return;}
      const disk=!tocCache&&cacheAvailable()?savedContents().find(pair=>pair[0]===entryKey)?.[1]:null;
@@ -592,7 +598,8 @@
              tocCache=null;tocRows=null;visibleRow=null;
              if(cacheAvailable())writeContents(null);
          }
-         if(toc.open&&!closingToc)contentsState('error',terminal||known?error.message:cfg.tocFailed,!terminal&&!known);
+         if(toc.open&&!closingToc)contentsState('error',
+             !cfg.tocKey?error?.message||cfg.failed:terminal||known?error.message:cfg.tocFailed,!terminal&&!known);
      }).finally(()=>{clearTimeout(waitIndicator);tocRequest=null;});
  }
  contents.addEventListener('click',()=>{
