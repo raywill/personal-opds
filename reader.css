@@ -53,11 +53,17 @@ dialog input{accent-color:var(--accent);width:100%;margin:0}
 .contents-drawer[open][data-closing]{animation:reader-drawer-out .18s ease-in both}
 .contents-drawer h2{margin:.55rem 3rem .25rem 0}
 .chapter-drawer[open]{display:flex;flex-direction:column;overflow:hidden}
-.chapter-drawer .drawer-heading{flex:none}
+.chapter-drawer .drawer-heading{flex:none;border-bottom:1px solid var(--line);margin-bottom:.68rem}
 .chapter-drawer #chapters{flex:1 1 0;min-height:0;overflow-x:hidden;overflow-y:auto;align-content:start;overscroll-behavior:contain;overflow-anchor:none;padding:4px;scrollbar-gutter:stable}
 .contents-progress{font-size:.82rem;color:var(--muted);margin:0 0 1rem;font-variant-numeric:tabular-nums}
 .contents-drawer #chapters button{border-color:transparent}
 .contents-drawer #chapters [aria-current]{background:var(--chrome);border-color:var(--line)}
+.contents-state{border:1px solid var(--line);border-radius:.8rem;background:var(--chrome);padding:.9rem 1rem;color:var(--muted)}
+.contents-state-message{display:flex;align-items:center;gap:.72rem;min-height:1.45rem;font-size:.9rem;font-weight:550;overflow-wrap:anywhere}
+.contents-spinner{flex:none;inline-size:1.16rem;block-size:1.16rem;border:2px solid var(--line);border-top-color:var(--accent);border-inline-end-color:var(--accent);border-radius:50%;animation:reader-spin .85s linear infinite}
+.contents-drawer #chapters .contents-retry{margin-top:.55rem;border-color:var(--line);color:var(--accent);font-size:.86rem;font-weight:650}
+@keyframes reader-spin{to{transform:rotate(1turn)}}
+@media(prefers-reduced-motion:reduce){.contents-spinner{animation:none}}
 @keyframes reader-drawer-in{from{transform:translateX(-100%)}to{transform:translateX(0)}}
 @keyframes reader-drawer-out{from{transform:translateX(0)}to{transform:translateX(-100%)}}
 @media(prefers-reduced-motion:reduce){.contents-drawer[open]{animation:none}}

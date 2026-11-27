@@ -38,8 +38,9 @@
  }
  async function get(query){
      const response=await fetch(cfg.url+'&'+new URLSearchParams(query),{cache:'no-store',credentials:'same-origin'});
-     let result;try{result=await response.json();}catch{throw new Error(cfg.failed);}
-     if(!response.ok)throw new Error(result.error||cfg.failed);
+     let result;try{result=await response.json();}catch{result=null;}
+     if(!response.ok)throw Object.assign(new Error(result?.error||cfg.failed),{status:response.status});
+     if(!result)throw new Error(cfg.failed);
      return result;
  }
  let closeTimer=0;
@@ -259,10 +260,13 @@
  }
  if(byteReader){startTextReader();return;}
  let chapterClient=null;
- async function chapterSource(query,onPreview){
-     if(!cfg.client)return get(query);
+ async function checkChapterAccess(){
      const permission=await get({check:1});
      if(permission.success!==true)throw new Error(cfg.failed);
+ }
+ async function chapterSource(query,onPreview,{checked=false}={}){
+     if(!cfg.client)return get(query);
+     if(!checked)await checkChapterAccess();
      if(!chapterClient){
          chapterClient=import(cfg.client).then(module=>module.openReader(cfg)).catch(error=>{
              chapterClient=null;
@@ -406,7 +410,59 @@
      }
  });
  const chapters=$('chapters');
- let tocCache=null,tocRequest=null,tocRows=[],visibleRow=null,autoCenter=false,centerFrame=0,openTimer=0;
+ const storageKey='personal-opds:reader:toc:v1', maxEntry=128*1024, maxStorage=640*1024;
+ const entryKey=[cfg.profile,cfg.book,document.documentElement.lang].join(':');
+ const validToc=rows=>Array.isArray(rows)&&rows.length<=2000&&rows.every(row=>Array.isArray(row)&&
+     row.length===3&&Number.isSafeInteger(row[0])&&row[0]>=0&&row[0]<2000&&
+     typeof row[1]==='string'&&typeof row[2]==='string');
+ let tocCrypto;
+ function cacheCrypto(){
+     if(!tocCrypto)tocCrypto=crypto.subtle.importKey('raw',Uint8Array.from(cfg.tocKey.match(/../g),pair=>parseInt(pair,16)),
+         'AES-GCM',false,['encrypt','decrypt']);
+     return tocCrypto;
+ }
+ const cacheAvailable=()=>!!(window.crypto?.subtle&&/^[0-9a-f]{64}$/.test(cfg.tocKey));
+ function savedContents(){
+     const value=read(storageKey);
+     return Array.isArray(value)?value.filter(pair=>Array.isArray(pair)&&pair.length===2&&
+         typeof pair[0]==='string'&&pair[0].length<=180&&typeof pair[1]==='string'&&pair[1].length<=maxEntry):[];
+ }
+ function writeContents(value){
+     const entries=savedContents().filter(pair=>pair[0]!==entryKey);
+     if(value!==null)entries.push([entryKey,value]);
+     let remaining=maxStorage;
+     const newest=[];
+     for(let i=entries.length-1;i>=0&&newest.length<20;i--){
+         const [id,ciphertext]=entries[i];
+         const size=id.length+ciphertext.length+8;
+         if(size>remaining)break;
+         newest.unshift(entries[i]);remaining-=size;
+     }
+     write(storageKey,newest);
+ }
+ async function decodeContents(value){
+     try{
+         const bytes=Uint8Array.from(atob(value),c=>c.charCodeAt(0));
+         const clear=await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.subarray(0,12)},await cacheCrypto(),bytes.subarray(12));
+         const rows=JSON.parse(new TextDecoder().decode(clear));
+         if(validToc(rows))return rows;
+     }catch{/* A browser storage or cache miss must not interrupt reading. */}
+     writeContents(null);
+     return null;
+ }
+ async function persistContents(rows){
+     if(!cacheAvailable())return;
+     try{
+         const data=new TextEncoder().encode(JSON.stringify(rows));
+         if(data.length>(maxEntry/4)*3-28)return;
+         const iv=crypto.getRandomValues(new Uint8Array(12));
+         const sealed=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},await cacheCrypto(),data));
+         let binary=String.fromCharCode(...iv);
+         for(let offset=0;offset<sealed.length;offset+=8192)binary+=String.fromCharCode(...sealed.subarray(offset,offset+8192));
+         writeContents(btoa(binary));
+     }catch{/* Private mode and storage quotas may prevent persistence. */}
+ }
+ let tocCache=null,tocRequest=null,tocRows=null,visibleRow=null,autoCenter=false,centerFrame=0,openTimer=0;
  function centerChapter(){
      if(!toc.open||closingToc||!autoCenter||!visibleRow)return;
      const viewport=chapters.getBoundingClientRect(), row=visibleRow.getBoundingClientRect();
@@ -435,6 +491,7 @@
      return {item,to,fragment};
  }
  function highlightCurrentChapter(){
+     if(!tocRows?.length)return;
      const destination=pendingLocation??currentSelection();
      const chapter=destination?.to??part;
      const same=tocRows.filter(row=>row.to===chapter);
@@ -465,22 +522,86 @@
      centerChapter();
      scheduleChapterCenter();
  }
- contents.addEventListener('click',async()=>{
+ function contentsState(state,label,retry=false){
+     const panel=document.createElement('div');
+     panel.className='contents-state';panel.dataset.state=state;
+     const message=document.createElement('div');message.className='contents-state-message';
+     message.setAttribute('role','status');
+     const text=document.createElement('span');
+     if(state==='loading'){
+         const spinner=document.createElement('span');spinner.className='contents-spinner';
+         spinner.setAttribute('aria-hidden','true');
+         message.append(spinner);
+     }
+     message.append(text);panel.append(message);
+     if(retry){
+         const button=document.createElement('button');button.type='button';button.className='contents-retry';
+         button.textContent=cfg.retry;
+         button.addEventListener('click',()=>{
+             if(!toc.open||closingToc)return;
+             toc.querySelector('.dialog-close').focus({preventScroll:true});
+             loadContents();
+         });
+         panel.append(button);
+     }
+     chapters.replaceChildren(panel);
+     text.textContent=label;
+ }
+ function renderContents(){
+     if(!toc.open||closingToc)return;
+     if(!tocRows){
+         if(!tocCache.length){tocRows=[];contentsState('empty',cfg.tocEmpty);return;}
+         chapters.replaceChildren();
+         tocRows=tocCache.map(([to,fragment,label])=>addChapter(label||format(cfg.part,to+1,data?.count||tocCache.length),to,fragment));
+     } else if(tocRows.length)chapters.replaceChildren(...tocRows.map(row=>row.item));
+     else contentsState('empty',cfg.tocEmpty);
+     if(tocRows.length)highlightCurrentChapter();
+ }
+ function loadContents(){
+     const loading=()=>{
+         if(toc.open&&!closingToc&&chapters.firstElementChild?.dataset.state!=='loading')
+             contentsState('loading',cfg.tocLoading);
+     };
+     if(tocRequest){loading();return;}
+     const disk=!tocCache&&cacheAvailable()?savedContents().find(pair=>pair[0]===entryKey)?.[1]:null;
+     // A cold TOC can be slow. A quick authorization check on a cache hit
+     // should not flash a spinner, or expose the previous rows while pending.
+     let waitIndicator=0;
+     if(tocCache||disk){
+         autoCenter=true;
+         chapters.replaceChildren();
+         visibleRow=null;
+         waitIndicator=setTimeout(loading,160);
+     }else loading();
+     tocRequest=(async()=>{
+         if(tocCache||disk){
+             await checkChapterAccess();
+             tocCache??=await decodeContents(disk);
+             if(tocCache){renderContents();return;}
+             loading();
+         }
+         const result=await chapterSource({toc:1},undefined,{checked:!!disk});
+         if(!validToc(result.toc))throw new Error();
+         tocCache=result.toc;
+         void persistContents(result.toc);
+         renderContents();
+     })().catch(error=>{
+         const terminal=[401,403,404,409].includes(error?.status);
+         const known=[cfg.signedOut,cfg.denied,cfg.changed].includes(error?.message);
+         if(terminal){
+             tocCache=null;tocRows=null;visibleRow=null;
+             if(cacheAvailable())writeContents(null);
+         }
+         if(toc.open&&!closingToc)contentsState('error',terminal||known?error.message:cfg.tocFailed,!terminal&&!known);
+     }).finally(()=>{clearTimeout(waitIndicator);tocRequest=null;});
+ }
+ contents.addEventListener('click',()=>{
      if(toc.open)return;
      autoCenter=true;
      showToc();
      clearTimeout(openTimer);
      openTimer=setTimeout(centerChapter,260);
-     if(tocRows.length){highlightCurrentChapter();return;}
-     const message=document.createElement('p');message.textContent=cfg.loading;chapters.replaceChildren(message);
-     try{
-         tocRequest??=chapterSource({toc:1}).then(result=>result.toc).finally(()=>{tocRequest=null;});
-         tocCache??=await tocRequest;
-         if(!toc.open||closingToc)return;
-         chapters.replaceChildren();
-         tocRows=tocCache.map(([to,fragment,label])=>addChapter(label||format(cfg.part,to+1,data?.count||tocCache.length),to,fragment));
-         highlightCurrentChapter();
-     }catch(error){message.textContent=error.message||cfg.failed;}
+     loadContents();
  });
  load(validPart(saved.part)?saved.part:0,clamp(saved.ratio),typeof saved.fragment==='string'?saved.fragment:'');
 })();

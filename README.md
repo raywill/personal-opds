@@ -174,8 +174,11 @@ when the drawer is opened. The total number of legacy chapters may be unknown
 until the end is scanned. Embedded images are fetched separately. A server
 or proxy that ignores Range falls back to loading the original once. Keep the
 `Range` and `Content-Range` headers intact for progressive reading. Existing
-reading permissions still apply. Fixed-layout fidelity, custom styles, embedded
-fonts and multimedia are not supported. Malformed or unsupported books may
+reading permissions still apply. EPUB and MOBI directories can be reused from
+a small encrypted browser cache, scoped to the signed-in account, book version
+and language. The reader rechecks access before displaying cached entries; it
+does not cache book text or images there. Fixed-layout fidelity, custom styles,
+embedded fonts and multimedia are not supported. Malformed or unsupported books may
 still need a compatible offline reader. OPDS access depends on the client.
 See [the format module contract](format/README.md) to add a format.
 

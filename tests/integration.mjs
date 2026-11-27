@@ -474,14 +474,85 @@ try{
     assert.match(await image.getAttribute('src'),/^blob:/);
     assert.equal(await view.locator('#book script,#book a[href^="https:"]').count(),0);
     assert.deepEqual(leaks,[]);
+    const checkRoute=url=>url.searchParams.has('check');
+    const loading=view.getByRole('status').filter({hasText:'Loading contents…'});
+    const drawer=view.locator('#toc');
+    let checks=0,releaseContents;
+    const heldContents=new Promise(resolve=>{releaseContents=resolve;});
+    const holdCheck=async route=>{
+      checks++;
+      await heldContents;
+      await route.continue();
+    };
+    await view.route(checkRoute,holdCheck);
+    try{
+      await view.locator('#contents').click();
+      await loading.waitFor();
+      await drawer.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+      assert.equal(await view.locator('.contents-spinner').evaluate(el=>getComputedStyle(el).animationName),'reader-spin');
+      assert.equal(await view.locator('#reader-message').isVisible(),false);
+      assert.equal(await view.locator('#book').getByText('First MOBI chapter',{exact:true}).isVisible(),true);
+      assert.equal(await loading.getByText('Opening book…').count(),0);
+      await view.mouse.click(382,405);
+      await drawer.waitFor({state:'hidden'});
+      await view.locator('#contents').click();
+      await loading.waitFor();
+      assert.equal(checks,1,'Reopening the drawer reuses the in-flight directory request');
+    }finally{releaseContents();}
+    await view.locator('#chapters').getByRole('button',{name:'Chapter 2 of 2'}).waitFor();
+    assert.equal(await loading.count(),0);
+    await view.unroute(checkRoute,holdCheck);
+    await view.keyboard.press('Escape');
+    await drawer.waitFor({state:'hidden'});
     await view.locator('#contents').click();
+    assert.equal(await loading.count(),0,'Cached contents should not flash a loading indicator');
     await view.locator('#chapters').getByRole('button',{name:'Chapter 2 of 2'}).click();
     await view.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor();
+    const localToc='personal-opds:reader:toc:v1';
+    await view.waitForFunction(key=>JSON.parse(localStorage.getItem(key))?.length===1,localToc);
+    assert(!/Chapter 2 of 2/.test(await view.evaluate(key=>localStorage.getItem(key),localToc)));
+    // Check a fresh document can reuse the saved directory after a single
+    // authorization check, with the same chapter targets as a worker-built TOC.
     await view.reload();
     await view.locator('#book').getByText('Second MOBI chapter',{exact:true}).waitFor();
+    let revalidations=0;
+    const countCheck=route=>{revalidations++;return route.continue();};
+    await view.route(checkRoute,countCheck);
+    await view.locator('#contents').click();
+    await view.locator('#chapters').getByRole('button',{name:'Chapter 1 of 2'}).waitFor();
+    assert.equal(revalidations,1);
+    await view.unroute(checkRoute,countCheck);
+    await view.keyboard.press('Escape');
+    await drawer.waitFor({state:'hidden'});
     const bigName='MOBI slow-network fixture.mobi',big=sampleMobi({large:true});
     assert.equal((await upload(aliceToken,'',[[bigName,big]])).status,200);
     const state=await ctx.storageState();
+    const zh=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:390,height:844},
+      isMobile:true,hasTouch:true,storageState:{cookies:state.cookies,origins:[]},
+      locale:'zh-CN',extraHTTPHeaders:{'Accept-Language':'zh-CN'},reducedMotion:'reduce'});
+    try{
+      const touch=await zh.newPage();
+      await touch.goto(new URL(preview,base).href);
+      await touch.locator('#book').getByText('First MOBI chapter',{exact:true}).waitFor();
+      let respond;
+      const delayError=new Promise(resolve=>{respond=resolve;});
+      const failCheck=async route=>{
+        await delayError;
+        await route.fulfill({status:503,json:{error:'fixture unavailable'}});
+      };
+      await touch.route(checkRoute,failCheck);
+      try{
+        await touch.getByRole('button',{name:'目录',exact:true}).tap();
+        await touch.getByRole('status').getByText('正在加载目录…').waitFor();
+        assert.equal(await touch.locator('.contents-spinner').evaluate(el=>getComputedStyle(el).animationName),'none');
+      }finally{respond();}
+      await touch.getByRole('status').getByText('无法加载目录。').waitFor();
+      await touch.unroute(checkRoute,failCheck);
+      await touch.getByRole('button',{name:'重试',exact:true}).tap();
+      await touch.locator('#chapters').getByRole('button',{name:'第 2 章，共 2 章'}).waitFor();
+      assert.equal(await touch.locator('.contents-state').count(),0);
+    }finally{await zh.close();}
+    pass('MOBI contents load inside a dismissible drawer, reuse an in-flight request and respect reduced motion; Chinese error retries without reopening the book');
     async function measure(whole){
       const benchCtx=await browser.newContext({storageState:{cookies:state.cookies,origins:[]},
         ignoreHTTPSErrors:true,viewport:{width:390,height:844}});
@@ -583,6 +654,12 @@ try{
     await ctx.clearCookies();
     await view.locator('#contents').click();
     await view.locator('#chapters').getByText('Sign in again.').waitFor();
+    assert.equal(await view.locator('#chapters button').count(),0);
+    assert.equal(await view.evaluate(key=>{
+      const {profile,book}=JSON.parse(document.querySelector('#reader').dataset.config);
+      const entry=[profile,book,document.documentElement.lang].join(':');
+      return JSON.parse(localStorage.getItem(key)).some(([id])=>id===entry);
+    },localToc),false);
     await ctx.close();
    } finally {await browser.close();}
    pass('MOBI browser uses isolated decoder, embedded raster, chapter drawer, resume, and rechecks web authorization');
@@ -1973,6 +2050,9 @@ try{
  assert(first.text.length<2500);assert(fs.statSync(fixture).size>4*1024*1024);
  assert.equal((await request(readerApi+'&part=1')).json.count,2);
  assert.equal((await request(readerApi+'&toc=1')).json.toc[1][1],'return-here');
+ assert.equal((await request(readerApi+'&check=1')).json.success,true);
+ assert.equal((await request(readerApi+'&check=1',{headers:{cookie:''}})).status,401);
+ assert.equal((await request(previewURL('readable.epub',{version:'old',check:1}))).status,409);
  assert.equal((await request(readerApi+'&asset=cover.png')).headers['content-type'],'image/png');
  assert.equal((await request(readerApi+'&asset=other.bin')).status,404);
  const signedInReader=savedSession();
@@ -2046,6 +2126,17 @@ try{
      await drawer.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
      assert(Math.abs((await drawer.boundingBox()).x)<1);
      await web.mouse.click(1000,370);
+     await drawer.waitFor({state:'hidden'});
+     await web.waitForFunction(()=>JSON.parse(localStorage.getItem('personal-opds:reader:toc:v1'))?.length===1);
+     const parsed=fetched.filter(u=>u.includes('&toc=')).length;
+     const checksBefore=fetched.filter(u=>u.includes('&check=')).length;
+     await web.reload();
+     await web.getByText('Opening text',{exact:true}).waitFor();
+     await contents.click();
+     await drawer.getByRole('button',{name:'Opening pages'}).waitFor();
+     assert.equal(fetched.filter(u=>u.includes('&toc=')).length,parsed,'Reload reuses EPUB contents instead of reparsing');
+     assert.equal(fetched.filter(u=>u.includes('&check=')).length,checksBefore+1);
+     await web.keyboard.press('Escape');
      await drawer.waitFor({state:'hidden'});
      assert.equal(await contents.getAttribute('aria-expanded'),'false');
      await contents.click();

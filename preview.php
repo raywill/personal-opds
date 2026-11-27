@@ -61,8 +61,8 @@ try {
         if (!hash_equals($version,readerParam('version'))) reject('This book changed. Reopen it from the library.',409);
         $operations=(int)isset($_GET['part'])+(int)isset($_GET['asset'])+(int)isset($_GET['toc'])+(int)isset($_GET['source'])+(int)isset($_GET['check']);
         if ($operations!==1) reject('Invalid input.',400);
+        if (isset($_GET['check'])&&$format['reader']==='chapters') readerJson(['success'=>true]);
         if ($client!==null) {
-            if (isset($_GET['check'])) readerJson(['success'=>true]);
             if (!isset($_GET['source'])) reject('Book not found.',404);
             $reader->validate($path);
             $file=fopen($path,'rb');
@@ -129,7 +129,12 @@ try {
     $page=[
         'reader'=>$format['reader'],'client'=>$client===null?null:'./'.$client.'?v='.$clientRevision,'url'=>$url.'&version='.$version,
         'profile'=>hash_hmac('sha256',$viewer,SHARE_KEY),'book'=>$version,
+        // Never store this key in the browser cache. It is delivered only to an authorized reader.
+        'tocKey'=>$format['reader']==='chapters' ? hash_hmac('sha256',
+            json_encode(['reader-toc-v1',$viewer,$version,strtolower(pathinfo($bookName,PATHINFO_EXTENSION)),$clientRevision,uiLanguage()],JSON_THROW_ON_ERROR),SHARE_KEY) : null,
         'loading'=>tr('Opening book…'),'failed'=>tr('Could not load this part. Try again.'),
+        'tocLoading'=>tr('Loading contents…'),'tocFailed'=>tr('Could not load contents.'),
+        'tocEmpty'=>tr('No contents available.'),'retry'=>tr('Retry'),
         'unsupported'=>tr('This book could not be decoded for online reading. You can still download the original.'),
         'chapter'=>tr('Next chapter'),'part'=>tr('Chapter %d of %d'),'partUnknown'=>tr('Chapter %d'),
         'signedOut'=>tr('Sign in again.'),'denied'=>tr('Library access denied.'),
