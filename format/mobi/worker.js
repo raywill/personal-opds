@@ -89,7 +89,7 @@ async function sanitize(raw,part){
         }catch{}
     }
     const images=new Set(),pieces=[];
-    let visited=0,hasText=false;
+    let visited=0,visibleLength=0;
     function appendImage(node){
         if(part===undefined)return;
         const key=imageIndex(node);
@@ -100,7 +100,7 @@ async function sanitize(raw,part){
     async function visit(node,depth){
         if(++visited>100000)throw Error('Chapter too complex');
         if(depth>96)return;
-        if(node.nodeType===3){if(node.nodeValue.trim())hasText=true;pieces.push(escape(node.nodeValue));return;}
+        if(node.nodeType===3){if(part===undefined)visibleLength+=node.nodeValue.replace(/\s/g,'').length;pieces.push(escape(node.nodeValue));return;}
         if(node.nodeType!==1)return;
         const tag=node.localName.toLowerCase();
         if(discard.has(tag))return;
@@ -119,7 +119,7 @@ async function sanitize(raw,part){
     }
     for(const mark of marks.get(body)??[])pieces.push('<span data-book-anchor="'+mark+'"></span>');
     for(const child of body.childNodes)await visit(child,0);
-    if(part===undefined)return hasText?pieces.join(''):'';
+    if(part===undefined)return {html:pieces.join(''),visibleLength};
     return {html:pieces.join(''),images};
 }
 async function getImage({token,key}){
@@ -134,9 +134,10 @@ async function getImage({token,key}){
 }
 async function open({url,preview},id){
     const source=await openSource(url);
-    const onPrefix=preview?async raw=>{
-        const html=await sanitize(raw);
-        if(!html)return false;
+    const onPrefix=preview?async (raw,complete)=>{
+        if(preview==='complete'&&!complete)return false;
+        const {html,visibleLength}=await sanitize(raw);
+        if(visibleLength<(complete?1:72))return false;
         self.postMessage({id,preview:html});
         return true;
     }:undefined;

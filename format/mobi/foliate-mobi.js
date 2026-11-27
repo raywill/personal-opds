@@ -530,11 +530,11 @@ class PDB {
             (_, i) => getUint(buffer.slice(i * 8, i * 8 + 4)))
             .map((x, i, a) => [x, a[i + 1]])
     }
-    loadRecord(index, signal) {
+    loadRecord(index, signal, ahead) {
         const offsets = this.#offsets[index]
         if (!offsets) throw new RangeError('Record index out of bounds')
         guard((offsets[1] ?? this.#file.size) - offsets[0] <= MAX_RECORD)
-        return this.#file.slice(...offsets).arrayBuffer(signal)
+        return this.#file.slice(...offsets).arrayBuffer(signal, this.#offsets[ahead]?.[1])
     }
     async loadMagic(index) {
         const start = this.#offsets[index][0]
@@ -626,15 +626,15 @@ export class MOBI extends PDB {
     encode(...args) {
         return this.#encoder.encode(...args)
     }
-    loadRecord(index) {
-        return super.loadRecord(this.#start + index)
+    loadRecord(index, ahead) {
+        return super.loadRecord(this.#start + index, undefined, ahead===undefined ? undefined : this.#start + ahead)
     }
     loadMagic(index) {
         return super.loadMagic(this.#start + index)
     }
-    loadText(index) {
+    loadText(index, coalesce = false) {
         guard(Number.isSafeInteger(index) && index >= 0 && index < this.headers.palmdoc.numTextRecords)
-        return this.loadRecord(index + 1)
+        return this.loadRecord(index + 1, coalesce ? this.headers.palmdoc.numTextRecords : undefined)
             .then(buf => new Uint8Array(buf))
             .then(this.#removeTrailingEntries)
             .then(this.#decompress)
@@ -718,12 +718,12 @@ class MOBI6 {
         const recordBuffers = []
         let totalLength = 0
         for (let i = 0; i < this.mobi.headers.palmdoc.numTextRecords; i++) {
-            const buf = await this.mobi.loadText(i)
+            const buf = await this.mobi.loadText(i, !onPrefix || i >= 16)
             guard((totalLength += buf.byteLength) <= MAX_RAW)
             recordBuffers.push(buf)
             // A provisional excerpt is not an indexed chapter. Keep using
             // the same records for the definitive chapter boundaries.
-            if (onPrefix && (i === 0 || i === 3 || i === 7 || i === 15)) {
+            if (onPrefix && i < 16) {
                 const prefix = new Uint8Array(Math.min(totalLength, 64 * 1024))
                 let cursor = 0
                 for (const record of recordBuffers) {
@@ -734,10 +734,14 @@ class MOBI6 {
                 }
                 const text = this.mobi.decode(prefix)
                 const breakAt = Array.from(text.matchAll(mbpPagebreakRegex)).find(m => m.index > 0)?.index
-                const end = breakAt ?? Array.from(text.matchAll(/<\/(?:p|div|li|h[1-6]|blockquote|section|body)\s*>/gi)).at(-1)
-                const excerpt = typeof end === 'number' ? text.slice(0, end)
-                    : end ? text.slice(0, end.index + end[0].length) : ''
-                if (excerpt && await onPrefix(excerpt)) onPrefix = null
+                // Some MOBI producers use one <p> for an entire chapter with
+                // <br> line breaks. LinkeDOM closes open tags for this temporary
+                // excerpt, so a missing </p> must not reduce it to the heading.
+                const complete = breakAt !== undefined ||
+                    (i + 1 === this.mobi.headers.palmdoc.numTextRecords && totalLength <= prefix.length)
+                const excerpt = (breakAt !== undefined ? text.slice(0,breakAt) : text)
+                    .replace(/<[^<>]*$|&(?:#?[a-z0-9]*)$|\uFFFD+$/gi, '')
+                if (excerpt && await onPrefix(excerpt,complete)) onPrefix = null
             }
         }
         // load all text records in an array

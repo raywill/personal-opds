@@ -79,7 +79,7 @@ export async function openSource(value){
     return {size,slice(start,end=size){
         if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<start||end>size)
             throw new RangeError('Out of bounds book record');
-        return {async arrayBuffer(signal){
+        return {async arrayBuffer(signal,readAhead){
             const out=new Uint8Array(end-start);
             for(let cursor=start;cursor<end;){
                 const index=Math.floor(cursor/BLOCK);
@@ -87,7 +87,8 @@ export async function openSource(value){
                 let bytes=cache.get(index);
                 if(!bytes){
                     let last=index;
-                    while(last<Math.floor((end-1)/BLOCK)&&last-index<BATCH-1&&!cache.has(last+1))last++;
+                    const edge=Math.min(size,Math.max(end,readAhead??0));
+                    while(last<Math.floor((edge-1)/BLOCK)&&last-index<BATCH-1&&!cache.has(last+1))last++;
                     bytes=await fetchRange(index*BLOCK,(last+1)*BLOCK-1,false,signal);
                 }
                 cache.delete(index);cache.set(index,bytes);

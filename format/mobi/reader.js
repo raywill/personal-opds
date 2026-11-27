@@ -20,7 +20,7 @@ export async function openReader(cfg){
             worker.postMessage({id,action,value});
         });
     }
-    async function ensure(onPreview){
+    async function ensure(onPreview,previewMode){
         if(!opening){
             const path=new URL('./worker.js',import.meta.url);
             path.search=new URL(import.meta.url).search;
@@ -38,7 +38,7 @@ export async function openReader(cfg){
                     item.reject(new Error(message||cfg.failed));
                 }
             };
-            opening=call('open',{url:new URL(cfg.url,location.href).href,preview:!!onPreview},onPreview)
+            opening=call('open',{url:new URL(cfg.url,location.href).href,preview:previewMode},onPreview)
                 .catch(error=>{stop();throw error;});
         }
         return opening;
@@ -89,8 +89,8 @@ export async function openReader(cfg){
         }else for(const image of found)queueImage(image);
     }
     addEventListener('pagehide',event=>{if(!event.persisted){stop();cleanup();}});
-    return {async read(query,onPreview){
-        await ensure(onPreview?html=>onPreview({mount:container=>mount(container,html,false)}):null);
+    return {async read(query,preview){
+        await ensure(preview?html=>preview.paint({mount:container=>mount(container,html,false)}):null,preview?.mode);
         if(query.toc)return {toc:await call('toc')};
         const data=await call('part',query.part);
         return {count:data.count,mount:container=>mount(container,data.html,data.imageToken)};

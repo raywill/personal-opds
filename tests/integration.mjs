@@ -134,7 +134,9 @@ function sampleMobi({drm=0,version=6,large=false}={}){
  const second='<mbp:pagebreak/><h1 id="second">Second MOBI chapter</h1><p>Personal OPDS format fixture.</p>';
  const raster=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4xkAAAAASUVORK5CYII=','base64');
  const title=Buffer.from('MOBI fixture'), author=Buffer.from('Personal OPDS');
- const parts=large?[first+second,...Array.from({length:63},()=>'<p>'+'Test paragraph. '.repeat(248)+'</p>'),'</body></html>']
+ const firstProse='MOBI first-page prose starts before the long paragraph ends, which takes more than one record.';
+ const parts=large?[first+'<p>'+firstProse+'<br></br>'+' More reading.'.repeat(220),
+   'Continued first paragraph.</p>'+second,...Array.from({length:63},()=>'<p>'+'Test paragraph. '.repeat(248)+'</p>'),'</body></html>']
    :[first+second+'</body></html>'];
  const text=parts.map(p=>Buffer.from(p));
  const exth=Buffer.alloc(20+author.length);exth.write('EXTH');exth.writeUInt32BE(exth.length,4);
@@ -493,7 +495,7 @@ try{
         const start=performance.now();
         const bookUrl=new URL('preview.php?library=p-alice&book='+encodeURIComponent(bigName),base).href;
         await bench.goto(bookUrl,{waitUntil:'domcontentloaded'});
-        await bench.locator('#book').getByText('First MOBI chapter',{exact:true}).waitFor({timeout:25000});
+        await bench.locator('#book').getByText(/MOBI first-page prose starts/).waitFor({timeout:25000});
         const measure={ms:Math.round(performance.now()-start),bytes:network.requests.reduce((n,r)=>n+r.bytes,0)};
         if(!whole){
           assert.equal(network.requests[0].status,206);
@@ -542,6 +544,29 @@ try{
       }finally{mobiNetwork=null;await samplePage.close();}
       assert.equal((await ui({action:'delete',file:name})).status,303);
       pass('real hybrid KF8 fixture opens with ranges and jumps through its directory');
+    }
+    if(process.env.OPDS_MOBI_PREFIX_FIXTURE){
+      const name='Long MOBI first paragraph fixture.mobi';
+      const bytes=fs.readFileSync(process.env.OPDS_MOBI_PREFIX_FIXTURE);
+      assert.equal((await upload(aliceToken,'',[[name,bytes]])).status,200);
+      let release;
+      const network={filename:name,whole:false,bytesPerMs:1024,requests:[],textGate:new Promise(r=>{release=r;})};
+      const real=await ctx.newPage();
+      mobiNetwork=network;
+      try{
+        await real.goto(new URL('preview.php?library=p-alice&book='+encodeURIComponent(name),base).href);
+        await real.waitForFunction(()=>document.querySelector('#book')?.innerText.replace(/\s/g,'').length>120);
+        const firstBytes=network.requests.reduce((n,r)=>n+r.bytes,0);
+        assert.equal(firstBytes,65536,'A real readable paragraph appears while the rest of the book is blocked');
+        release();
+        await real.locator('#contents').click();
+        const menu=real.locator('#chapters').getByRole('button');
+        await menu.first().waitFor();assert(await menu.count()>2);
+        assert(network.requests.length<=5,'Legacy chapter indexing should coalesce contiguous text');
+        console.log('Real MOBI initial reading: '+JSON.stringify({fileBytes:bytes.length,firstBytes,indexRequests:network.requests.length}));
+      }finally{release?.();mobiNetwork=null;await real.close();}
+      assert.equal((await ui({action:'delete',file:name})).status,303);
+      pass('real legacy book renders first-page prose before the blocked index and merges contiguous scans');
     }
     // Revoke access to the browser's next chunk while it has the source.
     await ctx.clearCookies();

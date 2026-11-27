@@ -315,16 +315,20 @@
      // Keep the old chapter on screen until the requested one returns.
      try {
          let paintedPrefix=false;
-         const onPreview=!data&&target===0&&ratio===0&&!fragment?excerpt=>{
-             if(seq!==requestNo)return;
-             excerpt.mount(book);
-             $('reader-message').hidden=true;status.textContent='';
-             book.setAttribute('aria-busy','false');
-             paintedPrefix=true;
+         const preview=!data&&target===0&&!fragment?{
+             mode:ratio===0?'partial':'complete',
+             paint(excerpt){
+                 if(seq!==requestNo)return;
+                 excerpt.mount(book);
+                 if(ratio!==0)vp.scrollTop=clamp(ratio)*limit();
+                 $('reader-message').hidden=true;status.textContent='';
+                 book.setAttribute('aria-busy','false');
+                 paintedPrefix=true;
+             }
          }:null;
-         const result=await chapterSource({part:target},onPreview);
+         const result=await chapterSource({part:target},preview);
          if(seq!==requestNo)return;
-         const prefixTop=paintedPrefix?vp.scrollTop:null;
+         const prefixTop=paintedPrefix&&ratio===0?vp.scrollTop:null;
          // Only the active chapter adopts its validated local raster blobs.
          if(typeof result.mount==='function')result.mount(book);
          else book.innerHTML=result.html;
